@@ -5,26 +5,23 @@
 
 namespace Portal {
 
+// arduino-esp32 3.x's DNSServer is AsyncUDP-based: start() installs an onPacket
+// hijack that runs on the lwIP tcpip thread, and processNextRequest() is an
+// empty inline kept for API compatibility. No pump task is needed (an earlier
+// revision had one — it was dead weight plus a cross-core vTaskDelete hazard).
 static DNSServer* dns = nullptr;
-static TaskHandle_t task = nullptr;
-
-static void pump(void*) {
-  for (;;) {
-    if (dns) dns->processNextRequest();
-    vTaskDelay(pdMS_TO_TICKS(20));
-  }
-}
 
 void begin() {
   if (dns) return;
   dns = new DNSServer();
   dns->start(53, "*", WiFi.softAPIP());
-  xTaskCreatePinnedToCore(pump, "portal_dns", 3072, nullptr, 1, &task, 0);
 }
 
 void end() {
-  if (task) { vTaskDelete(task); task = nullptr; }
-  if (dns) { dns->stop(); delete dns; dns = nullptr; }
+  if (!dns) return;
+  dns->stop(); // synchronous tcpip_api_call; safe to delete afterwards
+  delete dns;
+  dns = nullptr;
 }
 
 } // namespace Portal

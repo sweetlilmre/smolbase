@@ -18,10 +18,12 @@
 static void onSysEvent(SysEvent e) {
   switch (e) {
     case SysEvent::ApModeEntered:
+      Web::start(); // netif has an IP now — see Web.h for why start is deferred
       Portal::begin();
       Display::systemTakeover(&apInfoScreen());
       break;
     case SysEvent::NetworkUp:
+      Web::start();
       Portal::end();
       Display::systemRelease();
       Clock::sync();

@@ -41,7 +41,7 @@ public:
     d.drawString(clock, 120, 100);
 
     d.setFont(&fonts::FreeSans9pt7b);
-    d.fillRect(0, 150, 240, 60, TFT_BLACK);
+    d.fillRect(0, 145, 240, 65, TFT_BLACK); // covers 9pt ascenders/descenders fully
     d.drawString(Net::deviceName() + ".local", 120, 160);
     d.drawString(Net::isUp() ? Net::ip().toString() : "connecting...", 120, 185);
   }

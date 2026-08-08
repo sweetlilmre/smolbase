@@ -4,6 +4,7 @@
 #include "smolbase_config.h"
 #include <ESPmDNS.h>
 #include <Preferences.h>
+#include <esp_mac.h>
 #include <WiFi.h>
 #include <algorithm>
 #include <atomic>
@@ -55,12 +56,16 @@ bool hasCredentials() {
   return s.length() > 0;
 }
 
-void saveCredentials(const String& ssid, const String& pass) {
+bool saveCredentials(const String& ssid, const String& pass) {
+  // putString returns bytes written; 0 = failure (e.g. NVS full of the old
+  // firmware's namespaces). Surfacing this matters: a silent failure here looks
+  // like an unexplained provisioning loop to the user.
   Preferences p;
-  p.begin("smolbase", false);
-  p.putString("ssid", ssid);
-  p.putString("pass", pass);
+  if (!p.begin("smolbase", false)) return false;
+  bool ok = p.putString("ssid", ssid) == ssid.length() &&
+            p.putString("pass", pass) == pass.length();
   p.end();
+  return ok;
 }
 
 void clearCredentials() {
@@ -71,7 +76,11 @@ void clearCredentials() {
 }
 
 void restartToApply() {
-  delay(400); // let the HTTP response that triggered this reach the client
+  // 1.5 s: the response leaves the lwIP send buffer in <10 ms on a clean link,
+  // but a phone in power-save on a flaky AP link needs an RTO retransmission
+  // (~1 s) to actually receive it. Blocking the httpd task here is fine — the
+  // device is about to reboot anyway.
+  delay(1500);
   ESP.restart();
 }
 
@@ -86,9 +95,11 @@ static void onWiFiEvent(WiFiEvent_t event) {
   // Runs on the WiFi task (core 0) — post events only, never touch consumer state.
   switch (event) {
     case ARDUINO_EVENT_WIFI_STA_GOT_IP: {
-      State s = state.load();
-      if (s == State::Connecting || s == State::Sta) {
-        state.store(State::Sta);
+      // CAS, not load-then-store: a late GOT_IP racing the boot-timeout
+      // teardown on core 1 must not overwrite Idle/Ap with Sta (that would
+      // wedge inApMode()==false while the softAP is actually running).
+      State expected = State::Connecting;
+      if (state.compare_exchange_strong(expected, State::Sta) || expected == State::Sta) {
         Events::post(SysEvent::NetworkUp);
       }
       break;
@@ -110,8 +121,11 @@ static void onWiFiEvent(WiFiEvent_t event) {
 }
 
 void begin() {
+  // esp_read_mac works before any netif exists; WiFi.macAddress() at this
+  // point returns without writing the buffer (verified in the installed core),
+  // which made the identity suffix uninitialized-stack garbage.
   uint8_t mac[6];
-  WiFi.macAddress(mac);
+  esp_read_mac(mac, ESP_MAC_WIFI_STA);
   char suffix[5];
   snprintf(suffix, sizeof(suffix), "%02x%02x", mac[4], mac[5]);
   name = sanitizeHostname(ConfigStore::getString("hostname", ""));
@@ -136,13 +150,15 @@ void begin() {
 
 void loop() {
   if (state.load() == State::Connecting && millis() - connectStart > SMOLBASE_CONNECT_TIMEOUT_MS) {
-    // Boot-time fallback only: the stored network never answered. Park the
-    // state and kill auto-reconnect BEFORE disconnecting so neither the core
-    // nor our disconnect handler kicks a reconnect mid-teardown.
-    state.store(State::Idle);
-    WiFi.setAutoReconnect(false);
-    WiFi.disconnect(true);
-    startAp();
+    // Boot-time fallback only: the stored network never answered. CAS parks the
+    // state so a GOT_IP landing at this exact moment wins the race cleanly
+    // (we see Sta and skip the teardown) instead of being overwritten.
+    State expected = State::Connecting;
+    if (state.compare_exchange_strong(expected, State::Idle)) {
+      WiFi.setAutoReconnect(false);
+      WiFi.disconnect(true);
+      startAp();
+    }
   }
 
   // mDNS lifecycle (main loop only): register once up, tear down on a drop so

@@ -23,6 +23,35 @@
 
 namespace Web {
 
+// Minimal provisioning page compiled into the firmware (.rodata). Served from
+// the captive catch-all ONLY when the real /w/portal.html asset is absent —
+// i.e. a firmware-only OTA landed on a filesystem without smolbase assets.
+// Kept deliberately tiny; the full-featured page lives in html/portal.html.
+static const char FALLBACK_PORTAL[] = R"HTML(<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>smolbase setup</title>
+<style>body{font:16px sans-serif;margin:1.5rem;max-width:26rem}button{display:block;width:100%;
+margin:.4rem 0;padding:.7rem;font:inherit;text-align:left}#msg{color:#666}</style></head><body>
+<h2>smolbase Wi-Fi setup</h2><p>(fallback page — upload the filesystem image after joining)</p>
+<div id="nets"></div><p id="msg">scanning…</p>
+<script>
+function esc(s){return s.replace(/[&<>"']/g,function(c){return "&#"+c.charCodeAt(0)+";"})}
+function join(ssid,sec){var pass=sec?prompt("Password for "+ssid):"";if(pass===null)return;
+document.getElementById("msg").textContent="joining "+ssid+"…";
+fetch("/api/wifi",{method:"POST",headers:{"Content-Type":"application/json"},
+body:JSON.stringify({ssid:ssid,pass:pass||""})}).then(function(r){return r.json()}).then(function(j){
+document.getElementById("msg").textContent=j.restarting?
+"Device is restarting to join "+ssid+". Reconnect your phone to that network.":JSON.stringify(j)})
+.catch(function(){document.getElementById("msg").textContent="Request failed - if the device rebooted, it may have worked."})}
+function poll(){fetch("/api/wifi/scan").then(function(r){return r.json()}).then(function(j){
+if(j.status!=="done"){setTimeout(poll,2500);return}
+var d=document.getElementById("nets");d.innerHTML="";
+j.networks.forEach(function(n){var b=document.createElement("button");
+b.innerHTML=esc(n.ssid)+(n.secure?" &#128274;":"")+" ("+n.rssi+" dBm)";
+b.onclick=function(){join(n.ssid,n.secure)};d.appendChild(b)});
+document.getElementById("msg").textContent=j.networks.length+" networks";}).catch(function(){setTimeout(poll,2500)})}
+poll();
+</script></body></html>)HTML";
+
 static PsychicHttpServer httpServer;
 
 PsychicHttpServer& server() { return httpServer; }
@@ -33,13 +62,20 @@ static esp_err_t sendJson(PsychicResponse* res, int code, const JsonDocument& do
   return res->send(code, "application/json", out.c_str());
 }
 
+void start() {
+  // Idempotent (start() returns ESP_OK when already running). Called from the
+  // NetworkUp/ApModeEntered handlers — the moments a netif provably has an IP.
+  esp_err_t err = httpServer.start();
+  if (err != ESP_OK) Serial.printf("[web] server start failed: %d\n", (int)err);
+}
+
 void begin(App& app) {
   httpServer.config.core_id = 0; // network core; consumer code stays on core 1 (ADR 0001)
   // Phones fire many parallel connectivity probes at a captive portal; LRU
   // purging stops a burst from exhausting the socket pool (research #4).
   httpServer.config.lru_purge_enable = true;
   httpServer.setPort(80);
-  httpServer.start();
+  // NOTE: no start() here — see Web.h. Routes register fine pre-start.
 
   // --- 1. system API routes ---
   httpServer.on("/api/status", HTTP_GET, [](PsychicRequest*, PsychicResponse* res) {
@@ -73,7 +109,10 @@ void begin(App& app) {
         doc["ssid"].as<String>().isEmpty()) {
       return res->send(400, "application/json", "{\"error\":\"expected {ssid,pass}\"}");
     }
-    Net::saveCredentials(doc["ssid"].as<String>(), doc["pass"] | String(""));
+    if (!Net::saveCredentials(doc["ssid"].as<String>(), doc["pass"] | String(""))) {
+      return res->send(500, "application/json",
+                       "{\"error\":\"failed to store credentials (NVS full?)\"}");
+    }
     esp_err_t r = res->send(200, "application/json", "{\"ok\":true,\"restarting\":true}");
     Net::restartToApply(); // flushes the response, then ESP.restart(); no return
     return r;
@@ -128,14 +167,21 @@ void begin(App& app) {
   // --- 5. captive-portal catch-all (must stay last) ---
   // Requests for hosts other than our AP IP (the OS connectivity-probe dance:
   // generate_204, hotspot-detect.html, ...) are bounced to the portal root.
-  // Requests already addressed to us fall through to a plain 404 — never
-  // redirect those, or a missing asset would loop the browser forever.
+  // Requests already addressed to us fall through — never redirect those, or a
+  // missing asset would loop the browser forever. If the portal PAGE itself is
+  // missing (first flash arrives by OTA and the old filesystem has no smolbase
+  // assets), serve the embedded fallback so provisioning is never UI-dead.
   httpServer.onNotFound([](PsychicRequest* req, PsychicResponse* res) -> esp_err_t {
     if (Net::inApMode()) {
       String self = Net::ip().toString();
-      if (req->host() != self) {
+      const String& host = req->host();
+      bool selfAddressed = host == self || host.startsWith(self + ":");
+      if (!selfAddressed) {
         res->setCode(302);
         return res->redirect((String("http://") + self + "/").c_str());
+      }
+      if (req->uri() == "/" || req->uri() == "/portal.html") {
+        return res->send(200, "text/html", FALLBACK_PORTAL);
       }
     }
     return res->send(404, "text/plain", "Not found");

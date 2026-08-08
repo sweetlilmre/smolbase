@@ -21,10 +21,22 @@ struct Guard {
 
 // ---- Schema registration ----
 
+// Lock-free lookup for use by callers that already hold the mutex.
+static const SettingDef* findSettingLocked(const char* key) {
+  if (!key) return nullptr;
+  for (size_t i = 0; i < registryCount; ++i)
+    if (strcmp(registry[i].key, key) == 0) return &registry[i];
+  return nullptr;
+}
+
+// Mutex-guarded: App::setup() (the natural place for consumer registration)
+// runs after Web::begin(), so registration can overlap a live httpd task
+// hitting schemaToJson/findSetting. The lock makes that window safe.
 static SettingDef* addEntry(SettingSection s, SettingType t, const char* key, const char* label) {
   if (!key || !label) return nullptr;
+  Guard g;
   if (registryCount >= SMOLBASE_MAX_SETTINGS) return nullptr;
-  if (findSetting(key)) return nullptr; // duplicate
+  if (findSettingLocked(key)) return nullptr; // duplicate
   SettingDef& d = registry[registryCount++];
   d = SettingDef{key, label, t, s, "", 0, false, 0, 0};
   return &d;
@@ -59,10 +71,8 @@ size_t settingCount() { return registryCount; }
 const SettingDef& settingAt(size_t i) { return registry[i]; }
 
 const SettingDef* findSetting(const char* key) {
-  if (!key) return nullptr;
-  for (size_t i = 0; i < registryCount; ++i)
-    if (strcmp(registry[i].key, key) == 0) return &registry[i];
-  return nullptr;
+  Guard g;
+  return findSettingLocked(key);
 }
 
 // ---- Schema serialization / application ----
@@ -182,7 +192,14 @@ String getString(const char* key) {
 }
 int32_t getInt(const char* key) {
   const SettingDef* d = findSetting(key);
-  return getInt(key, d ? d->defInt : 0);
+  if (!d) return 0;
+  // Clamp to the registered range: applyJson clamps API writes, but a raw
+  // setInt() or a pre-existing settings file bypasses it — and e.g. an
+  // out-of-range "brightness" (active-LOW PWM) renders the screen unreadable
+  // right when the user needs the AP-info screen.
+  int32_t v = getInt(key, d->defInt);
+  if (d->type == SettingType::Int) v = clampInt(*d, v);
+  return v;
 }
 bool getBool(const char* key) {
   const SettingDef* d = findSetting(key);

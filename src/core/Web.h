@@ -22,6 +22,11 @@ class App;
 class PsychicHttpServer;
 
 namespace Web {
+// begin() registers everything but does NOT start the listener: PsychicHttp's
+// start() hard-fails unless some netif is up with an IP (verified in 3.1.2
+// source), and begin() runs before WiFi has one. start() is idempotent and is
+// called from the NetworkUp / ApModeEntered event handlers in main.cpp.
 void begin(App& app);
+void start();
 PsychicHttpServer& server(); // advanced/consumer escape hatch
 } // namespace Web

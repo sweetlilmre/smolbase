@@ -11,6 +11,7 @@
 #include "Ota.h"
 #include "Events.h"
 #include "Net.h"
+#include <LittleFS.h>
 #include <PsychicHttp.h>
 #include <Update.h>
 
@@ -23,6 +24,8 @@ namespace Ota {
 enum class Outcome : uint8_t { None, Ok, Failed, Rejected };
 static Outcome s_outcome = Outcome::None;
 static bool s_inFlight = false;
+static bool s_isFs = false;   // current upload targets the data partition
+static int s_socket = -1;     // socket carrying the in-flight upload
 static size_t s_progress = 0; // bytes written so far
 static String s_error;
 
@@ -31,18 +34,25 @@ static void fail(bool abortUpdate) {
   Update.printError(Serial);
   if (abortUpdate) Update.abort();
   s_outcome = Outcome::Failed;
-  s_inFlight = false;
+  // fs-target failures keep the latch: LittleFS is unmounted, so the device
+  // must reboot — either onUploadDone's Failed branch or, if the client
+  // vanished first, the onClose backstop delivers that reboot.
+  if (!s_isFs) s_inFlight = false;
 }
 
 static esp_err_t onUploadChunk(PsychicRequest* req, const String& filename,
                                uint64_t index, uint8_t* data, size_t len, bool last) {
   if (index == 0) {
-    if (s_inFlight) { // another update is active (or finished, restart pending)
-      s_outcome = Outcome::Rejected;
+    if (s_inFlight) {
+      // Another update is active, or a SECOND file part arrived in the same
+      // multipart body after a successful end() — the boot partition is
+      // already switched in that case, so the Ok verdict must survive.
+      if (s_outcome != Outcome::Ok) s_outcome = Outcome::Rejected;
       return ESP_OK; // drain; verdict goes out in onRequest
     }
     s_outcome = Outcome::None;
     s_inFlight = true;
+    s_socket = req->client() ? req->client()->socket() : -1;
     s_progress = 0;
     s_error = "";
     Events::post(SysEvent::OtaStarting); // apps: stop drawing/allocating
@@ -52,10 +62,29 @@ static esp_err_t onUploadChunk(PsychicRequest* req, const String& filename,
     // what updates LittleFS too. Works as a form field only if it precedes
     // the file part, so the query string is the documented spelling.
     PsychicWebParameter* p = req->getParam("target");
-    const bool fs = (p != nullptr && p->value() == "fs");
+    s_isFs = (p != nullptr && p->value() == "fs");
     Serial.printf("[ota] %s update starting (%s)\n",
-                  fs ? "filesystem" : "firmware", filename.c_str());
-    if (!Update.begin(UPDATE_SIZE_UNKNOWN, fs ? U_SPIFFS : U_FLASH)) {
+                  s_isFs ? "filesystem" : "firmware", filename.c_str());
+
+    if (s_isFs) {
+      // Guard against flashing a non-filesystem image over the data partition
+      // (Update.h verifies NOTHING for U_SPIFFS — a firmware.bin here would
+      // destroy the filesystem). A littlefs image carries "littlefs" at
+      // offset 8; require enough bytes in the first chunk to check.
+      if (len < 16 || memcmp(data + 8, "littlefs", 8) != 0) {
+        s_error = "not a littlefs image (magic missing at offset 8)";
+        s_outcome = Outcome::Failed;
+        s_inFlight = false;
+        return ESP_OK;
+      }
+      // The partition is about to be rewritten under a mounted filesystem;
+      // unmount first so nothing writes through stale metadata during or
+      // after the flash (SmolTV-Pro proved this pattern). From here on the
+      // device MUST restart — with or without a successful update.
+      LittleFS.end();
+    }
+
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN, s_isFs ? U_SPIFFS : U_FLASH)) {
       fail(false);
       return ESP_OK;
     }
@@ -94,13 +123,55 @@ static esp_err_t onUploadDone(PsychicRequest*, PsychicResponse* res) {
       s_outcome = Outcome::None;
       String out = "{\"error\":\"";
       out += s_error;
-      out += "\"}";
-      return res->send(400, "application/json", out.c_str());
+      out += s_isFs ? "\",\"restarting\":true}" : "\"}";
+      esp_err_t r = res->send(400, "application/json", out.c_str());
+      // A failed fs update leaves LittleFS unmounted (and possibly a torn
+      // image); rebooting re-mounts the old image or formats — either way the
+      // device stays serviceable. Firmware failures need no restart.
+      if (s_isFs) Net::restartToApply(); // no return
+      return r;
     }
-    case Outcome::None: // body carried no file part at all
+    case Outcome::None: // no file part, or a multipart parse error mid-file
     default:
+      // A malformed body can abort the part callbacks after Update.begin()
+      // succeeded (the processor drains bytes and still reports ESP_OK) —
+      // without this cleanup the in-flight latch would block all future
+      // updates until a power cycle.
+      if (s_inFlight) {
+        if (Update.isRunning()) Update.abort();
+        s_inFlight = false;
+        if (s_isFs) { // filesystem may be half-written; a reboot re-mounts or formats
+          esp_err_t r = res->send(400, "application/json",
+                                  "{\"error\":\"upload incomplete; restarting\"}");
+          Net::restartToApply(); // no return
+          return r;
+        }
+      }
       return res->send(400, "application/json", "{\"error\":\"no file uploaded\"}");
   }
+}
+
+// The upload handler's onRequest does NOT run when a chunk callback or the
+// multipart processor returns an error (the library sends its own 500) — and
+// it also doesn't run if the client vanishes mid-upload. The server-level
+// close callback is the backstop that keeps the update channel usable: reset
+// the latch, abort a half-written Update, and honor an already-committed one
+// (the boot partition is switched the moment end() succeeds, so restarting is
+// the honest move). Matched against the uploading connection's socket so a
+// stray probe disconnect can't abort a healthy in-flight update. NOTE: this
+// claims the server's single onClose slot; consumers needing their own close
+// hook must chain through it.
+static void onSocketClose(PsychicClient* client) {
+  if (!s_inFlight || client == nullptr || client->socket() != s_socket) return;
+  if (s_outcome == Outcome::Ok) {
+    Serial.println("[ota] client gone after successful update; restarting");
+    Net::restartToApply(); // no return
+  }
+  Serial.println("[ota] upload aborted (client disconnect / parse error)");
+  if (Update.isRunning()) Update.abort();
+  s_inFlight = false;
+  s_outcome = Outcome::None;
+  if (s_isFs) Net::restartToApply(); // filesystem is unmounted/possibly torn; reboot
 }
 
 void registerRoutes(PsychicHttpServer& server) {
@@ -114,6 +185,7 @@ void registerRoutes(PsychicHttpServer& server) {
   handler->onUpload(onUploadChunk);
   handler->onRequest(onUploadDone);
   server.on("/api/update", HTTP_POST, handler);
+  server.onClose(onSocketClose); // disconnect backstop — see comment above
 
   server.on("/api/update/status", HTTP_GET, [](PsychicRequest*, PsychicResponse* res) {
     char buf[64];
