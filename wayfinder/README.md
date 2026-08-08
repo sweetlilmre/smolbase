@@ -1,13 +1,14 @@
-# Wayfinder — local-markdown tracker conventions
+# Wayfinder — tracker location
 
-No external issue tracker is configured for this repo, so the wayfinder map lives here as markdown.
+The wayfinder map for this effort lives on GitHub Issues:
 
-## Operations
+- **Map**: [Smolbase — MVP template firmware for the Small TV Pro (#1)](https://github.com/sweetlilmre/smolbase/issues/1) — label `wayfinder:map`.
+- **Tickets**: child (sub-)issues of the map, labelled `wayfinder:<research|prototype|grilling|task>`.
 
-- **Map**: `wayfinder/map.md` (frontmatter label `wayfinder:map`). The index — never restates decisions, only gists and links.
-- **Tickets**: `wayfinder/tickets/NNNN-<slug>.md`, children of the map. A ticket's **name is its title**; refer to tickets by name, linking the file.
-- **Labels / type**: frontmatter `labels:` carries `wayfinder:<research|prototype|grilling|task>`.
-- **Claiming**: set frontmatter `assignee:` before any work. Open + unassigned = unclaimed.
-- **Blocking**: frontmatter `blocked-by:` lists ticket file names (body convention — no native blocking in markdown). A ticket is unblocked when every listed ticket has `status: closed`.
-- **Frontier query**: tickets where `status: open`, `assignee:` empty, and every `blocked-by:` entry closed.
-- **Resolving**: append a `## Resolution` section to the ticket, set `status: closed`, add one line to the map's *Decisions so far*.
+## Wayfinding operations
+
+- **Claiming**: assign the issue to yourself before any work. Open + unassigned = unclaimed.
+- **Blocking**: native GitHub issue dependencies (*blocked by*). Unblocked = every blocking issue closed.
+- **Frontier query**: open, unblocked, unassigned child issues of the map — e.g. `gh issue list --label "wayfinder:*" --no-assignee` then check each issue's *blocked by* relationships.
+- **Resolving**: post the answer as a resolution comment, close the issue, append a one-line gist + link to the map's *Decisions so far*.
+- **Research findings**: land on throwaway `research/<name>` branches as `docs/research/<name>.md`, linked from the ticket's resolution comment.
