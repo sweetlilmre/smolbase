@@ -61,12 +61,20 @@ pio device monitor -b 115200
 Close the case; you never open it again. Once the device is on your network,
 both images update over HTTP.
 
-**Via the settings page** — open `http://smolbase-XXXX.local/settings.html`
-(hostname is on the device's screen), go to the Update tab, and upload
-`firmware.bin` or `littlefs.bin` from `.pio/build/smolbase/`.
+**Via the recovery page** — open `http://smolbase-XXXX.local/recover`
+(hostname is on the device's screen). It is compiled into the firmware
+itself, so it works even when the filesystem is empty, wiped, or broken —
+upload `firmware.bin` or `littlefs.bin` from `.pio/build/smolbase/`
+(build the latter first with `pio run -t buildfs`). If the device boots
+with no web assets at all, plain `http://<ip>/` serves this same page.
 
-**Via curl** — the endpoint is `POST /api/update`; the `target` query
-parameter picks the partition (`fw` is the default):
+**Via the settings page** — once the filesystem image is on the device,
+`http://smolbase-XXXX.local/settings.html` has an Update tab for routine
+firmware updates.
+
+**Via curl** — the scriptable alternative. The endpoint is
+`POST /api/update`; the `target` query parameter picks the partition
+(`fw` is the default):
 
 ```
 # firmware

@@ -52,6 +52,46 @@ document.getElementById("msg").textContent=j.networks.length+" networks";}).catc
 poll();
 </script></body></html>)HTML";
 
+// Embedded recovery/update page (.rodata, like the fallback portal above).
+// Always served at /recover, and for "/" in STA mode when the static index
+// asset is missing — a wiped or failed filesystem never strands the user on
+// curl. Uploads post to the same /api/update endpoint the settings page uses.
+static const char RECOVERY_PAGE[] = R"HTML(<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>smolbase recovery</title>
+<style>body{font:16px sans-serif;margin:1.5rem;max-width:26rem}fieldset{border:1px solid #bbb;
+margin:0 0 1rem;padding:.8rem}input[type=file]{width:100%;margin:.4rem 0}button{padding:.6rem 1rem;
+font:inherit}progress{width:100%;display:none}.msg{color:#666;min-height:1.2em;font-size:.9em}</style>
+</head><body><h2>smolbase recovery</h2><p class="msg" id="st">loading status…</p>
+<fieldset><legend>Firmware</legend><input type="file" id="fw" accept=".bin">
+<progress id="fwp" max="100"></progress><button id="fwb">Upload firmware</button>
+<p class="msg" id="fwm"></p></fieldset>
+<fieldset><legend>Filesystem (web assets)</legend>
+<p class="msg">Replaces ALL web assets and settings.json — settings revert to defaults; WiFi credentials survive.</p>
+<input type="file" id="fs" accept=".bin"><progress id="fsp" max="100"></progress>
+<button id="fsb">Upload filesystem</button><p class="msg" id="fsm"></p></fieldset>
+<script>
+fetch("/api/status").then(function(r){return r.json()}).then(function(j){
+document.getElementById("st").textContent=j.name+" · "+j.ip+" · fw "+j.fwVersion+
+" · heap "+Math.round(j.heapFree/1024)+" kB free"}).catch(function(){})
+function up(fid,bid,pid,mid,target){var b=document.getElementById(bid);
+b.onclick=function(){var f=document.getElementById(fid).files[0],
+m=document.getElementById(mid),p=document.getElementById(pid);
+if(!f){m.textContent="Choose a .bin file first.";return}
+b.disabled=true;p.style.display="block";p.value=0;
+m.textContent="Uploading… don't power off the device.";
+var fd=new FormData();fd.append("file",f,f.name);var x=new XMLHttpRequest();
+x.open("POST","/api/update"+(target?"?target="+target:""));
+x.upload.onprogress=function(e){if(e.lengthComputable)p.value=e.loaded/e.total*100};
+x.onload=function(){b.disabled=false;p.style.display="none";var j={};
+try{j=JSON.parse(x.responseText)}catch(e){}
+m.textContent=x.status===200?"Update accepted — the device is restarting. Reload this page in ~15 s.":
+"Failed ("+x.status+"): "+(j.error||"unexpected response")};
+x.onerror=function(){b.disabled=false;p.style.display="none";
+m.textContent="Connection lost — if the upload had just finished, the device may simply be restarting."};
+x.send(fd)}}
+up("fw","fwb","fwp","fwm","");up("fs","fsb","fsp","fsm","fs");
+</script></body></html>)HTML";
+
 static PsychicHttpServer httpServer;
 
 PsychicHttpServer& server() { return httpServer; }
@@ -150,6 +190,12 @@ void begin(App& app) {
     return r;
   });
 
+  // Recovery page: registered as a real endpoint so it works in every mode
+  // regardless of filesystem state. The uploads it drives are Ota's routes.
+  httpServer.on("/recover", HTTP_GET, [](PsychicRequest*, PsychicResponse* res) {
+    return res->send(200, "text/html", RECOVERY_PAGE);
+  });
+
   // --- 2. OTA slot (real upload handler is ticket #18) ---
   Ota::registerRoutes(httpServer);
 
@@ -183,6 +229,10 @@ void begin(App& app) {
       if (req->uri() == "/" || req->uri() == "/portal.html") {
         return res->send(200, "text/html", FALLBACK_PORTAL);
       }
+    } else if (req->uri() == "/") {
+      // STA mode with no index asset (wiped/failed filesystem): serve the
+      // embedded recovery page so the device is never browser-dead.
+      return res->send(200, "text/html", RECOVERY_PAGE);
     }
     return res->send(404, "text/plain", "Not found");
   });

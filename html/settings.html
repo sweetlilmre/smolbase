@@ -169,7 +169,10 @@ function updatePage() {
     <input type="file" id="fwfile" accept=".bin">
     <p class="hint">Device restarts after a successful update. The screen freezes during flashing — that's normal.</p></div>
     <button class="primary" id="fwgo">Upload &amp; install</button>
-    <p class="hint" id="fwmsg"></p>`;
+    <p class="hint" id="fwmsg"></p>
+    <p class="hint">If this page is ever unavailable (wiped or broken filesystem image), the firmware
+    has a built-in recovery page at <a href="/recover" class="mono">/recover</a> that can upload
+    both firmware and filesystem images.</p>`;
 }
 
 function dangerPage() {
