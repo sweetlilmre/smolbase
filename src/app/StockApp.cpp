@@ -56,7 +56,12 @@ public:
   void setup() override { Display::setActive(&screen); }
 
   void onSystemEvent(SysEvent e) override {
-    if (e == SysEvent::NetworkUp || e == SysEvent::TimeSynced) screen.markDirty();
+    // SettingsChanged matters too: the hostname shown on screen can change at
+    // runtime. The idempotent-repaint pattern makes "which setting?" moot.
+    if (e == SysEvent::NetworkUp || e == SysEvent::TimeSynced ||
+        e == SysEvent::SettingsChanged) {
+      screen.markDirty();
+    }
   }
 };
 
