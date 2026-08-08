@@ -1,0 +1,9 @@
+# SmallTV Pro - 8 MB flash partition table
+# Verified from live device: /space.json total=3866624 = 0x3B0000 (59 x 64 KB blocks)
+# spiffs at 0x800000 - 0x3B0000 = 0x450000; two OTA slots of 0x220000 each (2.125 MB)
+# Name,   Type, SubType, Offset,   Size,     Flags
+nvs,      data, nvs,     0x9000,   0x5000,
+otadata,  data, ota,     0xe000,   0x2000,
+app0,     app,  ota_0,   0x10000,  0x220000,
+app1,     app,  ota_1,   0x230000, 0x220000,
+spiffs,   data, spiffs,  0x450000, 0x3B0000,

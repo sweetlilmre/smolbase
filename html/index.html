@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>smolbase</title>
+<style>
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+    background: #141a19; color: #e6ebe9;
+    font: 16px/1.5 -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif; }
+  main { text-align: center; }
+  .mono { font-family: ui-monospace, Consolas, Menlo, monospace; color: #93a29d; }
+</style>
+</head>
+<body>
+<main>
+  <h1>smolbase is alive</h1>
+  <p class="mono" id="status">loading…</p>
+</main>
+<script>
+fetch("/api/status").then(r => r.json()).then(s => {
+  document.getElementById("status").textContent =
+    `${s.name} · ${s.ip} · ${Math.round(s.heapFree / 1024)} kB heap free`;
+}).catch(() => document.getElementById("status").textContent = "api unreachable");
+</script>
+</body>
+</html>
