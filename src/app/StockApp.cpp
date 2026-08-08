@@ -30,11 +30,13 @@ class StockScreen : public Screen {
   // Colors come from app-registered settings (see StockApp::setup); cached as
   // 24-bit RGB and re-read on every full repaint — SettingsChanged marks
   // dirty, so a picker change on the web page lands on the panel live.
-  uint32_t colHour = 0xffffff, colMin = 0xffffff, colHost = 0xffffff, colIp = 0xffffff;
+  uint32_t colHour = 0xffffff, colMin = 0xffffff, colColon = 0xffffff,
+           colHost = 0xffffff, colIp = 0xffffff;
 
   void loadColors() {
     colHour = hexRgb(ConfigStore::getString("col_hour"), 0xffffff);
     colMin = hexRgb(ConfigStore::getString("col_min"), 0xffffff);
+    colColon = hexRgb(ConfigStore::getString("col_colon"), 0xffffff);
     colHost = hexRgb(ConfigStore::getString("col_host"), 0xffffff);
     colIp = hexRgb(ConfigStore::getString("col_ip"), 0xffffff);
   }
@@ -43,13 +45,12 @@ class StockScreen : public Screen {
   // own cell is overdrawn — the digits are never touched between minutes.
   // "HH:MM" is drawn centered, HH and MM are equal-width, so the colon sits
   // exactly at x=120; textWidth(":") bounds the cell without clipping digits.
-  // The colon wears the hour color.
   void drawColon(lgfx::LGFX_Device& d) {
     d.setFont(&fonts::FreeSansBold24pt7b);
     int w = d.textWidth(":");
     d.fillRect(120 - w / 2, 70, w, 60, TFT_BLACK);
     if (colonOn) {
-      d.setTextColor(d.color888(colHour >> 16, (colHour >> 8) & 0xff, colHour & 0xff), TFT_BLACK);
+      d.setTextColor(d.color888(colColon >> 16, (colColon >> 8) & 0xff, colColon & 0xff), TFT_BLACK);
       d.setTextDatum(lgfx::middle_center);
       d.drawString(":", 120, 100);
     }
@@ -123,6 +124,7 @@ public:
     // app/config/html triangle in four lines.
     ConfigStore::registerString(SettingSection::App, "col_hour", "Clock hour color", "#ffffff");
     ConfigStore::registerString(SettingSection::App, "col_min", "Clock minute color", "#ffffff");
+    ConfigStore::registerString(SettingSection::App, "col_colon", "Clock colon color", "#ffffff");
     ConfigStore::registerString(SettingSection::App, "col_host", "Hostname color", "#ffffff");
     ConfigStore::registerString(SettingSection::App, "col_ip", "IP address color", "#ffffff");
     Display::setActive(&screen);
