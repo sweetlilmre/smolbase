@@ -154,7 +154,8 @@ static void registerSystemSettings() {
   registerString(SettingSection::System, "tz", "Timezone (POSIX TZ)", "UTC0");
   registerString(SettingSection::System, "ntp", "NTP server", "pool.ntp.org");
   registerInt(SettingSection::System, "brightness", "Brightness", 200, 0, 255);
-  registerString(SettingSection::System, "hostname", "Hostname (blank = auto)", "");
+  // ".local" is added by mDNS — typing it here would sanitize to "...local".
+  registerString(SettingSection::System, "hostname", "Hostname (no .local; blank = auto)", "");
 }
 
 bool begin() {

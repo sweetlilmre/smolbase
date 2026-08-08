@@ -29,6 +29,7 @@ static void onSysEvent(SysEvent e) {
       Clock::sync();
       break;
     case SysEvent::SettingsChanged:
+      Net::applyHostname();
       if (Net::isUp())
         Clock::sync(); // re-applies TZ and re-kicks SNTP (NTP server may have changed)
       else

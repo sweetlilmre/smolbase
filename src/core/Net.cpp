@@ -120,7 +120,10 @@ static void onWiFiEvent(WiFiEvent_t event) {
   }
 }
 
-void begin() {
+// Effective device name: the sanitized "hostname" setting, else smolbase-XXXX.
+static String computeName() {
+  String n = sanitizeHostname(ConfigStore::getString("hostname", ""));
+  if (!n.isEmpty()) return n;
   // esp_read_mac works before any netif exists; WiFi.macAddress() at this
   // point returns without writing the buffer (verified in the installed core),
   // which made the identity suffix uninitialized-stack garbage.
@@ -128,8 +131,29 @@ void begin() {
   esp_read_mac(mac, ESP_MAC_WIFI_STA);
   char suffix[5];
   snprintf(suffix, sizeof(suffix), "%02x%02x", mac[4], mac[5]);
-  name = sanitizeHostname(ConfigStore::getString("hostname", ""));
-  if (name.isEmpty()) name = String(SMOLBASE_NAME_PREFIX "-") + suffix;
+  return String(SMOLBASE_NAME_PREFIX "-") + suffix;
+}
+
+// mDNS lifecycle state — owned by the main loop (loop()/applyHostname() only).
+static bool mdnsUp = false;
+static uint32_t mdnsLastTry = 0;
+
+void applyHostname() {
+  // Called on SettingsChanged (main loop). A changed name re-registers mDNS
+  // immediately; the DHCP hostname and AP SSID pick it up on the next
+  // reconnect/boot (changing those live would mean bouncing the link).
+  String next = computeName();
+  if (next == name) return;
+  name = next;
+  WiFi.setHostname(name.c_str());
+  if (mdnsUp) {
+    MDNS.end();
+    mdnsUp = false; // loop() re-registers under the new name within ~1 s
+  }
+}
+
+void begin() {
+  name = computeName();
 
   WiFi.onEvent(onWiFiEvent);
   WiFi.persistent(false); // creds live in our own NVS namespace, single source of truth
@@ -163,8 +187,6 @@ void loop() {
 
   // mDNS lifecycle (main loop only): register once up, tear down on a drop so
   // the reconnect path re-registers cleanly.
-  static bool mdnsUp = false;
-  static uint32_t mdnsLastTry = 0;
   bool up = isUp();
   if (mdnsUp && !up) {
     MDNS.end();

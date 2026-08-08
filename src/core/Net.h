@@ -15,6 +15,7 @@ bool isUp();
 bool inApMode();
 IPAddress ip(); // STA IP or AP IP as appropriate
 String deviceName(); // effective hostname: "hostname" setting or smolbase-XXXX
+void applyHostname(); // re-apply after a settings change (re-registers mDNS live)
 int32_t rssi();      // STA link RSSI in dBm; 0 when not connected
 bool hasCredentials();
 bool saveCredentials(const String& ssid, const String& pass); // false = NVS write failed; then restartToApply()
