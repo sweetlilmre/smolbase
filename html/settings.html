@@ -1,0 +1,300 @@
+<!doctype html>
+<!-- Settings UI — variant D (top tabs, horizontally paged; ticket #7 resolution).
+     A pure static asset over the JSON contract (ticket #14): sections and fields
+     render from GET /api/settings (schema + values), saves POST a flat value map.
+     Swap this file (and repack the filesystem image) to change the UI — zero
+     firmware changes. Timezone dropdown is fed by zones.json (IANA -> POSIX,
+     nayarsystems/posix_tz_db, MIT). -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>smolbase settings</title>
+<style>
+  :root {
+    --bg: #f6f7f5; --panel: #ffffff; --ink: #1c2422; --muted: #5c6b67;
+    --line: #d9e0dd; --accent: #0e8f7e; --accent-ink: #ffffff;
+    --danger: #c23b2e; --danger-bg: #faedeb; --field: #eef1ef;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141a19; --panel: #1c2422; --ink: #e6ebe9; --muted: #93a29d;
+      --line: #2c3634; --accent: #2fb39f; --accent-ink: #0b1512;
+      --danger: #e05a4c; --danger-bg: #2a1a17; --field: #232d2a;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141a19; --panel: #1c2422; --ink: #e6ebe9; --muted: #93a29d;
+    --line: #2c3634; --accent: #2fb39f; --accent-ink: #0b1512;
+    --danger: #e05a4c; --danger-bg: #2a1a17; --field: #232d2a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif; min-height: 100vh; }
+  .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace; }
+  h1 { font-size: 1.1rem; margin: 0; }
+  button { font: inherit; cursor: pointer; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); padding: 0.5rem 1rem; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  button.danger { background: none; border-color: var(--danger); color: var(--danger); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  input[type=text], input[type=number], select, input[type=file] {
+    font: inherit; width: 100%; padding: 0.5rem 0.65rem; border-radius: 6px;
+    border: 1px solid var(--line); background: var(--field); color: var(--ink);
+  }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  input[type=checkbox] { accent-color: var(--accent); width: 1.05rem; height: 1.05rem; vertical-align: -0.2rem; }
+  label { font-size: 0.85rem; color: var(--muted); display: block; margin-bottom: 0.25rem; }
+  .hint { font-size: 0.78rem; color: var(--muted); margin-top: 0.3rem; }
+  .field { margin-bottom: 0.9rem; }
+  .toast { position: fixed; top: 1rem; left: 50%; transform: translateX(-50%);
+    background: var(--accent); color: var(--accent-ink); padding: 0.45rem 1rem;
+    border-radius: 999px; font-size: 0.85rem; opacity: 0; transition: opacity 0.25s; pointer-events: none; z-index: 98; }
+  .toast.show { opacity: 1; }
+  .toast.err { background: var(--danger); color: #fff; }
+
+  .d-wrap { max-width: 34rem; margin: 0 auto; padding: 1rem 0 3rem; }
+  .d-dev { display: flex; flex-wrap: wrap; gap: 0.3rem 1.2rem; padding: 0 1rem 0.75rem; font-size: 0.8rem; align-items: baseline; }
+  .d-dev .mono { color: var(--muted); }
+  .d-tabs { display: flex; gap: 0.35rem; overflow-x: auto; padding: 0 1rem 0.6rem;
+    border-bottom: 1px solid var(--line); scrollbar-width: none; }
+  .d-tabs::-webkit-scrollbar { display: none; }
+  .d-tabs button { border-radius: 999px; padding: 0.35rem 0.85rem; white-space: nowrap; font-size: 0.85rem; }
+  .d-tabs button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .d-tabs button.dz { color: var(--danger); border-color: var(--danger); }
+  .d-tabs button.dz.on { background: var(--danger); color: #fff; }
+  .d-pages { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { .d-pages { scroll-behavior: auto; } }
+  .d-page { flex: 0 0 100%; scroll-snap-align: start; padding: 1.25rem 1rem 0; }
+  .d-page h1 { margin-bottom: 1rem; }
+  .swipehint { text-align: center; margin-top: 0.75rem; }
+  .dz-box { border: 1px solid var(--danger); background: var(--danger-bg); border-radius: 8px; padding: 1rem; }
+</style>
+</head>
+<body>
+<div id="app"><p class="hint" style="padding:1.5rem 1rem">Loading settings…</p></div>
+<div class="toast" id="toast">Saved</div>
+
+<script>
+"use strict";
+const app = document.getElementById("app");
+let toastTimer;
+function toast(msg, err) {
+  const t = document.getElementById("toast");
+  t.textContent = msg || "Saved";
+  t.classList.toggle("err", !!err);
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), err ? 2600 : 1400);
+}
+const esc = s => String(s).replace(/[&<>"']/g,
+  c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+let STATUS = {}, ZONES = {}, SCHEMA = [];
+
+/* ---- field renderers (from the schema; "tz" is hidden, "tz_name" becomes the
+   zones.json-backed dropdown, "brightness" gets a slider) ---- */
+function renderField(s) {
+  const id = "f_" + s.key;
+  if (s.key === "tz") return ""; // applied POSIX string; staged via the tz_name dropdown
+  if (s.key === "tz_name") {
+    const names = Object.keys(ZONES);
+    if (s.value && !ZONES[s.value]) names.unshift(s.value); // keep an unknown stored zone selectable
+    return `<div class="field"><label for="${id}">${esc(s.label)}</label>
+      <select id="${id}" data-key="tz_name" data-type="tz">${names.map(z =>
+        `<option value="${esc(z)}"${z === s.value ? " selected" : ""}>${esc(z)}</option>`).join("")}</select>
+      <p class="hint">${names.length} zones from <span class="mono">zones.json</span>; the matching POSIX rule is saved with it.</p></div>`;
+  }
+  if (s.type === "bool") {
+    return `<div class="field"><label style="color:var(--ink)"><input type="checkbox" id="${id}"
+      data-key="${esc(s.key)}" data-type="bool"${s.value ? " checked" : ""}> ${esc(s.label)}</label></div>`;
+  }
+  if (s.type === "int") {
+    if (s.key === "brightness") {
+      return `<div class="field"><label for="${id}">${esc(s.label)} — <span id="${id}_out" class="mono">${s.value}</span></label>
+        <input type="range" id="${id}" data-key="${esc(s.key)}" data-type="int"
+          min="${s.min}" max="${s.max}" value="${s.value}"
+          oninput="document.getElementById('${id}_out').textContent=this.value"></div>`;
+    }
+    return `<div class="field"><label for="${id}">${esc(s.label)}</label>
+      <input type="number" id="${id}" data-key="${esc(s.key)}" data-type="int"
+        min="${s.min}" max="${s.max}" value="${s.value}">
+      <p class="hint">${s.min} – ${s.max}</p></div>`;
+  }
+  return `<div class="field"><label for="${id}">${esc(s.label)}</label>
+    <input type="text" id="${id}" data-key="${esc(s.key)}" data-type="string" value="${esc(s.value)}"></div>`;
+}
+
+/* Collect the staged values inside one section page into a flat map. */
+function collect(page) {
+  const out = {};
+  page.querySelectorAll("[data-key]").forEach(el => {
+    const t = el.dataset.type;
+    if (t === "bool") out[el.dataset.key] = el.checked;
+    else if (t === "int") out[el.dataset.key] = Math.round(Number(el.value) || 0);
+    else if (t === "tz") { out.tz_name = el.value; if (ZONES[el.value]) out.tz = ZONES[el.value]; }
+    else out[el.dataset.key] = el.value;
+  });
+  return out;
+}
+
+async function postSettings(values) {
+  const r = await fetch("/api/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(values),
+  });
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+
+/* ---- non-schema pages ---- */
+function wifiPage() {
+  const net = STATUS.apMode
+    ? `<p>The device is in <b>setup mode</b>, serving its own access point.</p>`
+    : `<div class="field"><label>Wi-Fi connection</label>
+        <p style="margin:0"><b>Connected</b> <span class="mono" style="color:var(--muted)">${
+          STATUS.rssi != null ? esc(STATUS.rssi) + " dBm" : ""}</span></p>
+        <p class="hint">IP <span class="mono">${esc(STATUS.ip || "?")}</span> ·
+          reachable at <span class="mono">${esc(STATUS.name || "smolbase")}.local</span></p></div>`;
+  return net + `<div class="field"><label>Change Wi-Fi…</label>
+    <p class="hint" style="margin-top:0">Changing networks means re-provisioning: a factory reset (Danger tab)
+    clears the stored credentials and settings, and the device restarts as the
+    <span class="mono">${esc(STATUS.name || "smolbase-XXXX")}</span> access point where you pick the new network
+    from the setup portal.</p></div>`;
+}
+
+function updatePage() {
+  return `<div class="field"><label for="fwfile">Firmware file (.bin)</label>
+    <input type="file" id="fwfile" accept=".bin">
+    <p class="hint">Device restarts after a successful update. The screen freezes during flashing — that's normal.</p></div>
+    <button class="primary" id="fwgo">Upload &amp; install</button>
+    <p class="hint" id="fwmsg"></p>`;
+}
+
+function dangerPage() {
+  return `<div class="dz-box">
+    <p class="hint" style="margin-top:0">Erases Wi-Fi credentials and all settings, returning the device to setup mode.
+      Type <b class="mono">reset</b> to confirm.</p>
+    <div class="field"><input type="text" id="dzconfirm" autocomplete="off" placeholder="reset"></div>
+    <button class="danger" id="dzgo" disabled>Factory reset</button>
+    <div id="dzafter"></div></div>`;
+}
+
+/* ---- variant D shell ---- */
+function render() {
+  const heapKb = STATUS.heapFree ? Math.round(STATUS.heapFree / 1024) + " kB free" : "";
+  const sections = []; // [name, html, savable]
+  for (const sec of ["system", "app"]) {
+    const items = SCHEMA.filter(s => s.section === sec);
+    if (!items.length) continue;
+    sections.push([sec === "system" ? "System" : "App",
+      items.map(renderField).join(""), true]);
+  }
+  sections.push(["WiFi", wifiPage(), false]);
+  sections.push(["Update", updatePage(), false]);
+  sections.push(["Danger", dangerPage(), false]);
+
+  app.innerHTML = `<div class="d-wrap">
+    <div class="d-dev"><b>${esc(STATUS.name || "smolbase")}</b>
+      <span class="mono">${esc(STATUS.ip || "")}</span>
+      <span class="mono">${heapKb}</span>
+      <span class="mono">fw ${esc(STATUS.fwVersion || "?")}</span></div>
+    <div class="d-tabs" role="tablist">${sections.map(([n], i) =>
+      `<button role="tab" aria-selected="${i === 0}" class="${i === 0 ? "on" : ""} ${n === "Danger" ? "dz" : ""}"
+        data-t="${i}">${n}</button>`).join("")}</div>
+    <div class="d-pages" id="dPages">${sections.map(([n, html, savable]) =>
+      `<section class="d-page" data-sec="${n}"><h1>${n === "Danger" ? "Danger zone" : n + (n === "System" || n === "App" ? " settings" : "")}</h1>${html}
+        ${savable ? `<button class="primary savebtn" style="margin:0.5rem 0 1rem">Save ${n.toLowerCase()}</button>` : ""}
+      </section>`).join("")}</div>
+    <p class="hint swipehint">swipe or use the tabs ⇄</p>
+  </div>`;
+
+  const pages = document.getElementById("dPages");
+  const tabs = [...app.querySelectorAll("[data-t]")];
+  const setTab = i => tabs.forEach((t, j) => {
+    t.classList.toggle("on", i === j);
+    t.setAttribute("aria-selected", i === j);
+  });
+  tabs.forEach(t => t.addEventListener("click", () => {
+    pages.scrollTo({ left: pages.clientWidth * +t.dataset.t });
+  }));
+  pages.addEventListener("scroll", () => {
+    setTab(Math.round(pages.scrollLeft / pages.clientWidth));
+  }, { passive: true });
+
+  // per-section save
+  app.querySelectorAll(".savebtn").forEach(b => b.addEventListener("click", async () => {
+    b.disabled = true;
+    try {
+      const r = await postSettings(collect(b.closest(".d-page")));
+      toast(r.changed ? "Saved" : "No changes");
+    } catch (e) {
+      toast("Save failed — " + e.message, true);
+    }
+    b.disabled = false;
+  }));
+
+  // firmware update (backend may still be the 501 placeholder)
+  const fwgo = document.getElementById("fwgo");
+  fwgo.addEventListener("click", async () => {
+    const f = document.getElementById("fwfile").files[0];
+    const msg = document.getElementById("fwmsg");
+    if (!f) { msg.textContent = "Choose a .bin file first."; return; }
+    fwgo.disabled = true;
+    msg.textContent = "Uploading… don't power off the device.";
+    try {
+      const fd = new FormData();
+      fd.append("firmware", f, f.name);
+      const r = await fetch("/api/update", { method: "POST", body: fd });
+      if (r.status === 501) { msg.textContent = "OTA not available yet on this firmware."; toast("OTA not available yet", true); }
+      else if (r.ok) { msg.textContent = "Update accepted — the device is restarting."; toast("Update uploaded"); }
+      else { msg.textContent = "Update failed (HTTP " + r.status + ")."; toast("Update failed", true); }
+    } catch (e) {
+      msg.textContent = "Upload failed — " + e.message;
+      toast("Upload failed", true);
+    }
+    fwgo.disabled = false;
+  });
+
+  // factory reset with typed confirmation
+  const dzc = document.getElementById("dzconfirm");
+  const dzgo = document.getElementById("dzgo");
+  dzc.addEventListener("input", () => { dzgo.disabled = dzc.value.trim().toLowerCase() !== "reset"; });
+  dzgo.addEventListener("click", async () => {
+    dzgo.disabled = true;
+    try {
+      const r = await fetch("/api/factory-reset", { method: "POST" });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      document.getElementById("dzafter").innerHTML = `<p class="hint" style="color:var(--ink)">
+        <b>Reset done — the device is restarting into setup mode.</b><br>
+        Join its <span class="mono">smolbase-XXXX</span> Wi-Fi access point and the setup portal
+        will open to pick a network. This page will stop responding.</p>`;
+      toast("Factory reset — device restarting");
+    } catch (e) {
+      toast("Reset failed — " + e.message, true);
+      dzgo.disabled = false;
+    }
+  });
+}
+
+async function init() {
+  try {
+    const [st, se, zo] = await Promise.all([
+      fetch("/api/status").then(r => r.json()),
+      fetch("/api/settings").then(r => r.json()),
+      fetch("/zones.json").then(r => r.ok ? r.json() : {}).catch(() => ({})),
+    ]);
+    STATUS = st || {};
+    SCHEMA = (se && se.settings) || [];
+    ZONES = zo || {};
+    render();
+  } catch (e) {
+    app.innerHTML = `<p class="hint" style="padding:1.5rem 1rem">Failed to load settings — ${esc(e.message)}.
+      Is the device reachable? <button onclick="location.reload()">Retry</button></p>`;
+  }
+}
+init();
+</script>
+</body>
+</html>

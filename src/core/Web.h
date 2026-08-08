@@ -3,7 +3,8 @@
 // Registration order in begin() is STRUCTURAL — PsychicHttp dispatches
 // endpoints first-registered-first-matched, so earlier entries shadow later
 // ones. Do not reorder:
-//   1. system API routes   (/api/status, /api/wifi*, /api/factory-reset)
+//   1. system API routes   (/api/status, /api/wifi*, /api/settings,
+//                           /api/factory-reset)
 //   2. Ota::registerRoutes (/api/update — slot; ticket #18 fills it in)
 //   3. app.registerRoutes  (consumer routes; may NOT claim /api/* system paths)
 //   4. static assets       (LittleFS SMOLBASE_WWW_DIR, gzip-only; "/" is
