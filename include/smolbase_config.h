@@ -15,7 +15,8 @@
 // ---- Display ----
 // 60 MHz is not an achievable classic-ESP32 SPI divider; 40 MHz is the proven safe rate.
 #define SMOLBASE_SPI_HZ 40000000
-// Framebuffer mode: 0 = none (direct draw), 1 = 8-bpp palette (57.6 KB), 2 = RGB565 (115.2 KB — tight!)
+// Framebuffer mode: 0 = none (direct draw), 1 = 8-bpp palette (57.6 KB static),
+// 2 = RGB565 (115.2 KB, heap-allocated once at boot — too big for static DRAM).
 #define SMOLBASE_FB_NONE 0
 #define SMOLBASE_FB_PALETTE_8 1
 #define SMOLBASE_FB_RGB565 2
