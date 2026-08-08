@@ -27,7 +27,10 @@ static void onSysEvent(SysEvent e) {
       Clock::sync();
       break;
     case SysEvent::SettingsChanged:
-      Clock::applyTimezone();
+      if (Net::isUp())
+        Clock::sync(); // re-applies TZ and re-kicks SNTP (NTP server may have changed)
+      else
+        Clock::applyTimezone();
       Display::setBrightness(ConfigStore::getInt("brightness"));
       break;
     default:
@@ -43,6 +46,7 @@ void setup() {
   Display::begin();
   Display::setBrightness(ConfigStore::getInt("brightness")); // schema default
   Touch::begin();
+  Clock::begin(); // registers Clock-owned settings; before Net so schema is complete
   Net::begin();
   Web::begin(AppHost::app());
   AppHost::setup();
