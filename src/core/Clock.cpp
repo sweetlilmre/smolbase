@@ -18,13 +18,13 @@ static void onSntpSync(struct timeval*) {
 
 void sync() {
   sntp_set_time_sync_notification_cb(onSntpSync);
-  String ntp = ConfigStore::getString("ntp", "pool.ntp.org");
-  String tz = ConfigStore::getString("tz", "UTC0");
+  String ntp = ConfigStore::getString("ntp"); // defaults live in the settings schema
+  String tz = ConfigStore::getString("tz");
   configTzTime(tz.c_str(), ntp.c_str());
 }
 
 void applyTimezone() {
-  String tz = ConfigStore::getString("tz", "UTC0");
+  String tz = ConfigStore::getString("tz");
   setenv("TZ", tz.c_str(), 1);
   tzset();
 }
