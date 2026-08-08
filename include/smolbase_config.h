@@ -3,6 +3,10 @@
 
 // ---- Identity ----
 #define SMOLBASE_NAME_PREFIX "smolbase" // hostname/AP SSID become smolbase-XXXX (MAC suffix)
+// Reported by GET /api/status; consumers set their own via build_flags -D.
+#ifndef SMOLBASE_FW_VERSION
+#define SMOLBASE_FW_VERSION "0.1.0"
+#endif
 
 // ---- Hardware: GeekMagic Small TV Pro (ESP32-D0WD, 8MB flash, no PSRAM) ----
 #define SMOLBASE_PIN_SCLK 18

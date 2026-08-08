@@ -15,6 +15,7 @@ bool isUp();
 bool inApMode();
 IPAddress ip(); // STA IP or AP IP as appropriate
 String deviceName(); // effective hostname: "hostname" setting or smolbase-XXXX
+int32_t rssi();      // STA link RSSI in dBm; 0 when not connected
 bool hasCredentials();
 void saveCredentials(const String& ssid, const String& pass); // then restartToApply()
 void clearCredentials(); // factory reset path
