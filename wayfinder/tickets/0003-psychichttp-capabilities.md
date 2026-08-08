@@ -3,7 +3,7 @@ id: 3
 title: PsychicHttp capabilities and version choice
 labels: [wayfinder:research]
 status: open
-assignee:
+assignee: research-agent (findings will land on branch research/psychichttp-capabilities)
 blocked-by: []
 ---
 

@@ -3,7 +3,7 @@ id: 2
 title: Display stack selection
 labels: [wayfinder:research]
 status: open
-assignee:
+assignee: research-agent (findings will land on branch research/display-stack-selection)
 blocked-by: []
 ---
 

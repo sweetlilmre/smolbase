@@ -3,7 +3,7 @@ id: 4
 title: Curated IANA → POSIX TZ zone list source
 labels: [wayfinder:research]
 status: open
-assignee:
+assignee: research-agent (findings will land on branch research/timezone-zone-list)
 blocked-by: []
 ---
 
