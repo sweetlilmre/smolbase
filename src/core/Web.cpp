@@ -229,9 +229,12 @@ void begin(App& app) {
       if (req->uri() == "/" || req->uri() == "/portal.html") {
         return res->send(200, "text/html", FALLBACK_PORTAL);
       }
-    } else if (req->uri() == "/") {
-      // STA mode with no index asset (wiped/failed filesystem): serve the
-      // embedded recovery page so the device is never browser-dead.
+    } else if (req->uri() == "/" || req->uri() == "/settings.html") {
+      // STA mode with the asset missing (wiped/failed filesystem): serve the
+      // embedded recovery page so the device is never browser-dead — also for
+      // bookmarked settings.html. A *present but broken* asset still serves
+      // normally; /recover (a firmware route, matched before static files) is
+      // the escape hatch for that case.
       return res->send(200, "text/html", RECOVERY_PAGE);
     }
     return res->send(404, "text/plain", "Not found");
