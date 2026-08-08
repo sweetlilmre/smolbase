@@ -7,7 +7,7 @@
 - **Provisioning** — getting an unconfigured device onto a WiFi network via the Captive Portal.
 - **Captive Portal** — the WiFi-provisioning-only web page served while the device is in AP Mode. Its single job is scan-and-join; it never exposes other settings.
 - **AP Mode** — the device acting as its own access point (`smolbase-XXXX`) because it has no joinable network. The screen shows connection instructions while in this mode.
-- **AP Fallback** — automatically returning to AP Mode when the stored network cannot be reached, whether at boot or after sustained runtime loss.
+- **AP Fallback** — entering AP Mode at boot when there are no stored credentials or the stored network cannot be joined within the connect timeout. Boot-time only: a runtime WiFi drop triggers silent auto-reconnect, forever, never AP Mode. (Amended from the charter, which allowed runtime fallback.)
 - **Settings UI** — the configuration web page served once the device is on a network. Covers: timezone, NTP server, brightness, hostname, WiFi re-configure, OTA, factory reset.
 - **Stock Screen** — the default on-network display (IP, hostname, NTP-synced time). It is the demo implementation of the App Screen extension point; Consumers replace it.
 - **App Screen** — the extension point where a Consumer's own UI lives.
