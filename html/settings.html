@@ -15,6 +15,8 @@
 <style>
   h1 { font-size: 1.1rem; margin: 0; }
   .field { margin-bottom: 0.9rem; }
+  input[type=color] { width: 3rem; height: 2rem; padding: 0.15rem; border: 1px solid var(--line);
+    border-radius: 6px; background: var(--field); cursor: pointer; }
   .toast { position: fixed; top: 1rem; left: 50%; transform: translateX(-50%);
     background: var(--accent); color: var(--accent-ink); padding: 0.45rem 1rem;
     border-radius: 999px; font-size: 0.85rem; opacity: 0; transition: opacity 0.25s; pointer-events: none; z-index: 98; }
@@ -91,6 +93,12 @@ function renderField(s) {
       <input type="number" id="${id}" data-key="${esc(s.key)}" data-type="int"
         min="${s.min}" max="${s.max}" value="${s.value}">
       <p class="hint">${s.min} – ${s.max}</p></div>`;
+  }
+  if (s.type === "string" && /^#[0-9a-f]{6}$/i.test(s.value)) {
+    // Same convention as index.html's picker panel: a #RRGGBB string renders
+    // as a native color input (interim symmetry pending ticket #34).
+    return `<div class="field"><label for="${id}">${esc(s.label)}</label>
+      <input type="color" id="${id}" data-key="${esc(s.key)}" data-type="string" value="${esc(s.value)}"></div>`;
   }
   return `<div class="field"><label for="${id}">${esc(s.label)}</label>
     <input type="text" id="${id}" data-key="${esc(s.key)}" data-type="string" value="${esc(s.value)}"></div>`;
