@@ -196,9 +196,14 @@ Pick a mode in `include/smolbase_config.h` (or `-D SMOLBASE_FRAMEBUFFER=...`):
 | --- | --- | --- |
 | `SMOLBASE_FB_NONE` | zero RAM | direct drawing only |
 | `SMOLBASE_FB_PALETTE_8` (default) | 57.6 KB static (.bss) | full-frame composition, 256 colors |
-| `SMOLBASE_FB_RGB565` | 115.2 KB **heap**, allocated once at boot | true color — too big for static DRAM, and it takes a real bite out of the heap on a no-PSRAM board |
 
-In the buffered modes you get an opt-in composition sprite: draw into
+There is deliberately no full-frame RGB565 mode: at 115.2 KB it cannot be
+statically allocated on this chip (it overflows DRAM), and heap-allocating it
+eats most of the WiFi-era headroom on a no-PSRAM board. If you need full-color
+composition, create a partial-frame 16-bpp `lgfx::LGFX_Sprite` of your own —
+sized to the region you actually redraw — and push it where needed.
+
+In `PALETTE_8` mode you get an opt-in composition sprite: draw into
 `Display::frame()`, then `Display::present()` pushes it to the panel in one
 DMA-backed transfer. It is a composition tool, never a requirement — screens
 keep drawing direct via `tick(LGFX_Device&)` if they prefer.

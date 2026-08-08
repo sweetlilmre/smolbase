@@ -68,10 +68,6 @@ SmolPanel panel;
 
 #if SMOLBASE_FRAMEBUFFER == SMOLBASE_FB_PALETTE_8
 uint8_t fbData[240 * 240]; // static, .bss — heap stays contiguous for TLS
-#endif
-// RGB565 has no static buffer: 115.2 KB of .bss overflows classic-ESP32 dram0_0_seg
-// by ~44 KB (linker-verified). That mode heap-allocates once in begin(), pre-WiFi.
-#if SMOLBASE_FRAMEBUFFER != SMOLBASE_FB_NONE
 lgfx::LGFX_Sprite fbSprite(&panel);
 #endif
 
@@ -109,16 +105,6 @@ void begin() {
     fbSprite.setPaletteColor(i, r, g, b);
   }
   fbSprite.fillScreen(0); // index 0 = black
-#elif SMOLBASE_FRAMEBUFFER == SMOLBASE_FB_RGB565
-  // One-time 115.2 KB heap allocation, done here (before WiFi) while the heap is
-  // still large and contiguous. A static buffer is impossible: it overflows DRAM.
-  fbSprite.setColorDepth(16);
-  fbSprite.setPsram(false);
-  if (fbSprite.createSprite(240, 240)) {
-    fbSprite.fillScreen(TFT_BLACK);
-  } else {
-    Serial.println("[display] RGB565 framebuffer allocation failed; frame() unusable");
-  }
 #endif
 }
 
