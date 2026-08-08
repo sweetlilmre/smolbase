@@ -1,4 +1,8 @@
 <!doctype html>
+<!-- Landing page AND the StockApp demo config: any app-section string setting
+     holding a #RRGGBB value renders as a live color picker — change one and
+     the panel repaints via SettingsChanged. This is the "html" corner of the
+     app/config/html extension-surface triangle (see docs/building-your-app.md). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -8,11 +12,19 @@
   body { margin: 0; min-height: 100vh; display: grid; place-items: center;
     background: #141a19; color: #e6ebe9;
     font: 16px/1.5 -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif; }
-  main { text-align: center; }
+  main { text-align: center; padding: 2rem 1rem; }
   .mono { font-family: ui-monospace, Consolas, Menlo, monospace; color: #93a29d; }
   a.btn { display: inline-block; margin-top: 1.25rem; padding: 0.6rem 1.4rem;
     background: #2fb39f; color: #0b1512; border-radius: 6px; text-decoration: none;
     font-weight: 600; }
+  .cfg { margin-top: 2rem; border: 1px solid #2c3634; border-radius: 8px;
+    padding: 1rem 1.25rem; text-align: left; }
+  .cfg h2 { font-size: 0.95rem; margin: 0 0 0.6rem; color: #93a29d; font-weight: 600; }
+  .cfg label { display: flex; align-items: center; justify-content: space-between;
+    gap: 1.5rem; padding: 0.3rem 0; font-size: 0.9rem; }
+  .cfg input[type=color] { width: 3rem; height: 2rem; border: 1px solid #2c3634;
+    border-radius: 6px; background: #232d2a; padding: 0.15rem; cursor: pointer; }
+  .cfg .msg { font-size: 0.78rem; color: #93a29d; min-height: 1.1em; margin: 0.4rem 0 0; }
 </style>
 </head>
 <body>
@@ -20,12 +32,47 @@
   <h1>smolbase is alive</h1>
   <p class="mono" id="status">loading…</p>
   <a class="btn" href="/settings.html">Open settings</a>
+  <div class="cfg" id="cfg" hidden>
+    <h2>Screen colors</h2>
+    <div id="pickers"></div>
+    <p class="msg" id="cfgmsg">Changes apply on the panel immediately.</p>
+  </div>
 </main>
 <script>
 fetch("/api/status").then(r => r.json()).then(s => {
   document.getElementById("status").textContent =
     `${s.name} · ${s.ip} · ${Math.round(s.heapFree / 1024)} kB heap free`;
 }).catch(() => document.getElementById("status").textContent = "api unreachable");
+
+// Render a picker for every app-section string setting that holds a #RRGGBB
+// value. Generic on purpose: register another color in StockApp::setup() and
+// it appears here with zero HTML changes.
+fetch("/api/settings").then(r => r.json()).then(j => {
+  const colors = (j.settings || []).filter(s =>
+    s.section === "app" && s.type === "string" && /^#[0-9a-f]{6}$/i.test(s.value));
+  if (!colors.length) return;
+  const box = document.getElementById("pickers");
+  const msg = document.getElementById("cfgmsg");
+  colors.forEach(s => {
+    const row = document.createElement("label");
+    row.textContent = s.label;
+    const inp = document.createElement("input");
+    inp.type = "color";
+    inp.value = s.value;
+    inp.addEventListener("change", async () => {
+      try {
+        const r = await fetch("/api/settings", { method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ [s.key]: inp.value }) });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        msg.textContent = s.label + " saved — look at the panel.";
+      } catch (e) { msg.textContent = "Save failed — " + e.message; }
+    });
+    row.appendChild(inp);
+    box.appendChild(row);
+  });
+  document.getElementById("cfg").hidden = false;
+}).catch(() => {});
 </script>
 </body>
 </html>

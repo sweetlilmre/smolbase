@@ -256,17 +256,22 @@ heartbeat honors the discipline — `drawColon` overdraws only the colon's own
 cell, never the digits. The full draw likewise fills only the rectangles it
 rewrites (`fillRect` + `drawString`), never the whole screen.
 
-The app glues the screen to the system:
+The app glues the screen to the system — and registers its own settings:
 
 ```cpp
 class StockApp : public App {
   StockScreen screen;
 
 public:
-  void setup() override { Display::setActive(&screen); }
+  void setup() override {
+    ConfigStore::registerString(SettingSection::App, "col_hour", "Clock hour color", "#ffffff");
+    // ... col_min, col_host, col_ip likewise ...
+    Display::setActive(&screen);
+  }
 
   void onSystemEvent(SysEvent e) override {
-    if (e == SysEvent::NetworkUp || e == SysEvent::TimeSynced) screen.markDirty();
+    if (e == SysEvent::NetworkUp || e == SysEvent::TimeSynced ||
+        e == SysEvent::SettingsChanged) screen.markDirty();
   }
 };
 
@@ -275,6 +280,17 @@ App& makeApp() {
   return app;
 }
 ```
+
+Those four registrations are the whole app/config/html triangle in action.
+**App**: the screen re-reads the colors on every full repaint and reacts to
+`SettingsChanged` by marking dirty, so a change lands on the panel live.
+**Config**: the values persist in `settings.json` and ride the standard
+`GET`/`POST /api/settings` contract — the settings UI's App section renders
+them automatically. **HTML**: `html/index.html` goes one step further and
+renders a color picker for every app-section string setting holding a
+`#RRGGBB` value — register a fifth color and it appears there with zero HTML
+changes. Colors are stored as the `#RRGGBB` string an `<input type="color">`
+speaks; the app parses hex once per repaint (`hexRgb` in StockApp.cpp).
 
 `NetworkUp` and `TimeSynced` don't draw anything — they mark dirty and let the
 next `tick` repaint on core 1, which is exactly the pattern your HTTP handlers
