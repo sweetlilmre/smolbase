@@ -1,5 +1,7 @@
 # smolbase
 
+[![build](https://github.com/sweetlilmre/smolbase/actions/workflows/build.yml/badge.svg)](https://github.com/sweetlilmre/smolbase/actions/workflows/build.yml)
+
 Template firmware for the GeekMagic **Small TV Pro** (ESP32, ST7789 240×240): WiFi
 provisioning via captive portal, settings web UI, NTP + timezones, OTA, LittleFS
 assets, and a small extension surface to build your own firmware on.
