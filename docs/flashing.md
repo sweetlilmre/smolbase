@@ -1,0 +1,94 @@
+# Flashing
+
+The Small TV Pro's USB-C port is **power only — there is no USB-serial
+bridge**. The first flash goes over a 6-pad serial header inside the case;
+every flash after that is OTA over WiFi, so you open the case exactly once.
+
+## First flash: the internal serial header
+
+Open the case. Next to the ESP32 module is a 6-pad programming header:
+
+**GND · TX · RX · 3V3 · GPIO0 · RST**
+
+Wire it to any generic 3.3 V USB-UART adapter (CP2102, CH340, FTDI — set to
+**3.3 V**, never 5 V logic):
+
+| Board pad | USB-UART adapter |
+| --- | --- |
+| GND | GND |
+| TX | RX |
+| RX | TX |
+| 3V3 | 3V3 (or power the board over its own USB-C and skip this pad) |
+| GPIO0 | GND — only while entering boot mode (see below) |
+| RST | not required; touch to GND to reset, or just power-cycle |
+
+TX/RX cross over. If the serial monitor shows nothing at 115200, swap them —
+that is the failure mode, not damage.
+
+### Entering boot mode
+
+The ESP32 samples GPIO0 at reset: **low = serial bootloader**.
+
+1. Hold GPIO0 to GND.
+2. Reset the board (pulse RST to GND, or power-cycle).
+3. Release GPIO0. The chip is now waiting for the flasher.
+
+No adapter with DTR/RTS auto-reset wiring is assumed — do it manually. You
+must re-enter boot mode for each upload command.
+
+### Upload
+
+Firmware and filesystem are two images; a fresh board needs both:
+
+```
+pio run -t upload   --upload-port COM5   # firmware
+pio run -t uploadfs --upload-port COM5   # LittleFS image (web assets, zones.json)
+```
+
+(Combine as `pio run -t upload -t uploadfs --upload-port COM5` to flash both
+in one boot-mode session. On Linux/macOS the port is `/dev/ttyUSB0`-style.)
+
+After flashing, reset with GPIO0 released. The screen comes up, the device
+starts its provisioning AP (`smolbase-XXXX`), and the captive portal gets it
+onto your WiFi. Optionally watch it boot:
+
+```
+pio device monitor -b 115200
+```
+
+## Ever after: OTA
+
+Close the case; you never open it again. Once the device is on your network,
+both images update over HTTP.
+
+**Via the settings page** — open `http://smolbase-XXXX.local/settings.html`
+(hostname is on the device's screen), go to the Update tab, and upload
+`firmware.bin` or `littlefs.bin` from `.pio/build/smolbase/`.
+
+**Via curl** — the endpoint is `POST /api/update`; the `target` query
+parameter picks the partition (`fw` is the default):
+
+```
+# firmware
+curl -F "file=@.pio/build/smolbase/firmware.bin" \
+     http://smolbase-XXXX.local/api/update
+
+# filesystem (web assets) — build it first with: pio run -t buildfs
+curl -F "file=@.pio/build/smolbase/littlefs.bin" \
+     "http://smolbase-XXXX.local/api/update?target=fs"
+```
+
+A successful upload answers `{"ok":true,"restarting":true}` and the device
+reboots into the new image; errors come back as HTTP 400 with the reason.
+`GET /api/update/status` reports progress. The partition table
+(`partitions.csv`) keeps two app slots, so a firmware upload streams into the
+inactive slot and only switches on success — a failed or interrupted upload
+leaves the running firmware untouched.
+
+One update at a time: a second upload racing an in-flight one is refused with
+HTTP 409.
+
+**A filesystem update replaces the whole LittleFS partition** — including
+`/config/settings.json`. Settings revert to defaults; WiFi credentials survive
+(they live in NVS), so the device comes back on your network and you reconfigure
+via the settings page.
