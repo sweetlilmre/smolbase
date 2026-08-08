@@ -124,7 +124,7 @@ var EYE_OFF = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" strok
 function pwField(id) {
   return '<div><label for="' + id + '">Password</label><div class="pw">' +
     '<input id="' + id + '" type="password" autocomplete="off">' +
-    '<button type="button" class="eye" data-eye="' + id + '" aria-label="Show password">' + EYE + '</button></div></div>';
+    '<button type="button" class="eye" data-eye="' + id + '" aria-label="Show password">' + EYE_OFF + '</button></div></div>';
 }
 document.addEventListener("click", function (e) {
   var t = e.target.closest("[data-eye]");
@@ -132,7 +132,8 @@ document.addEventListener("click", function (e) {
   var inp = $(t.dataset.eye);
   inp.type = inp.type === "password" ? "text" : "password";
   var hidden = inp.type === "password";
-  t.innerHTML = hidden ? EYE : EYE_OFF;
+  // Icon shows the STATE: slashed eye = hidden, open eye = visible.
+  t.innerHTML = hidden ? EYE_OFF : EYE;
   t.setAttribute("aria-label", hidden ? "Show password" : "Hide password");
 });
 
@@ -277,7 +278,7 @@ fetch("/api/status").then(function (r) { return r.json(); }).then(function (s) {
 }).catch(function () {
   $("dev").textContent = location.hostname;
 });
-$("manual").querySelector("[data-eye]").innerHTML = EYE; // markup ships the button empty; the icon lives in JS
+$("manual").querySelector("[data-eye]").innerHTML = EYE_OFF; // markup ships the button empty; the icon lives in JS
 fetchScan(false);
 </script>
 </body>
