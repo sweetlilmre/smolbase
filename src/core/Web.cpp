@@ -200,6 +200,55 @@ void begin(App& app) {
     return r;
   });
 
+  // Dev loop (ticket #32): upload ONE file into LittleFS instead of reflashing
+  // the whole image — POST /api/fs?path=/w/name.gz with a multipart file.
+  // Streams via temp file + rename; parent dirs auto-created. Assets are
+  // gzip-only, so the loop is: gzip the edited file, POST, refresh. This does
+  // not replace fs-OTA, which stays the way to ship coherent images.
+  {
+    static File fsFile;
+    static String fsPath;
+    static bool fsFailed;
+    auto* fsUp = new PsychicUploadHandler(); // lives for the server's lifetime
+    fsUp->onUpload([](PsychicRequest* req, const String&, uint64_t index, uint8_t* data,
+                      size_t len, bool last) -> esp_err_t {
+      if (index == 0) {
+        fsFailed = false;
+        PsychicWebParameter* p = req->getParam("path");
+        fsPath = p ? p->value() : String("");
+        if (fsPath.length() < 2 || fsPath[0] != '/' || fsPath.indexOf("..") >= 0) {
+          fsFailed = true;
+          return ESP_OK; // drain; verdict in onRequest
+        }
+        for (int i = 1; (i = fsPath.indexOf('/', i)) > 0; ++i) {
+          LittleFS.mkdir(fsPath.substring(0, i)); // no-op when it exists
+        }
+        fsFile = LittleFS.open("/.upload.tmp", "w");
+        if (!fsFile) fsFailed = true;
+      }
+      if (fsFailed) return ESP_OK;
+      if (len > 0 && fsFile.write(data, len) != len) {
+        fsFile.close();
+        fsFailed = true; // out of space, most likely
+        return ESP_OK;
+      }
+      if (last) {
+        fsFile.close();
+        LittleFS.remove(fsPath);
+        if (!LittleFS.rename("/.upload.tmp", fsPath)) fsFailed = true;
+      }
+      return ESP_OK;
+    });
+    fsUp->onRequest([](PsychicRequest*, PsychicResponse* res) {
+      if (fsFailed) {
+        return res->send(400, "application/json",
+                         "{\"error\":\"fs upload failed (bad path, or out of space?)\"}");
+      }
+      return res->send(200, "application/json", "{\"ok\":true}");
+    });
+    httpServer.on("/api/fs", HTTP_POST, fsUp);
+  }
+
   // Recovery page: registered as a real endpoint so it works in every mode
   // regardless of filesystem state. The uploads it drives are Ota's routes.
   httpServer.on("/recover", HTTP_GET, [](PsychicRequest*, PsychicResponse* res) {

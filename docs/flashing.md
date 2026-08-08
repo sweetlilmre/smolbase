@@ -96,6 +96,20 @@ leaves the running firmware untouched.
 One update at a time: a second upload racing an in-flight one is refused with
 HTTP 409.
 
+**Dev loop — single-file upload.** Reflashing the whole filesystem for one
+edited page is slow and wipes `settings.json`. `POST /api/fs?path=...` writes
+one file straight into LittleFS instead. Web assets are served gzip-only from
+`/w/`, so the loop for an edited page is:
+
+```
+gzip -kf9 html/settings.html
+curl -F "file=@html/settings.html.gz" "http://smolbase-XXXX.local/api/fs?path=/w/settings.html.gz"
+```
+
+Refresh the browser — no reflash, no restart, settings intact. This is a dev
+convenience, not a deploy mechanism: fs-OTA remains the way to ship a
+coherent image.
+
 **A filesystem update replaces the whole LittleFS partition** — including
 `/config/settings.json`. Settings revert to defaults; WiFi credentials survive
 (they live in NVS), so the device comes back on your network and you reconfigure
