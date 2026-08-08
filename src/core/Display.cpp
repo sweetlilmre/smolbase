@@ -1,5 +1,6 @@
 #include "Display.h"
 #include "smolbase_config.h"
+#include <Arduino.h>
 
 #define LGFX_USE_V1
 #include <LovyanGFX.hpp>
@@ -67,11 +68,11 @@ SmolPanel panel;
 
 #if SMOLBASE_FRAMEBUFFER == SMOLBASE_FB_PALETTE_8
 uint8_t fbData[240 * 240]; // static, .bss — heap stays contiguous for TLS
-#elif SMOLBASE_FRAMEBUFFER == SMOLBASE_FB_RGB565
-uint16_t fbData[240 * 240]; // 115.2 KB static: allowed but heap-hostile, see ticket #8
 #endif
+// RGB565 has no static buffer: 115.2 KB of .bss overflows classic-ESP32 dram0_0_seg
+// by ~44 KB (linker-verified). That mode heap-allocates once in begin(), pre-WiFi.
 #if SMOLBASE_FRAMEBUFFER != SMOLBASE_FB_NONE
-lgfx::LGFX_Sprite frame(&panel);
+lgfx::LGFX_Sprite fbSprite(&panel);
 #endif
 
 Screen* userScreen = nullptr;
@@ -94,13 +95,38 @@ void begin() {
   panel.setBrightness(200);
   panel.fillScreen(TFT_BLACK);
 #if SMOLBASE_FRAMEBUFFER == SMOLBASE_FB_PALETTE_8
-  frame.setColorDepth(8);
-  frame.setBuffer(fbData, 240, 240, 8);
+  fbSprite.setColorDepth(8);
+  fbSprite.setBuffer(fbData, 240, 240, 8);
+  // Palette storage is a one-time 1 KB boot allocation inside LovyanGFX (there is no
+  // static-palette API); the 57.6 KB pixel buffer above stays static. Default palette:
+  // index i decodes as RGB332 (RRRGGGBB), so color332(r,g,b) picks a usable index and
+  // the full color cube is roughly covered. See Display.h for how to override entries.
+  fbSprite.createPalette();
+  for (int i = 0; i < 256; ++i) {
+    uint8_t r = ((i >> 5) & 0x07) * 255 / 7;
+    uint8_t g = ((i >> 2) & 0x07) * 255 / 7;
+    uint8_t b = (i & 0x03) * 255 / 3;
+    fbSprite.setPaletteColor(i, r, g, b);
+  }
+  fbSprite.fillScreen(0); // index 0 = black
 #elif SMOLBASE_FRAMEBUFFER == SMOLBASE_FB_RGB565
-  frame.setColorDepth(16);
-  frame.setBuffer(fbData, 240, 240, 16);
+  // One-time 115.2 KB heap allocation, done here (before WiFi) while the heap is
+  // still large and contiguous. A static buffer is impossible: it overflows DRAM.
+  fbSprite.setColorDepth(16);
+  fbSprite.setPsram(false);
+  if (fbSprite.createSprite(240, 240)) {
+    fbSprite.fillScreen(TFT_BLACK);
+  } else {
+    Serial.println("[display] RGB565 framebuffer allocation failed; frame() unusable");
+  }
 #endif
 }
+
+#if SMOLBASE_FRAMEBUFFER != SMOLBASE_FB_NONE
+lgfx::LGFX_Sprite& frame() { return fbSprite; }
+
+void present() { fbSprite.pushSprite(0, 0); }
+#endif
 
 void setActive(Screen* s) {
   if (userScreen == s) return;
