@@ -1,5 +1,5 @@
-// OTA update routes (firmware + filesystem). Scaffold: route placeholder only —
-// the real upload handler is the "Build: OTA slice" ticket.
+// OTA update routes (firmware + filesystem). POST /api/update streams a
+// multipart image into Update.h; GET /api/update/status reports progress.
 #pragma once
 
 class PsychicHttpServer;
