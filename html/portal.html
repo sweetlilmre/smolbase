@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wi-Fi setup</title>
+<style>
+  :root {
+    --bg: #f6f7f5; --panel: #ffffff; --ink: #1c2422; --muted: #5c6b67;
+    --line: #d9e0dd; --accent: #0e8f7e; --accent-ink: #ffffff;
+    --danger: #c23b2e; --field: #eef1ef;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141a19; --panel: #1c2422; --ink: #e6ebe9; --muted: #93a29d;
+      --line: #2c3634; --accent: #2fb39f; --accent-ink: #0b1512;
+      --danger: #e06055; --field: #232d2a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.5 -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif;
+    min-height: 100vh;
+  }
+  .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace; }
+  main { max-width: 26rem; margin: 0 auto; padding: 1.25rem 1rem 3rem; }
+  h1 { font-size: 1.15rem; margin: 0; }
+  h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 1.5rem 0 0.5rem; font-weight: 600; }
+  button { font: inherit; cursor: pointer; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); padding: 0.55rem 1rem; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  button:disabled { opacity: 0.55; cursor: default; }
+  button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  input[type=text], input[type=password] {
+    font: inherit; width: 100%; padding: 0.55rem 0.7rem; border-radius: 6px;
+    border: 1px solid var(--line); background: var(--field); color: var(--ink);
+  }
+  label { font-size: 0.85rem; color: var(--muted); display: block; margin-bottom: 0.25rem; }
+  .bars { display: inline-flex; gap: 2px; align-items: flex-end; height: 14px; }
+  .bars i { width: 3px; background: var(--line); border-radius: 1px; }
+  .bars i.on { background: var(--accent); }
+  .bars i:nth-child(1){height:5px} .bars i:nth-child(2){height:8px} .bars i:nth-child(3){height:11px} .bars i:nth-child(4){height:14px}
+  .lock { color: var(--muted); font-size: 0.75rem; }
+  .pw { position: relative; }
+  .pw input { padding-right: 2.6rem; }
+  .pw .eye { position: absolute; right: 0.3rem; top: 50%; transform: translateY(-50%);
+    border: none; background: none; padding: 0.25rem 0.4rem; line-height: 0; color: var(--muted); }
+  .head { display: flex; flex-direction: column; gap: 0.15rem; padding-bottom: 0.75rem; border-bottom: 1px solid var(--line); }
+  .head .mono { color: var(--muted); font-size: 0.8rem; }
+  .listbar { display: flex; align-items: baseline; justify-content: space-between; margin: 1.5rem 0 0.5rem; }
+  .listbar h2 { margin: 0; }
+  #rescan { background: none; border: none; color: var(--accent); padding: 0; font-size: 0.85rem; text-decoration: underline; }
+  .nets { list-style: none; margin: 0.5rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+  .net { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  .net > button { display: flex; width: 100%; border: 0; background: none; align-items: center; gap: 0.6rem; padding: 0.8rem 0.9rem; text-align: left; }
+  .net .ssid { flex: 1; font-weight: 600; overflow-wrap: anywhere; }
+  .join { padding: 0 0.9rem 0.9rem; display: none; flex-direction: column; gap: 0.6rem; }
+  .net.open .join { display: flex; }
+  .linkish { margin-top: 1rem; background: none; border: none; color: var(--accent); text-decoration: underline; padding: 0; }
+  #manual { margin-top: 0.75rem; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 0.9rem; display: none; flex-direction: column; gap: 0.6rem; }
+  #manual.show { display: flex; }
+  .err { color: var(--danger); font-size: 0.85rem; margin: 0; display: none; }
+  .err.show { display: block; }
+  .connecting { display: flex; flex-direction: column; gap: 1rem; padding-top: 2rem; text-align: center; }
+  .spinner { width: 28px; height: 28px; margin: 0 auto; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--accent); animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(1turn); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+  .note { color: var(--muted); font-size: 0.9rem; text-wrap: balance; }
+  .addr { font-weight: 700; color: var(--ink); }
+  .scanning { display: flex; align-items: center; gap: 0.6rem; color: var(--muted); font-size: 0.9rem; padding: 0.5rem 0; }
+  .scanning .spinner { width: 16px; height: 16px; margin: 0; border-width: 2px; }
+</style>
+</head>
+<body>
+<main>
+  <header class="head">
+    <h1>Wi-Fi setup</h1>
+    <span class="mono" id="dev">&nbsp;</span>
+  </header>
+  <div class="listbar">
+    <h2>Choose your network</h2>
+    <button id="rescan" type="button">Rescan</button>
+  </div>
+  <div id="list"></div>
+  <button class="linkish" id="hiddenBtn" type="button">Join a hidden network…</button>
+  <form id="manual">
+    <div><label for="mssid">Network name (SSID)</label><input id="mssid" type="text" autocomplete="off"></div>
+    <div><label for="mpw">Password</label>
+      <div class="pw"><input id="mpw" type="password" autocomplete="off">
+      <button type="button" class="eye" data-eye="mpw" aria-label="Show password"></button></div></div>
+    <p class="err" id="merr"></p>
+    <button class="primary" type="submit">Join</button>
+  </form>
+</main>
+<script>
+"use strict";
+var $ = function (id) { return document.getElementById(id); };
+var esc = function (s) {
+  return String(s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+};
+
+var device = { name: "smolbase", ip: location.hostname };
+var nets = [];
+var openSsid = null;   // which network row is expanded
+var pollTimer = null;
+var joined = false;    // once we're in the handoff view, stop polling
+
+/* --- signal bars / lock --- */
+function bars(rssi) {
+  var n = rssi > -50 ? 4 : rssi > -65 ? 3 : rssi > -78 ? 2 : 1;
+  var s = '<span class="bars" aria-label="signal ' + n + '/4">';
+  for (var i = 1; i <= 4; i++) s += '<i class="' + (i <= n ? "on" : "") + '"></i>';
+  return s + "</span>";
+}
+function lock(n) {
+  return n.secure ? '<span class="lock" aria-label="secured">&#128274;</span>' : '<span class="lock"></span>';
+}
+
+/* --- password reveal toggle --- */
+var EYE = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>';
+var EYE_OFF = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.9 10.9 0 0 1 12 19c-7 0-11-7-11-7a20.3 20.3 0 0 1 5.06-5.94"/><path d="M9.9 4.24A10.6 10.6 0 0 1 12 5c7 0 11 7 11 7a20.4 20.4 0 0 1-2.88 3.88"/><line x1="1" y1="1" x2="23" y2="23"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/></svg>';
+function pwField(id) {
+  return '<div><label for="' + id + '">Password</label><div class="pw">' +
+    '<input id="' + id + '" type="password" autocomplete="off">' +
+    '<button type="button" class="eye" data-eye="' + id + '" aria-label="Show password">' + EYE + '</button></div></div>';
+}
+document.addEventListener("click", function (e) {
+  var t = e.target.closest("[data-eye]");
+  if (!t) return;
+  var inp = $(t.dataset.eye);
+  inp.type = inp.type === "password" ? "text" : "password";
+  var hidden = inp.type === "password";
+  t.innerHTML = hidden ? EYE : EYE_OFF;
+  t.setAttribute("aria-label", hidden ? "Show password" : "Hide password");
+});
+
+/* --- network list rendering --- */
+function renderList(status) {
+  var list = $("list");
+  // Preserve a half-typed password across re-renders (error-retry polls).
+  var prev = list.querySelector(".net.open input");
+  var keepVal = prev ? prev.value : "";
+  var keepFocus = prev && document.activeElement === prev;
+  var html = "";
+  if (nets.length) {
+    html += '<ul class="nets">';
+    nets.forEach(function (n, i) {
+      var open = n.ssid === openSsid;
+      html += '<li class="net' + (open ? " open" : "") + '" data-i="' + i + '">' +
+        '<button type="button" aria-expanded="' + open + '">' +
+        '<span class="ssid">' + esc(n.ssid) + "</span>" + lock(n) + bars(n.rssi) + "</button>" +
+        '<div class="join">' +
+        (n.secure ? pwField("pw" + i) : '<p class="note">Open network — no password needed.</p>') +
+        '<p class="err" id="err' + i + '"></p>' +
+        '<button type="button" class="primary" data-join="' + i + '">Join ' + esc(n.ssid) + "</button>" +
+        "</div></li>";
+    });
+    html += "</ul>";
+  }
+  if (status === "scanning") {
+    html += '<div class="scanning"><div class="spinner" role="status" aria-label="scanning"></div>Scanning for networks…</div>';
+  } else if (status === "error") {
+    html += '<p class="err show">Couldn’t reach the device — the setup network can be flaky. ' +
+      '<button class="linkish" id="retry" type="button" style="margin:0">Retry</button></p>';
+  } else if (!nets.length) {
+    html += '<p class="note">No networks found. Try a rescan.</p>';
+  }
+  list.innerHTML = html;
+
+  var cur = list.querySelector(".net.open input");
+  if (cur && keepVal) cur.value = keepVal;
+  if (cur && keepFocus) cur.focus();
+
+  list.querySelectorAll(".net > button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var li = b.parentElement;
+      var ssid = nets[+li.dataset.i].ssid;
+      openSsid = openSsid === ssid ? null : ssid;
+      renderList(status);
+      if (openSsid !== null) {
+        var inp = list.querySelector(".net.open input");
+        if (inp) inp.focus();
+      }
+    });
+  });
+  list.querySelectorAll("[data-join]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var i = +b.dataset.join;
+      var pwInp = $("pw" + i);
+      join(nets[i].ssid, pwInp ? pwInp.value : "", b, $("err" + i));
+    });
+  });
+  var retry = $("retry");
+  if (retry) retry.addEventListener("click", function () { fetchScan(false); });
+}
+
+/* --- API --- */
+function fetchScan(refresh) {
+  if (joined) return;
+  clearTimeout(pollTimer);
+  var url = "/api/wifi/scan" + (refresh ? "?refresh=1" : "");
+  fetch(url).then(function (r) { return r.json(); }).then(function (d) {
+    if (joined) return;
+    nets = d.networks || [];
+    if (openSsid !== null && !nets.some(function (n) { return n.ssid === openSsid; })) openSsid = null;
+    renderList(d.status);
+    if (d.status === "scanning") pollTimer = setTimeout(function () { fetchScan(false); }, 2500);
+  }).catch(function () {
+    if (joined) return;
+    renderList("error");
+    pollTimer = setTimeout(function () { fetchScan(false); }, 4000);
+  });
+}
+
+function showErr(el, msg) {
+  el.textContent = msg;
+  el.classList.add("show");
+}
+
+function join(ssid, pass, btn, errEl) {
+  errEl.classList.remove("show");
+  var label = btn.textContent;
+  var restore = function () { btn.disabled = false; btn.textContent = label; };
+  btn.disabled = true;
+  btn.textContent = "Joining…";
+  fetch("/api/wifi", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ssid: ssid, pass: pass })
+  }).then(function (r) {
+    return r.json().then(function (d) {
+      if (r.ok && d.restarting) { handoff(ssid); return; }
+      showErr(errEl, d.error || "The device rejected the request (HTTP " + r.status + ").");
+      restore();
+    });
+  }).catch(function () {
+    // The AP link is flaky by nature and often drops the moment the device
+    // restarts — surface it honestly and let the user retry.
+    showErr(errEl, "No reply from the device. If it rebooted this may have worked; otherwise retry.");
+    restore();
+  });
+}
+
+function handoff(ssid) {
+  joined = true;
+  clearTimeout(pollTimer);
+  document.querySelector("main").innerHTML =
+    '<div class="connecting">' +
+    '<div class="spinner" role="status" aria-label="connecting"></div>' +
+    "<h1>Joining " + esc(ssid) + "…</h1>" +
+    '<p class="note">This setup network (<span class="mono">' + esc(device.name) + "</span>) will disappear once the device connects.</p>" +
+    '<p class="note">Reconnect your phone to <strong>' + esc(ssid) + "</strong>, then open<br>" +
+    '<span class="mono addr">http://' + esc(device.name) + ".local</span></p></div>";
+}
+
+/* --- hidden network form --- */
+$("hiddenBtn").addEventListener("click", function () {
+  $("manual").classList.toggle("show");
+});
+$("manual").addEventListener("submit", function (e) {
+  e.preventDefault();
+  var ssid = $("mssid").value.trim();
+  var errEl = $("merr");
+  errEl.classList.remove("show");
+  if (!ssid) { showErr(errEl, "Enter the network name."); return; }
+  join(ssid, $("mpw").value, e.target.querySelector("button.primary"), errEl);
+});
+
+/* --- boot --- */
+$("rescan").addEventListener("click", function () { fetchScan(true); });
+fetch("/api/status").then(function (r) { return r.json(); }).then(function (s) {
+  device.name = s.name || device.name;
+  device.ip = s.ip || device.ip;
+  $("dev").textContent = device.name + " · " + device.ip;
+}).catch(function () {
+  $("dev").textContent = location.hostname;
+});
+$("manual").querySelector("[data-eye]").innerHTML = EYE; // markup ships the button empty; the icon lives in JS
+fetchScan(false);
+</script>
+</body>
+</html>
