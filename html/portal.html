@@ -148,6 +148,16 @@ function renderList(status) {
       join(nets[i].ssid, pwInp ? pwInp.value : "", b, $("err" + i));
     });
   });
+  // Enter in a scan-list password field submits that join (ticket #40; the
+  // manual form below is a real <form>, where Enter already works).
+  list.querySelectorAll(".join input").forEach(function (inp) {
+    inp.addEventListener("keydown", function (e) {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      var b = inp.closest(".join").querySelector("[data-join]");
+      if (b) b.click();
+    });
+  });
   var retry = $("retry");
   if (retry) retry.addEventListener("click", function () { fetchScan(false); });
 }

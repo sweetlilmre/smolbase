@@ -15,8 +15,6 @@
 <style>
   h1 { font-size: 1.1rem; margin: 0; }
   .field { margin-bottom: 0.9rem; }
-  .msg { font-size: 0.78rem; color: var(--muted); min-height: 1.1em; margin: 0.3rem 0 0; }
-  .msg.err { color: var(--danger); }
 
   .d-wrap { max-width: 34rem; margin: 0 auto; padding: 1rem 0 3rem; }
   .d-dev { display: flex; flex-wrap: wrap; gap: 0.3rem 1.2rem; padding: 0 1rem 0.75rem; font-size: 0.8rem; align-items: baseline; }
@@ -45,17 +43,33 @@
 <script src="/smolbase.js"></script>
 <script>
 "use strict";
-/* esc(), EYE/EYE_OFF and the [data-eye] password toggle come from smolbase.js.
-   No floating toast (ticket #39): every action reports INLINE next to its
-   control via setMsg, or hands the whole page off when the device is going
-   away. Messages persist as the last-known status rather than fading. */
+/* esc(), setMsg(), toast() and the [data-eye] password toggle come from
+   smolbase.js. Feedback model (tickets #39/#41/#42): toast for quick save
+   SUCCESSES; inline .msg for progress and for failures (which clear when
+   their input changes, never on a timer); full-page handoff when the device
+   is going away. */
 const app = document.getElementById("app");
-function setMsg(el, text, err) {
-  el.textContent = text;
-  el.classList.toggle("err", !!err);
+
+/* Going-away handoff (ticket #42): replaces the ENTIRE page — header, tabs,
+   everything — because "this page will stop responding" must not leave live
+   buttons around. `reconnect` adds a button where the device comes back
+   reachable (join: the .local name survives; update: same address); forget
+   and factory reset return as an AP, so instructions ARE the action there. */
+function handoff(title, lead, hint, reconnect) {
+  app.innerHTML = `<div class="d-wrap" style="padding:3rem 1rem 0; text-align:center">
+    <h1>${esc(title)}</h1>
+    <p style="font-weight:600; margin:0.9rem 0 0.5rem">${lead}</p>
+    <p class="hint" style="max-width:26rem; margin:0 auto">${hint}</p>
+    ${reconnect ? `<button class="primary" style="margin-top:1.5rem" id="hreload">${esc(reconnect.label)}</button>` : ""}
+  </div>`;
+  const b = document.getElementById("hreload");
+  if (b) b.addEventListener("click", () => { location.href = reconnect.href; });
 }
 
 let STATUS = {}, ZONES = {}, SCHEMA = [];
+
+/* Brightness readout: percentage of the 0–255 firmware range (ticket #43). */
+const briPct = v => +v === 0 ? "off" : Math.max(1, Math.round(v * 100 / 255)) + "%";
 
 /* ---- field renderers (from the schema; "tz" is hidden, "tz_name" becomes the
    zones.json-backed dropdown, "brightness" gets a slider) ---- */
@@ -76,10 +90,14 @@ function renderField(s) {
   }
   if (s.type === "int") {
     if (s.key === "brightness") {
-      return `<div class="field"><label for="${id}">${esc(s.label)} — <span id="${id}_out" class="mono">${s.value}</span></label>
+      // Shown as 0–100% (0–255 is a firmware concept); 0 reads "off" because
+      // it really does switch the backlight off. Stored value/API stay 0–255.
+      // Only true 0 may say "off" (1 must not round down to it), and 255
+      // reads exactly 100%.
+      return `<div class="field"><label for="${id}">${esc(s.label)} — <span id="${id}_out" class="mono">${briPct(s.value)}</span></label>
         <input type="range" id="${id}" data-key="${esc(s.key)}" data-type="int"
           min="${s.min}" max="${s.max}" value="${s.value}"
-          oninput="document.getElementById('${id}_out').textContent=this.value"></div>`;
+          oninput="document.getElementById('${id}_out').textContent=briPct(this.value)"></div>`;
     }
     return `<div class="field"><label for="${id}">${esc(s.label)}</label>
       <input type="number" id="${id}" data-key="${esc(s.key)}" data-type="int"
@@ -214,12 +232,30 @@ function render() {
     b.disabled = true;
     try {
       const r = await postSettings(collect(b.closest(".d-page")));
-      setMsg(msg, r.changed ? "Saved." : "No changes to save.");
+      setMsg(msg, "");
+      toast(r.changed ? "Saved" : "No changes to save");
     } catch (e) {
       setMsg(msg, "Save failed — " + e.message, true);
     }
     b.disabled = false;
   }));
+
+  // Clearing contract (ticket #41): a failure message clears as soon as the
+  // input it described changes — it must not outlive that state.
+  const clearOnEdit = e => {
+    const t = e.target;
+    const page = t.closest(".d-page");
+    if (!page) return;
+    if (t.matches("[data-key]")) {
+      const m = page.querySelector(".savemsg");
+      if (m) setMsg(m, "");
+    }
+    if (t.id === "fwfile" || t.name === "uptarget") setMsg(document.getElementById("fwmsg"), "");
+    if (t.id === "dzconfirm") setMsg(document.getElementById("dzerr"), "");
+    if (t.matches("#wflist input")) setMsg(document.getElementById("wfmsg"), "");
+  };
+  app.addEventListener("input", clearOnEdit);
+  app.addEventListener("change", clearOnEdit);
 
   // firmware / filesystem update
   const upTarget = () => app.querySelector('[name="uptarget"]:checked').value;
@@ -238,8 +274,14 @@ function render() {
     try {
       const fd = new FormData();
       fd.append("file", f, f.name);
-      const r = await fetch("/api/update" + (upTarget() === "fs" ? "?target=fs" : ""), { method: "POST", body: fd });
-      if (r.ok) { setMsg(msg, "Update accepted — the device is restarting."); }
+      const isFs = upTarget() === "fs";
+      const r = await fetch("/api/update" + (isFs ? "?target=fs" : ""), { method: "POST", body: fd });
+      if (r.ok) {
+        handoff("Updating", `${isFs ? "Filesystem" : "Firmware"} update accepted — the device is restarting.`,
+          `${isFs ? "Web assets replaced; settings reverted to defaults (Wi-Fi credentials survive). " : ""}` +
+          `Give it ~15 s, then reload — the device comes back at this same address.`,
+          { label: "Reload this page", href: location.href });
+      }
       else {
         let detail = "";
         try { detail = (await r.json()).error || ""; } catch (e) { /* non-JSON error body */ }
@@ -280,6 +322,11 @@ function render() {
       const inp = wlist.querySelector("li.open input");
       if (inp) inp.focus();
     }));
+    // Enter in the password field submits the join (ticket #40)
+    wlist.querySelectorAll(".join input[type=password]").forEach(inp =>
+      inp.addEventListener("keydown", e => {
+        if (e.key === "Enter") inp.closest(".join").querySelector("[data-join]").click();
+      }));
     wlist.querySelectorAll("[data-join]").forEach(b => b.addEventListener("click", async () => {
       const i = +b.dataset.join;
       const pw = document.getElementById("wpw" + i);
@@ -290,14 +337,13 @@ function render() {
           body: JSON.stringify({ ssid: WNETS[i].ssid, pass: pw ? pw.value : "" }) });
         if (!r.ok) throw new Error("HTTP " + r.status);
         clearTimeout(wTimer);
-        // The device is restarting: replace the whole WiFi page with the
-        // handoff message so nothing stale (scan list, setup-mode box)
-        // competes with it.
-        b.closest(".d-page").innerHTML = `<h1>WiFi</h1>
-          <p style="font-weight:600">Restarting to join ${esc(WNETS[i].ssid)}…</p>
-          <p class="hint">This page will stop responding. If the password was wrong, the device
-          comes back as its <span class="mono">${esc(STATUS.name || "smolbase-XXXX")}</span> setup
-          access point after ~20 s instead — join it to try again.</p>`;
+        const host = STATUS.name || "smolbase";
+        handoff("WiFi", `Restarting to join ${esc(WNETS[i].ssid)}…`,
+          `This page will stop responding while the device switches networks (its IP may change,
+           but <span class="mono">${esc(host)}.local</span> survives). If the password was wrong,
+           the device comes back as its <span class="mono">${esc(host)}</span> setup access point
+           after ~20 s instead — join it to try again.`,
+          { label: `Reconnect via ${host}.local`, href: `http://${host}.local/settings.html` });
       } catch (e) {
         setMsg(wmsg, "Join failed — " + e.message, true);
         b.disabled = false;
@@ -329,11 +375,10 @@ function render() {
       const r = await fetch("/api/wifi/forget", { method: "POST" });
       if (!r.ok) throw new Error("HTTP " + r.status);
       clearTimeout(wTimer);
-      wff.closest(".d-page").innerHTML = `<h1>WiFi</h1>
-        <p style="font-weight:600">Credentials cleared — restarting into setup mode.</p>
-        <p class="hint">Join the <span class="mono">${esc(STATUS.name || "smolbase-XXXX")}</span> Wi-Fi
-        access point and the setup portal will open to pick a network. Settings are untouched.
-        This page will stop responding.</p>`;
+      handoff("Setup mode", "Credentials cleared — restarting into setup mode.",
+        `Join the <span class="mono">${esc(STATUS.name || "smolbase-XXXX")}</span> Wi-Fi access
+         point and the setup portal will open to pick a network. Settings are untouched.
+         This page will stop responding.`, null);
     } catch (e) {
       setMsg(document.getElementById("wfferr"), "Forget failed — " + e.message, true);
       wff.disabled = false;
@@ -351,16 +396,12 @@ function render() {
     try {
       const r = await fetch("/api/factory-reset", { method: "POST" });
       if (!r.ok) throw new Error("HTTP " + r.status);
-      // The device is gone: replace the whole page section with the handoff
-      // message (same pattern as the WiFi join/forget flows, ticket #35) —
-      // a toast over a still-interactive page undersold what just happened.
-      dzgo.closest(".d-page").innerHTML = `<h1>Factory reset</h1>
-        <p style="font-weight:600">Everything erased — the device is restarting into setup mode.</p>
-        <p class="hint">Join its <span class="mono">smolbase-XXXX</span> Wi-Fi access point (a custom
-        hostname is gone with the reset — the exact name is on the device's screen) and the setup
-        portal will open to pick a network. Wi-Fi credentials, settings, and secrets are gone; the
-        first boot takes a beat longer while radio calibration regenerates.
-        This page will stop responding.</p>`;
+      handoff("Factory reset", "Everything erased — the device is restarting into setup mode.",
+        `Join its <span class="mono">smolbase-XXXX</span> Wi-Fi access point (a custom hostname is
+         gone with the reset — the exact name is on the device's screen) and the setup portal will
+         open to pick a network. Wi-Fi credentials, settings, and secrets are gone; the first boot
+         takes a beat longer while radio calibration regenerates. This page will stop responding.`,
+        null);
     } catch (e) {
       setMsg(document.getElementById("dzerr"), "Reset failed — " + e.message, true);
       dzgo.disabled = false;

@@ -7,6 +7,30 @@
    self-contained and never reference this file. */
 "use strict";
 
+/* Inline status line: sets text on a .msg element; err=true colors it danger.
+   Contract (ticket #41): inline messages are overwritten by the next attempt,
+   cleared when their input changes, and never fade on a timer. */
+function setMsg(el, text, err) {
+  el.textContent = text;
+  el.classList.toggle("err", !!err);
+}
+
+/* Floating toast (ticket #41): SUCCESS confirmations only — quick "Saved"
+   feedback that autohides. Failures stay inline where the user will retry. */
+var __toastEl = null;
+var __toastTimer = null;
+function toast(text) {
+  if (!__toastEl) {
+    __toastEl = document.createElement("div");
+    __toastEl.className = "toast";
+    document.body.appendChild(__toastEl);
+  }
+  __toastEl.textContent = text;
+  __toastEl.classList.add("show");
+  clearTimeout(__toastTimer);
+  __toastTimer = setTimeout(function () { __toastEl.classList.remove("show"); }, 1600);
+}
+
 function esc(s) {
   return String(s).replace(/[&<>"']/g, function (c) {
     return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
