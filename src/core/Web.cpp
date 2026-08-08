@@ -13,6 +13,7 @@
 //    captive probes want 302, hence the explicit setCode.
 #include "Web.h"
 #include "App.h"
+#include "ConfigStore.h"
 #include "Net.h"
 #include "Ota.h"
 #include "smolbase_config.h"
@@ -76,6 +77,30 @@ void begin(App& app) {
     esp_err_t r = res->send(200, "application/json", "{\"ok\":true,\"restarting\":true}");
     Net::restartToApply(); // flushes the response, then ESP.restart(); no return
     return r;
+  });
+
+  // Settings contract (ticket #14): the schema registry is the single source of
+  // truth — GET returns schema + current values, POST applies a flat value map.
+  // The served settings page is a pure static asset built against this contract.
+  httpServer.on("/api/settings", HTTP_GET, [](PsychicRequest*, PsychicResponse* res) {
+    JsonDocument doc;
+    ConfigStore::schemaToJson(doc);
+    return sendJson(res, 200, doc);
+  });
+
+  httpServer.on("/api/settings", HTTP_POST, [](PsychicRequest* req, PsychicResponse* res) {
+    JsonDocument doc;
+    if (deserializeJson(doc, req->body()) != DeserializationError::Ok || !doc.is<JsonObject>()) {
+      return res->send(400, "application/json", "{\"error\":\"expected a JSON object\"}");
+    }
+    bool changed = ConfigStore::applyJson(doc.as<JsonObjectConst>());
+    if (changed && !ConfigStore::save()) {
+      return res->send(500, "application/json", "{\"error\":\"failed to persist settings\"}");
+    }
+    JsonDocument out;
+    out["ok"] = true;
+    out["changed"] = changed;
+    return sendJson(res, 200, out);
   });
 
   httpServer.on("/api/factory-reset", HTTP_POST, [](PsychicRequest*, PsychicResponse* res) {
