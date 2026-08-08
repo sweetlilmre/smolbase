@@ -1,5 +1,11 @@
-/* Shared base for smolbase pages (ticket #31): theme tokens, element styles,
-   and the password eye-reveal. Page-specific layout stays in each page.
+/* Shared base for smolbase pages (tickets #31/#36).
+   CONVENTION — what belongs here: the theme tokens, the base theme for EVERY
+   form control (even ones only one page uses today — a future page gets
+   themed controls for free), and chrome used by 2+ pages (.pw/.eye). What
+   does NOT: page layout, and components with page-specific DOM (the two
+   network lists are deliberately separate designs; toast is settings-only;
+   spinner is portal-only). Move something here when a second page needs it,
+   not before.
    NOTE: the two firmware-embedded pages (fallback portal, /recover in
    src/core/Web.cpp) must NOT reference this file — they exist precisely for
    when the filesystem, and thus this asset, is missing or broken. */
@@ -36,6 +42,8 @@ input[type=text], input[type=password], input[type=number], select, input[type=f
   border: 1px solid var(--line); background: var(--field); color: var(--ink);
 }
 input[type=range] { width: 100%; accent-color: var(--accent); }
+input[type=color] { width: 3rem; height: 2rem; padding: 0.15rem; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--field); cursor: pointer; }
 input[type=checkbox] { accent-color: var(--accent); width: 1.05rem; height: 1.05rem; vertical-align: -0.2rem; }
 label { font-size: 0.85rem; color: var(--muted); display: block; margin-bottom: 0.25rem; }
 .hint { font-size: 0.78rem; color: var(--muted); margin-top: 0.3rem; }
