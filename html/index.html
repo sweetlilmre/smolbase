@@ -10,12 +10,16 @@
     font: 16px/1.5 -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif; }
   main { text-align: center; }
   .mono { font-family: ui-monospace, Consolas, Menlo, monospace; color: #93a29d; }
+  a.btn { display: inline-block; margin-top: 1.25rem; padding: 0.6rem 1.4rem;
+    background: #2fb39f; color: #0b1512; border-radius: 6px; text-decoration: none;
+    font-weight: 600; }
 </style>
 </head>
 <body>
 <main>
   <h1>smolbase is alive</h1>
   <p class="mono" id="status">loading…</p>
+  <a class="btn" href="/settings.html">Open settings</a>
 </main>
 <script>
 fetch("/api/status").then(r => r.json()).then(s => {
