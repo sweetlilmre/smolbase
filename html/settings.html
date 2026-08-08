@@ -62,8 +62,7 @@
   .d-tabs::-webkit-scrollbar { display: none; }
   .d-tabs button { border-radius: 999px; padding: 0.35rem 0.85rem; white-space: nowrap; font-size: 0.85rem; }
   .d-tabs button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
-  .d-tabs button.dz { color: var(--danger); border-color: var(--danger); }
-  .d-tabs button.dz.on { background: var(--danger); color: #fff; }
+  .dz-head { font-size: 0.95rem; color: var(--danger); margin: 1.6rem 0 0.5rem; }
   .d-page { display: none; padding: 1.25rem 1rem 0; }
   .d-page.on { display: block; }
   .d-page h1 { margin-bottom: 1rem; }
@@ -157,7 +156,7 @@ function wifiPage() {
         <p class="hint">IP <span class="mono">${esc(STATUS.ip || "?")}</span> ·
           reachable at <span class="mono">${esc(STATUS.name || "smolbase")}.local</span></p></div>`;
   return net + `<div class="field"><label>Change Wi-Fi…</label>
-    <p class="hint" style="margin-top:0">Changing networks means re-provisioning: a factory reset (Danger tab)
+    <p class="hint" style="margin-top:0">Changing networks means re-provisioning: a factory reset (Update tab, danger zone)
     clears the stored credentials and settings, and the device restarts as the
     <span class="mono">${esc(STATUS.name || "smolbase-XXXX")}</span> access point where you pick the new network
     from the setup portal.</p></div>`;
@@ -169,13 +168,11 @@ function updatePage() {
     <p class="hint">Device restarts after a successful update. The screen freezes during flashing — that's normal.</p></div>
     <button class="primary" id="fwgo">Upload &amp; install</button>
     <p class="hint" id="fwmsg"></p>
-    <p class="hint">If this page is ever unavailable (wiped or broken filesystem image), the firmware
-    has a built-in recovery page at <a href="/recover" class="mono">/recover</a> that can upload
-    both firmware and filesystem images.</p>`;
-}
-
-function dangerPage() {
-  return `<div class="dz-box">
+    <p class="hint">Worth knowing now: the firmware has a built-in recovery page at
+    <a href="/recover" class="mono">/recover</a> that can upload both firmware and filesystem
+    images — it keeps working even if this page is wiped or broken.</p>
+    <h2 class="dz-head">Danger zone</h2>
+    <div class="dz-box">
     <p class="hint" style="margin-top:0">Erases Wi-Fi credentials and all settings, returning the device to setup mode.
       Type <b class="mono">reset</b> to confirm.</p>
     <div class="field"><input type="text" id="dzconfirm" autocomplete="off" placeholder="reset"></div>
@@ -195,7 +192,6 @@ function render() {
   }
   sections.push(["WiFi", wifiPage(), false]);
   sections.push(["Update", updatePage(), false]);
-  sections.push(["Danger", dangerPage(), false]);
 
   app.innerHTML = `<div class="d-wrap">
     <div class="d-dev"><b>${esc(STATUS.name || "smolbase")}</b>
@@ -203,10 +199,10 @@ function render() {
       <span class="mono">${heapKb}</span>
       <span class="mono">fw ${esc(STATUS.fwVersion || "?")}</span></div>
     <div class="d-tabs" role="tablist">${sections.map(([n], i) =>
-      `<button role="tab" aria-selected="${i === 0}" class="${i === 0 ? "on" : ""} ${n === "Danger" ? "dz" : ""}"
+      `<button role="tab" aria-selected="${i === 0}" class="${i === 0 ? "on" : ""}"
         data-t="${i}">${n}</button>`).join("")}</div>
     <div class="d-pages" id="dPages">${sections.map(([n, html, savable], i) =>
-      `<section class="d-page${i === 0 ? " on" : ""}" data-sec="${n}"><h1>${n === "Danger" ? "Danger zone" : n + (n === "System" || n === "App" ? " settings" : "")}</h1>${html}
+      `<section class="d-page${i === 0 ? " on" : ""}" data-sec="${n}"><h1>${n + (n === "System" || n === "App" ? " settings" : "")}</h1>${html}
         ${savable ? `<button class="primary savebtn" style="margin:0.5rem 0 1rem">Save ${n.toLowerCase()}</button>` : ""}
       </section>`).join("")}</div>
   </div>`;
