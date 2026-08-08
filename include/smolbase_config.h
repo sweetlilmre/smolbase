@@ -5,7 +5,7 @@
 #define SMOLBASE_NAME_PREFIX "smolbase" // hostname/AP SSID become smolbase-XXXX (MAC suffix)
 // Reported by GET /api/status; consumers set their own via build_flags -D.
 #ifndef SMOLBASE_FW_VERSION
-#define SMOLBASE_FW_VERSION "0.1.11"
+#define SMOLBASE_FW_VERSION "0.1.12"
 #endif
 
 // ---- Hardware: GeekMagic Small TV Pro (ESP32-D0WD, 8MB flash, no PSRAM) ----
@@ -28,6 +28,10 @@
 #ifndef SMOLBASE_FRAMEBUFFER
 #define SMOLBASE_FRAMEBUFFER SMOLBASE_FB_PALETTE_8
 #endif
+
+// If SNTP hasn't delivered a sync this long after coming online, restart the
+// session (ticket #38: a soft restart can leave SNTP silently stalled).
+#define SMOLBASE_SNTP_REKICK_MS 60000
 
 // ---- Network state machine (wayfinder ticket #8) ----
 #define SMOLBASE_CONNECT_TIMEOUT_MS 20000 // boot: stored creds get this long, then AP mode

@@ -13,6 +13,7 @@
 //    captive probes want 302, hence the explicit setCode.
 #include "Web.h"
 #include "App.h"
+#include "Clock.h"
 #include "ConfigStore.h"
 #include "Net.h"
 #include "Ota.h"
@@ -128,6 +129,7 @@ void begin(App& app) {
     doc["fwVersion"] = SMOLBASE_FW_VERSION;
     doc["uptimeS"] = millis() / 1000;
     doc["heapFree"] = ESP.getFreeHeap();
+    doc["timeSynced"] = Clock::isSynced(); // observability for SNTP stalls (#38)
     if (Net::isUp()) doc["rssi"] = Net::rssi();
     return sendJson(res, 200, doc);
   });

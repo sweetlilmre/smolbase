@@ -58,6 +58,7 @@ void setup() {
 void loop() {
   Events::drain(onSysEvent);
   Net::loop();
+  Clock::loop(); // SNTP re-kick belt; cheap no-op once synced
   Touch::loop();
   Display::tick();
   AppHost::loop();

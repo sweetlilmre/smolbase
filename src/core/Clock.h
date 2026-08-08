@@ -10,6 +10,7 @@
 namespace Clock {
 void begin(); // registers Clock-owned settings ("tz_name") in the ConfigStore schema
 void sync();  // configTzTime with stored NTP server (+ fallbacks) + TZ; posts TimeSynced
+void loop();  // main loop: re-kicks SNTP if online-but-unsynced past the window (#38)
 void applyTimezone();               // setenv("TZ")/tzset from stored "tz"
 bool isSynced();                    // true once SNTP has delivered real time
 bool nowLocal(struct tm& out);      // local wall time; false (out untouched) if not synced
