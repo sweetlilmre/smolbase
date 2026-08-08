@@ -13,6 +13,22 @@ namespace {
 class StockScreen : public Screen {
   bool dirty = true;
   int lastMinute = -1;
+  bool colonOn = true;
+
+  // The colon blinks at 1 Hz as visible proof the screen is live. Only its
+  // own cell is overdrawn — the digits are never touched between minutes.
+  // "HH:MM" is drawn centered, HH and MM are equal-width, so the colon sits
+  // exactly at x=120; textWidth(":") bounds the cell without clipping digits.
+  void drawColon(lgfx::LGFX_Device& d) {
+    d.setFont(&fonts::FreeSansBold24pt7b);
+    int w = d.textWidth(":");
+    d.fillRect(120 - w / 2, 70, w, 60, TFT_BLACK);
+    if (colonOn) {
+      d.setTextColor(TFT_WHITE, TFT_BLACK);
+      d.setTextDatum(lgfx::middle_center);
+      d.drawString(":", 120, 100);
+    }
+  }
 
 public:
   void markDirty() { dirty = true; }
@@ -27,9 +43,18 @@ public:
     time_t now = time(nullptr);
     struct tm t;
     localtime_r(&now, &t);
-    if (!dirty && t.tm_min == lastMinute) return; // draw only on change
+    // Solid colon until first sync: blinking implies the clock is ticking.
+    bool colonNow = !Clock::isSynced() || (t.tm_sec & 1) == 0;
+    if (!dirty && t.tm_min == lastMinute) {
+      if (colonNow != colonOn) { // 1 Hz heartbeat, colon cell only
+        colonOn = colonNow;
+        drawColon(d);
+      }
+      return;
+    }
     lastMinute = t.tm_min;
     dirty = false;
+    colonOn = colonNow;
 
     d.setTextColor(TFT_WHITE, TFT_BLACK);
     d.setTextDatum(lgfx::middle_center);
@@ -39,6 +64,7 @@ public:
     if (Clock::isSynced()) snprintf(clock, sizeof(clock), "%02d:%02d", t.tm_hour, t.tm_min);
     d.fillRect(0, 70, 240, 60, TFT_BLACK);
     d.drawString(clock, 120, 100);
+    drawColon(d); // honor the current blink phase on full repaints too
 
     d.setFont(&fonts::FreeSans9pt7b);
     d.fillRect(0, 145, 240, 65, TFT_BLACK); // covers 9pt ascenders/descenders fully

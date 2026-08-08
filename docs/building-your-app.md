@@ -216,13 +216,14 @@ effect on the next `present()`.
 
 ## The worked example: StockApp
 
-`src/app/StockApp.cpp` wires all of the above into ~70 lines. The screen owns
-a dirty flag and the last-drawn minute:
+`src/app/StockApp.cpp` wires all of the above into ~100 lines. The screen owns
+a dirty flag, the last-drawn minute, and the colon blink phase:
 
 ```cpp
 class StockScreen : public Screen {
   bool dirty = true;
   int lastMinute = -1;
+  bool colonOn = true;
 
 public:
   void markDirty() { dirty = true; }
@@ -237,7 +238,11 @@ public:
     time_t now = time(nullptr);
     struct tm t;
     localtime_r(&now, &t);
-    if (!dirty && t.tm_min == lastMinute) return; // draw only on change
+    bool colonNow = !Clock::isSynced() || (t.tm_sec & 1) == 0;
+    if (!dirty && t.tm_min == lastMinute) {
+      if (colonNow != colonOn) { colonOn = colonNow; drawColon(d); }
+      return; // draw only on change
+    }
     ...
   }
 
@@ -246,8 +251,10 @@ public:
 ```
 
 Note the shape of `tick`: the early-out is the whole performance story. The
-draw itself fills only the rectangles it rewrites (`fillRect` + `drawString`),
-never the whole screen.
+colon blinks at 1 Hz as visible proof the screen is live, and even that
+heartbeat honors the discipline — `drawColon` overdraws only the colon's own
+cell, never the digits. The full draw likewise fills only the rectangles it
+rewrites (`fillRect` + `drawString`), never the whole screen.
 
 The app glues the screen to the system:
 
