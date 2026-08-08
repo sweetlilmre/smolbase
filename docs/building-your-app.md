@@ -155,6 +155,51 @@ entries — system entries included. For anything the schema can't express, raw
 `getString/setString/…` plus `ConfigStore::save()` work on unregistered keys
 too; `save()` is atomic (temp file + rename) and posts `SettingsChanged`.
 
+## Secrets: API keys, tokens, webhook URLs
+
+Settings are the wrong home for credentials: `settings.json` is world-readable
+over the settings API, ships inside filesystem images, and dies with every
+fs-OTA. The **secret store** (`src/core/Secrets.h`) is a separate NVS
+namespace with none of those properties:
+
+```cpp
+#include "../core/Secrets.h"
+
+Secrets::set("api_key", value);      // persist (survives fs-OTA)
+String k = Secrets::get("api_key");  // "" when absent
+if (!Secrets::has("api_key")) { /* prompt the user */ }
+Secrets::clear("api_key");
+```
+
+Secrets are deliberately **not** settings: no registration, no labels, no
+defaults, and nothing about them auto-renders or serializes. The web surface
+is write-only by construction — `GET /api/secrets` returns an existence map
+(`{"api_key": true}`), never values; `POST /api/secrets` stores a flat object
+where `null` deletes a key. Let end users enter a secret from your own page:
+
+```js
+// store (or update) — the value is never echoed back by any endpoint
+await fetch("/api/secrets", { method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ api_key: input.value }) });
+
+// show "configured / not set" without ever fetching the value
+const present = await fetch("/api/secrets").then(r => r.json());
+badge.textContent = present.api_key ? "configured" : "not set";
+```
+
+**Be honest about the threat model**: this is plain NVS. It protects against
+*accidental exposure* — the settings API, filesystem images, backups of
+`settings.json` — not against an attacker holding the device, who can read
+flash directly. Real at-rest encryption requires Espressif's flash + NVS
+encryption (an irreversible eFuse burn) and is outside what this template
+supports. Size limits are NVS's own: ~4000 bytes per value, in a ~20 KB
+partition shared with the WiFi credentials.
+
+Factory reset erases the **entire** NVS partition — WiFi credentials,
+secrets, and any NVS data you stored yourself — plus `settings.json`. RF
+calibration data regenerates on the following boot.
+
 ## HTTP routes
 
 Override `registerRoutes(PsychicHttpServer&)` to add endpoints:

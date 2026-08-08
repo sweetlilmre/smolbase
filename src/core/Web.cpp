@@ -16,10 +16,12 @@
 #include "ConfigStore.h"
 #include "Net.h"
 #include "Ota.h"
+#include "Secrets.h"
 #include "smolbase_config.h"
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 #include <PsychicHttp.h>
+#include <nvs_flash.h>
 
 namespace Web {
 
@@ -192,10 +194,42 @@ void begin(App& app) {
     return r;
   });
 
+  // Secret store web surface (design: ticket #23). Write-only by
+  // construction: GET returns an existence map, never values; POST accepts a
+  // flat multi-key object where null deletes; nothing is ever echoed back.
+  httpServer.on("/api/secrets", HTTP_GET, [](PsychicRequest*, PsychicResponse* res) {
+    JsonDocument doc;
+    Secrets::listJson(doc);
+    return sendJson(res, 200, doc);
+  });
+
+  httpServer.on("/api/secrets", HTTP_POST, [](PsychicRequest* req, PsychicResponse* res) {
+    JsonDocument doc;
+    if (deserializeJson(doc, req->body()) != DeserializationError::Ok || !doc.is<JsonObject>()) {
+      return res->send(400, "application/json", "{\"error\":\"expected a JSON object\"}");
+    }
+    for (JsonPairConst kv : doc.as<JsonObjectConst>()) {
+      bool ok = kv.value().isNull()
+                    ? Secrets::clear(kv.key().c_str())
+                    : Secrets::set(kv.key().c_str(), kv.value().as<String>());
+      if (!ok) {
+        return res->send(500, "application/json",
+                         "{\"error\":\"secret store write failed (NVS full?)\"}");
+      }
+    }
+    return res->send(200, "application/json", "{\"ok\":true}");
+  });
+
+  // Factory reset is scorched-earth (charter amended by ticket #23): full NVS
+  // erase — WiFi credentials, secrets, any consumer NVS data — plus
+  // settings.json. RF calibration data goes too; it regenerates on the next
+  // boot (one-time beat). WiFi is still running over the erased partition for
+  // the ~200 ms until restart; any writes it attempts just fail silently.
   httpServer.on("/api/factory-reset", HTTP_POST, [](PsychicRequest*, PsychicResponse* res) {
-    Net::clearCredentials();
     LittleFS.remove(SMOLBASE_SETTINGS_PATH);
     esp_err_t r = res->send(200, "application/json", "{\"ok\":true,\"restarting\":true}");
+    nvs_flash_deinit(); // best-effort; open handles just leak into the restart
+    nvs_flash_erase();
     Net::restartToApply(); // no return
     return r;
   });
