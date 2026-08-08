@@ -27,6 +27,20 @@
 #define SMOLBASE_CONNECT_TIMEOUT_MS 20000 // boot: stored creds get this long, then AP mode
 // Runtime WiFi drops auto-reconnect forever; there is deliberately no runtime AP fallback.
 
+// ---- Touch (single capacitive pad, T9/GPIO32) ----
+// Boot calibration: average this many touchRead() samples with the pad untouched.
+#define SMOLBASE_TOUCH_CAL_SAMPLES 16
+// Pressed when the reading drops below (untouched baseline - margin).
+#define SMOLBASE_TOUCH_MARGIN 120
+// A boot baseline below this is implausible for an untouched pad (finger present
+// at boot?) — fall back to the default threshold instead of miscalibrating.
+#define SMOLBASE_TOUCH_MIN_BASELINE 200
+#define SMOLBASE_TOUCH_DEFAULT_THRESHOLD 300
+// An edge (press or release) must hold this long before it is believed.
+#define SMOLBASE_TOUCH_DEBOUNCE_MS 30
+// Held at least this long = long-press (fires once while held); shorter = tap on release.
+#define SMOLBASE_TOUCH_LONGPRESS_MS 600
+
 // ---- Main loop contract ----
 #define SMOLBASE_LOOP_BUDGET_MS 25 // soft latency budget; debug builds log overruns
 
