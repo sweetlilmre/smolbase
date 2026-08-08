@@ -337,12 +337,14 @@ function render() {
           body: JSON.stringify({ ssid: WNETS[i].ssid, pass: pw ? pw.value : "" }) });
         if (!r.ok) throw new Error("HTTP " + r.status);
         clearTimeout(wTimer);
-        // The device is restarting: collapse the scan UI so the status line
-        // is the only thing left to read.
-        wlist.innerHTML = "";
-        document.getElementById("wfscan").style.display = "none";
-        wmsg.textContent = "Restarting to join " + WNETS[i].ssid + " — this page will stop responding. " +
-          "If the password was wrong, the device comes back as its setup access point instead.";
+        // The device is restarting: replace the whole WiFi page with the
+        // handoff message so nothing stale (scan list, setup-mode box)
+        // competes with it.
+        b.closest(".d-page").innerHTML = `<h1>WiFi</h1>
+          <p style="font-weight:600">Restarting to join ${esc(WNETS[i].ssid)}…</p>
+          <p class="hint">This page will stop responding. If the password was wrong, the device
+          comes back as its <span class="mono">${esc(STATUS.name || "smolbase-XXXX")}</span> setup
+          access point after ~20 s instead — join it to try again.</p>`;
       } catch (e) {
         wmsg.textContent = "Join failed — " + e.message;
         b.disabled = false;
@@ -373,10 +375,12 @@ function render() {
     try {
       const r = await fetch("/api/wifi/forget", { method: "POST" });
       if (!r.ok) throw new Error("HTTP " + r.status);
-      document.getElementById("wfafter").innerHTML = `<p class="hint" style="color:var(--ink)">
-        <b>Credentials cleared — restarting into setup mode.</b><br>
-        Join the <span class="mono">${esc(STATUS.name || "smolbase-XXXX")}</span> Wi-Fi access point and the
-        setup portal will open to pick a network. Settings are untouched. This page will stop responding.</p>`;
+      clearTimeout(wTimer);
+      wff.closest(".d-page").innerHTML = `<h1>WiFi</h1>
+        <p style="font-weight:600">Credentials cleared — restarting into setup mode.</p>
+        <p class="hint">Join the <span class="mono">${esc(STATUS.name || "smolbase-XXXX")}</span> Wi-Fi
+        access point and the setup portal will open to pick a network. Settings are untouched.
+        This page will stop responding.</p>`;
       toast("Wi-Fi forgotten — device restarting");
     } catch (e) {
       toast("Forget failed — " + e.message, true);
