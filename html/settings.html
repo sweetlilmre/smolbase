@@ -168,7 +168,8 @@ function updatePage() {
     images — it keeps working even if this page is wiped or broken.</p>
     <h2 class="dz-head">Danger zone</h2>
     <div class="dz-box">
-    <p class="hint" style="margin-top:0">Erases Wi-Fi credentials and all settings, returning the device to setup mode.
+    <p class="hint" style="margin-top:0">Erases <b>everything</b> — Wi-Fi credentials, all settings, and stored
+      secrets — returning the device to setup mode as shipped.
       Type <b class="mono">reset</b> to confirm.</p>
     <div class="field"><input type="text" id="dzconfirm" autocomplete="off" placeholder="reset"></div>
     <button class="danger" id="dzgo" disabled>Factory reset</button>
@@ -357,11 +358,16 @@ function render() {
     try {
       const r = await fetch("/api/factory-reset", { method: "POST" });
       if (!r.ok) throw new Error("HTTP " + r.status);
-      document.getElementById("dzafter").innerHTML = `<p class="hint" style="color:var(--ink)">
-        <b>Reset done — the device is restarting into setup mode.</b><br>
-        Join its <span class="mono">smolbase-XXXX</span> Wi-Fi access point and the setup portal
-        will open to pick a network. This page will stop responding.</p>`;
-      toast("Factory reset — device restarting");
+      // The device is gone: replace the whole page section with the handoff
+      // message (same pattern as the WiFi join/forget flows, ticket #35) —
+      // a toast over a still-interactive page undersold what just happened.
+      dzgo.closest(".d-page").innerHTML = `<h1>Factory reset</h1>
+        <p style="font-weight:600">Everything erased — the device is restarting into setup mode.</p>
+        <p class="hint">Join its <span class="mono">smolbase-XXXX</span> Wi-Fi access point (a custom
+        hostname is gone with the reset — the exact name is on the device's screen) and the setup
+        portal will open to pick a network. Wi-Fi credentials, settings, and secrets are gone; the
+        first boot takes a beat longer while radio calibration regenerates.
+        This page will stop responding.</p>`;
     } catch (e) {
       toast("Reset failed — " + e.message, true);
       dzgo.disabled = false;
