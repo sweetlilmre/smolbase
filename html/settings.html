@@ -1,5 +1,6 @@
 <!doctype html>
-<!-- Settings UI — variant D (top tabs, horizontally paged; ticket #7 resolution).
+<!-- Settings UI — variant D (top tabs, one page shown at a time; ticket #7,
+     swipe paging removed by ticket #25 — it didn't work on real hardware).
      A pure static asset over the JSON contract (ticket #14): sections and fields
      render from GET /api/settings (schema + values), saves POST a flat value map.
      Swap this file (and repack the filesystem image) to change the UI — zero
@@ -63,11 +64,9 @@
   .d-tabs button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
   .d-tabs button.dz { color: var(--danger); border-color: var(--danger); }
   .d-tabs button.dz.on { background: var(--danger); color: #fff; }
-  .d-pages { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scroll-behavior: smooth; }
-  @media (prefers-reduced-motion: reduce) { .d-pages { scroll-behavior: auto; } }
-  .d-page { flex: 0 0 100%; scroll-snap-align: start; padding: 1.25rem 1rem 0; }
+  .d-page { display: none; padding: 1.25rem 1rem 0; }
+  .d-page.on { display: block; }
   .d-page h1 { margin-bottom: 1rem; }
-  .swipehint { text-align: center; margin-top: 0.75rem; }
   .dz-box { border: 1px solid var(--danger); background: var(--danger-bg); border-radius: 8px; padding: 1rem; }
 </style>
 </head>
@@ -206,25 +205,22 @@ function render() {
     <div class="d-tabs" role="tablist">${sections.map(([n], i) =>
       `<button role="tab" aria-selected="${i === 0}" class="${i === 0 ? "on" : ""} ${n === "Danger" ? "dz" : ""}"
         data-t="${i}">${n}</button>`).join("")}</div>
-    <div class="d-pages" id="dPages">${sections.map(([n, html, savable]) =>
-      `<section class="d-page" data-sec="${n}"><h1>${n === "Danger" ? "Danger zone" : n + (n === "System" || n === "App" ? " settings" : "")}</h1>${html}
+    <div class="d-pages" id="dPages">${sections.map(([n, html, savable], i) =>
+      `<section class="d-page${i === 0 ? " on" : ""}" data-sec="${n}"><h1>${n === "Danger" ? "Danger zone" : n + (n === "System" || n === "App" ? " settings" : "")}</h1>${html}
         ${savable ? `<button class="primary savebtn" style="margin:0.5rem 0 1rem">Save ${n.toLowerCase()}</button>` : ""}
       </section>`).join("")}</div>
-    <p class="hint swipehint">swipe or use the tabs ⇄</p>
   </div>`;
 
-  const pages = document.getElementById("dPages");
+  const pages = [...document.getElementById("dPages").children];
   const tabs = [...app.querySelectorAll("[data-t]")];
-  const setTab = i => tabs.forEach((t, j) => {
-    t.classList.toggle("on", i === j);
-    t.setAttribute("aria-selected", i === j);
-  });
-  tabs.forEach(t => t.addEventListener("click", () => {
-    pages.scrollTo({ left: pages.clientWidth * +t.dataset.t });
-  }));
-  pages.addEventListener("scroll", () => {
-    setTab(Math.round(pages.scrollLeft / pages.clientWidth));
-  }, { passive: true });
+  const setTab = i => {
+    tabs.forEach((t, j) => {
+      t.classList.toggle("on", i === j);
+      t.setAttribute("aria-selected", i === j);
+    });
+    pages.forEach((p, j) => p.classList.toggle("on", i === j));
+  };
+  tabs.forEach(t => t.addEventListener("click", () => setTab(+t.dataset.t)));
 
   // per-section save
   app.querySelectorAll(".savebtn").forEach(b => b.addEventListener("click", async () => {
