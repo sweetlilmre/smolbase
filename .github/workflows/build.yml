@@ -1,0 +1,42 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: platformio.ini
+
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO Core
+        run: pip install platformio
+
+      - name: Build firmware
+        run: pio run
+
+      - name: Build filesystem image
+        run: pio run -t buildfs
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: smolbase-binaries
+          path: |
+            .pio/build/smolbase/firmware.bin
+            .pio/build/smolbase/littlefs.bin
+          retention-days: 14
