@@ -18,3 +18,4 @@
 - **System Event** — lifecycle notification delivered to the App via `onSystemEvent(Event)`: network up/down, entering/leaving AP Mode, time synced, OTA starting.
 - **Settings Schema** — settings the App registers in code (key, type, label, default, range); the served Settings UI auto-renders them in an "App" section, persistence flows through the web server into the Config Store, and the App is notified on change. Raw Config Store access remains underneath for what the schema can't express.
 - **Factory Reset** — clearing credentials and settings via the Settings UI, returning the device to AP Mode.
+- **Forget WiFi** — clearing only the stored credentials (settings survive) via the Settings UI's WiFi tab, returning the device to AP Mode for re-provisioning. The same tab can also scan-and-join a new network directly, restarting with settings intact.

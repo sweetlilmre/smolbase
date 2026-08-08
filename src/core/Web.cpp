@@ -182,6 +182,16 @@ void begin(App& app) {
     return sendJson(res, 200, out);
   });
 
+  // Re-provisioning without the sledgehammer (ticket #30): clears only the
+  // stored WiFi credentials — settings.json survives — and restarts; the boot
+  // state machine finds no creds and lands in AP/setup mode with the portal.
+  httpServer.on("/api/wifi/forget", HTTP_POST, [](PsychicRequest*, PsychicResponse* res) {
+    Net::clearCredentials();
+    esp_err_t r = res->send(200, "application/json", "{\"ok\":true,\"restarting\":true}");
+    Net::restartToApply(); // no return
+    return r;
+  });
+
   httpServer.on("/api/factory-reset", HTTP_POST, [](PsychicRequest*, PsychicResponse* res) {
     Net::clearCredentials();
     LittleFS.remove(SMOLBASE_SETTINGS_PATH);
