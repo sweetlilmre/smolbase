@@ -82,6 +82,17 @@ static esp_err_t onUploadChunk(PsychicRequest* req, const String& filename,
       // after the flash (SmolTV-Pro proved this pattern). From here on the
       // device MUST restart — with or without a successful update.
       LittleFS.end();
+    } else {
+      // Mirror of the littlefs guard for the fw path: every ESP32 app image
+      // starts with 0xE9. Update.h's _verifyHeader would fail on the first
+      // write anyway, but checking here gives an honest error before any
+      // bytes are flashed — symmetric with the fs guard above.
+      if (len < 1 || data[0] != 0xE9) {
+        s_error = "not an ESP32 app image (magic 0xE9 missing at byte 0)";
+        s_outcome = Outcome::Failed;
+        s_inFlight = false;
+        return ESP_OK;
+      }
     }
 
     if (!Update.begin(UPDATE_SIZE_UNKNOWN, s_isFs ? U_SPIFFS : U_FLASH)) {

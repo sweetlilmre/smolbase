@@ -163,7 +163,13 @@ function wifiPage() {
 }
 
 function updatePage() {
-  return `<div class="field"><label for="fwfile">Firmware file (.bin)</label>
+  return `<div class="field"><label>Image type</label>
+    <label style="color:var(--ink);display:inline-block;margin-right:1.2rem">
+      <input type="radio" name="uptarget" value="fw" checked> Firmware</label>
+    <label style="color:var(--ink);display:inline-block">
+      <input type="radio" name="uptarget" value="fs"> Filesystem (web assets)</label>
+    <p class="hint" id="uphint">Streams into the inactive app slot; a failed upload leaves the running firmware untouched.</p></div>
+    <div class="field"><label for="fwfile">Image file (.bin)</label>
     <input type="file" id="fwfile" accept=".bin">
     <p class="hint">Device restarts after a successful update. The screen freezes during flashing — that's normal.</p></div>
     <button class="primary" id="fwgo">Upload &amp; install</button>
@@ -230,7 +236,13 @@ function render() {
     b.disabled = false;
   }));
 
-  // firmware update (backend may still be the 501 placeholder)
+  // firmware / filesystem update
+  const upTarget = () => app.querySelector('[name="uptarget"]:checked').value;
+  app.querySelectorAll('[name="uptarget"]').forEach(r => r.addEventListener("change", () => {
+    document.getElementById("uphint").textContent = upTarget() === "fs"
+      ? "Replaces ALL web assets and settings.json — settings revert to defaults; WiFi credentials survive."
+      : "Streams into the inactive app slot; a failed upload leaves the running firmware untouched.";
+  }));
   const fwgo = document.getElementById("fwgo");
   fwgo.addEventListener("click", async () => {
     const f = document.getElementById("fwfile").files[0];
@@ -240,11 +252,15 @@ function render() {
     msg.textContent = "Uploading… don't power off the device.";
     try {
       const fd = new FormData();
-      fd.append("firmware", f, f.name);
-      const r = await fetch("/api/update", { method: "POST", body: fd });
-      if (r.status === 501) { msg.textContent = "OTA not available yet on this firmware."; toast("OTA not available yet", true); }
-      else if (r.ok) { msg.textContent = "Update accepted — the device is restarting."; toast("Update uploaded"); }
-      else { msg.textContent = "Update failed (HTTP " + r.status + ")."; toast("Update failed", true); }
+      fd.append("file", f, f.name);
+      const r = await fetch("/api/update" + (upTarget() === "fs" ? "?target=fs" : ""), { method: "POST", body: fd });
+      if (r.ok) { msg.textContent = "Update accepted — the device is restarting."; toast("Update uploaded"); }
+      else {
+        let detail = "";
+        try { detail = (await r.json()).error || ""; } catch (e) { /* non-JSON error body */ }
+        msg.textContent = "Update failed (HTTP " + r.status + (detail ? "): " + detail : ").");
+        toast("Update failed", true);
+      }
     } catch (e) {
       msg.textContent = "Upload failed — " + e.message;
       toast("Upload failed", true);
