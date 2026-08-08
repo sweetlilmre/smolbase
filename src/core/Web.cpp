@@ -130,7 +130,10 @@ void begin(App& app) {
     doc["uptimeS"] = millis() / 1000;
     doc["heapFree"] = ESP.getFreeHeap();
     doc["timeSynced"] = Clock::isSynced(); // observability for SNTP stalls (#38)
-    if (Net::isUp()) doc["rssi"] = Net::rssi();
+    if (Net::isUp()) {
+      doc["rssi"] = Net::rssi();
+      doc["ssid"] = Net::ssid(); // which network we're on (#39)
+    }
     return sendJson(res, 200, doc);
   });
 

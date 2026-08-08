@@ -15,11 +15,8 @@
 <style>
   h1 { font-size: 1.1rem; margin: 0; }
   .field { margin-bottom: 0.9rem; }
-  .toast { position: fixed; top: 1rem; left: 50%; transform: translateX(-50%);
-    background: var(--accent); color: var(--accent-ink); padding: 0.45rem 1rem;
-    border-radius: 999px; font-size: 0.85rem; opacity: 0; transition: opacity 0.25s; pointer-events: none; z-index: 98; }
-  .toast.show { opacity: 1; }
-  .toast.err { background: var(--danger); color: #fff; }
+  .msg { font-size: 0.78rem; color: var(--muted); min-height: 1.1em; margin: 0.3rem 0 0; }
+  .msg.err { color: var(--danger); }
 
   .d-wrap { max-width: 34rem; margin: 0 auto; padding: 1rem 0 3rem; }
   .d-dev { display: flex; flex-wrap: wrap; gap: 0.3rem 1.2rem; padding: 0 1rem 0.75rem; font-size: 0.8rem; align-items: baseline; }
@@ -44,21 +41,18 @@
 </head>
 <body>
 <div id="app"><p class="hint" style="padding:1.5rem 1rem">Loading settings…</p></div>
-<div class="toast" id="toast">Saved</div>
 
 <script src="/smolbase.js"></script>
 <script>
 "use strict";
-/* esc(), EYE/EYE_OFF and the [data-eye] password toggle come from smolbase.js */
+/* esc(), EYE/EYE_OFF and the [data-eye] password toggle come from smolbase.js.
+   No floating toast (ticket #39): every action reports INLINE next to its
+   control via setMsg, or hands the whole page off when the device is going
+   away. Messages persist as the last-known status rather than fading. */
 const app = document.getElementById("app");
-let toastTimer;
-function toast(msg, err) {
-  const t = document.getElementById("toast");
-  t.textContent = msg || "Saved";
-  t.classList.toggle("err", !!err);
-  t.classList.add("show");
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove("show"), err ? 2600 : 1400);
+function setMsg(el, text, err) {
+  el.textContent = text;
+  el.classList.toggle("err", !!err);
 }
 
 let STATUS = {}, ZONES = {}, SCHEMA = [];
@@ -130,7 +124,8 @@ function wifiPage() {
   const net = STATUS.apMode
     ? `<p>The device is in <b>setup mode</b>, serving its own access point.</p>`
     : `<div class="field"><label>Wi-Fi connection</label>
-        <p style="margin:0"><b>Connected</b> <span class="mono" style="color:var(--muted)">${
+        <p style="margin:0"><b>Connected to ${esc(STATUS.ssid || "(unknown network)")}</b>
+          <span class="mono" style="color:var(--muted)">${
           STATUS.rssi != null ? esc(STATUS.rssi) + " dBm" : ""}</span></p>
         <p class="hint">IP <span class="mono">${esc(STATUS.ip || "?")}</span> ·
           reachable at <span class="mono">${esc(STATUS.name || "smolbase")}.local</span></p></div>`;
@@ -140,13 +135,13 @@ function wifiPage() {
     survive, only the network changes. If the password is wrong the device can't connect at boot and falls back
     to its <span class="mono">${name}</span> setup access point after ~20 s.</p>
     <button id="wfscan">Scan for networks</button>
-    <div id="wflist"></div><p class="hint" id="wfmsg"></p></div>
+    <div id="wflist"></div><p class="msg" id="wfmsg"></p></div>
     <h2 class="dz-head">Setup mode</h2>
     <div class="dz-box">
     <p class="hint" style="margin-top:0">Forgets the stored Wi-Fi credentials — settings survive — and restarts
     into the <span class="mono">${name}</span> setup access point, where the portal picks the new network.</p>
     <button class="danger" id="wfforget">Forget Wi-Fi &amp; restart into setup</button>
-    <div id="wfafter"></div></div>`;
+    <p class="msg" id="wfferr"></p></div>`;
 }
 
 function updatePage() {
@@ -160,7 +155,7 @@ function updatePage() {
     <input type="file" id="fwfile" accept=".bin">
     <p class="hint">Device restarts after a successful update. The screen freezes during flashing — that's normal.</p></div>
     <button class="primary" id="fwgo">Upload &amp; install</button>
-    <p class="hint" id="fwmsg"></p>
+    <p class="msg" id="fwmsg"></p>
     <p class="hint">Worth knowing now: the firmware has a built-in recovery page at
     <a href="/recover" class="mono">/recover</a> that can upload both firmware and filesystem
     images — it keeps working even if this page is wiped or broken.</p>
@@ -171,7 +166,7 @@ function updatePage() {
       Type <b class="mono">reset</b> to confirm.</p>
     <div class="field"><input type="text" id="dzconfirm" autocomplete="off" placeholder="reset"></div>
     <button class="danger" id="dzgo" disabled>Factory reset</button>
-    <div id="dzafter"></div></div>`;
+    <p class="msg" id="dzerr"></p></div>`;
 }
 
 /* ---- variant D shell ---- */
@@ -197,7 +192,8 @@ function render() {
         data-t="${i}">${n}</button>`).join("")}</div>
     <div class="d-pages" id="dPages">${sections.map(([n, html, savable], i) =>
       `<section class="d-page${i === 0 ? " on" : ""}" data-sec="${n}"><h1>${n + (n === "System" || n === "App" ? " settings" : "")}</h1>${html}
-        ${savable ? `<button class="primary savebtn" style="margin:0.5rem 0 1rem">Save ${n.toLowerCase()}</button>` : ""}
+        ${savable ? `<button class="primary savebtn" style="margin:0.5rem 0 0.2rem">Save ${n.toLowerCase()}</button>
+        <p class="msg savemsg" style="margin-bottom:1rem"></p>` : ""}
       </section>`).join("")}</div>
   </div>`;
 
@@ -214,12 +210,13 @@ function render() {
 
   // per-section save
   app.querySelectorAll(".savebtn").forEach(b => b.addEventListener("click", async () => {
+    const msg = b.nextElementSibling; // the .savemsg under this button
     b.disabled = true;
     try {
       const r = await postSettings(collect(b.closest(".d-page")));
-      toast(r.changed ? "Saved" : "No changes");
+      setMsg(msg, r.changed ? "Saved." : "No changes to save.");
     } catch (e) {
-      toast("Save failed — " + e.message, true);
+      setMsg(msg, "Save failed — " + e.message, true);
     }
     b.disabled = false;
   }));
@@ -237,21 +234,20 @@ function render() {
     const msg = document.getElementById("fwmsg");
     if (!f) { msg.textContent = "Choose a .bin file first."; return; }
     fwgo.disabled = true;
-    msg.textContent = "Uploading… don't power off the device.";
+    setMsg(msg, "Uploading… don't power off the device.");
     try {
       const fd = new FormData();
       fd.append("file", f, f.name);
       const r = await fetch("/api/update" + (upTarget() === "fs" ? "?target=fs" : ""), { method: "POST", body: fd });
-      if (r.ok) { msg.textContent = "Update accepted — the device is restarting."; toast("Update uploaded"); }
+      if (r.ok) { setMsg(msg, "Update accepted — the device is restarting."); }
       else {
         let detail = "";
         try { detail = (await r.json()).error || ""; } catch (e) { /* non-JSON error body */ }
-        msg.textContent = "Update failed (HTTP " + r.status + (detail ? "): " + detail : ").");
-        toast("Update failed", true);
+        const text = "Update failed (HTTP " + r.status + (detail ? "): " + detail : ").");
+        setMsg(msg, text, true);
       }
     } catch (e) {
-      msg.textContent = "Upload failed — " + e.message;
-      toast("Upload failed", true);
+      setMsg(msg, "Upload failed — " + e.message, true);
     }
     fwgo.disabled = false;
   });
@@ -288,7 +284,7 @@ function render() {
       const i = +b.dataset.join;
       const pw = document.getElementById("wpw" + i);
       b.disabled = true;
-      wmsg.textContent = "Joining " + WNETS[i].ssid + "…";
+      setMsg(wmsg, "Joining " + WNETS[i].ssid + "…");
       try {
         const r = await fetch("/api/wifi", { method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ssid: WNETS[i].ssid, pass: pw ? pw.value : "" }) });
@@ -303,7 +299,7 @@ function render() {
           comes back as its <span class="mono">${esc(STATUS.name || "smolbase-XXXX")}</span> setup
           access point after ~20 s instead — join it to try again.</p>`;
       } catch (e) {
-        wmsg.textContent = "Join failed — " + e.message;
+        setMsg(wmsg, "Join failed — " + e.message, true);
         b.disabled = false;
       }
     }));
@@ -315,7 +311,7 @@ function render() {
       renderNets(j.status !== "done");
       if (j.status !== "done") wTimer = setTimeout(() => wpoll(false), 2500);
     } catch (e) {
-      wmsg.textContent = "Scan failed — " + e.message;
+      setMsg(wmsg, "Scan failed — " + e.message, true);
     }
   };
   document.getElementById("wfscan").addEventListener("click", () => { clearTimeout(wTimer); wpoll(true); });
@@ -338,9 +334,8 @@ function render() {
         <p class="hint">Join the <span class="mono">${esc(STATUS.name || "smolbase-XXXX")}</span> Wi-Fi
         access point and the setup portal will open to pick a network. Settings are untouched.
         This page will stop responding.</p>`;
-      toast("Wi-Fi forgotten — device restarting");
     } catch (e) {
-      toast("Forget failed — " + e.message, true);
+      setMsg(document.getElementById("wfferr"), "Forget failed — " + e.message, true);
       wff.disabled = false;
       delete wff.dataset.armed;
       wff.innerHTML = "Forget Wi-Fi &amp; restart into setup";
@@ -367,7 +362,7 @@ function render() {
         first boot takes a beat longer while radio calibration regenerates.
         This page will stop responding.</p>`;
     } catch (e) {
-      toast("Reset failed — " + e.message, true);
+      setMsg(document.getElementById("dzerr"), "Reset failed — " + e.message, true);
       dzgo.disabled = false;
     }
   });

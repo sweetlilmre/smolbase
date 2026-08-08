@@ -24,6 +24,7 @@ bool isUp() { return state.load() == State::Sta && WiFi.isConnected(); }
 bool inApMode() { return state.load() == State::Ap; }
 IPAddress ip() { return inApMode() ? WiFi.softAPIP() : WiFi.localIP(); }
 int32_t rssi() { return isUp() ? WiFi.RSSI() : 0; }
+String ssid() { return isUp() ? WiFi.SSID() : String(""); }
 
 // mDNS labels: lowercase alnum + dash, no leading/trailing dash, keep it short.
 static String sanitizeHostname(const String& raw) {
