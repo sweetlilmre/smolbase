@@ -44,6 +44,11 @@
 // ---- Main loop contract ----
 #define SMOLBASE_LOOP_BUDGET_MS 25 // soft latency budget; debug builds log overruns
 
+// ---- Settings schema ----
+#ifndef SMOLBASE_MAX_SETTINGS
+#define SMOLBASE_MAX_SETTINGS 24 // static registry capacity (system + app entries)
+#endif
+
 // ---- Paths ----
 #define SMOLBASE_SETTINGS_PATH "/config/settings.json"
 #define SMOLBASE_WWW_DIR "/w" // gzip-only static assets packed from html/

@@ -28,7 +28,7 @@ static void onSysEvent(SysEvent e) {
       break;
     case SysEvent::SettingsChanged:
       Clock::applyTimezone();
-      Display::setBrightness(ConfigStore::getInt("brightness", 200));
+      Display::setBrightness(ConfigStore::getInt("brightness"));
       break;
     default:
       break;
@@ -41,7 +41,7 @@ void setup() {
   Events::begin();
   ConfigStore::begin();
   Display::begin();
-  Display::setBrightness(ConfigStore::getInt("brightness", 200));
+  Display::setBrightness(ConfigStore::getInt("brightness")); // schema default
   Touch::begin();
   Net::begin();
   Web::begin(AppHost::app());
