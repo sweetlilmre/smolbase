@@ -1,0 +1,17 @@
+# clangd config: use the PlatformIO-generated compilation database (regenerate
+# with `pio run -t compiledb` after adding files) and strip the xtensa-GCC
+# flags clang doesn't understand. Without this, clangd can't find the ESP32
+# toolchain headers and floods the editor with phantom errors — the real
+# arbiter of compilation is `pio run`.
+CompileFlags:
+  CompilationDatabase: .
+  Remove:
+    - -mlongcalls
+    - -mtext-section-literals
+    - -fstrict-volatile-bitfields
+    - -fno-tree-switch-conversion
+    - -free
+    - -fipa-pta
+Diagnostics:
+  Suppress:
+    - pp_file_not_found
