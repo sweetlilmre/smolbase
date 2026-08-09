@@ -325,6 +325,45 @@ Proposal for smolbase:
 - **Colors** (from Section 1.4): red `#FF0000`, white `#FFFFFF`, blur blend `#FFDDDD`,
   grey `#AAAAAA`, dark grey `#666666`, purple `#AA00AA`, dark purple `#660066`.
 
+## 7. As built (build #48 + tuning #54) — where the implementation diverged
+
+The demo shipped on this document's plan; the deltas below were settled on
+hardware, against the reference video and a frame capture of the original
+(https://www.youtube.com/watch?v=zxJgJwppToA). `src/app/StockApp.cpp` is the
+authority; constants live at its top.
+
+- **Frame pacing**: this doc's "~40 fps" premise became a **fixed 30 Hz
+  timestep** (map ticket #47 locked 30 FPS from the measured ~24 ms blocking
+  present(), ticket #46). The wall-clock-advance alternative in Section 6 was
+  not needed.
+- **Rotation speed**: **two cycle steps per frame** at 30 Hz ≈ 193°/s —
+  exactly the original's rate, resolving Section 6's "slightly statelier"
+  compromise. Direction still follows horizontal velocity.
+- **Tilt**: `TILT_DEG = -16°` — the sign matters and this doc never pinned it:
+  the axis leans **right**, per the reference (first build leaned left and was
+  corrected in #54).
+- **Grid**: not full-frame. The wall is **inset** — 12 cells wide (24 px side
+  margins, 8 px top), base at y=208 — matching the reference frame's grey
+  margins around the wall. Section 6's "15 cells across" assumed edge-to-edge.
+- **Floor**: the "optional perspective skirt" shipped and is load-bearing —
+  four floor rows spreading toward the viewer (y = 212/216/221/227), verticals
+  fanning ~18% outward, and the **bounce bottoms out on the wall/floor
+  junction** (ball bottom at y ≈ 214), not the screen edge.
+- **Shadow**: ball-sized at **+24, −2** — right of the ball and a hair
+  *above* level, user-tuned. Section 6's "slightly down" guess was wrong for
+  the reference frame. Rendered as a post-grid **remap pass** over the
+  framebuffer bytes (grey→dark grey, grid→dark purple inside the disc), which
+  achieves Section 5's option (a) result — the darkened-grid-in-shadow
+  nuance — without per-span index logic.
+- **Ball storage**: the pre-rendered ball is a one-time **14.4 KB boot heap
+  allocation** (`createSprite`), not static — a static buffer overflowed the
+  DRAM data segment next to the 57.6 KB framebuffer. Moving it to flash
+  (`.rodata`) is backlog issue #53 with an OTA-cache caveat.
+- **Confirmed as designed**: 120-px ball, the `((lat&1)*7 + lon) % 14` facet
+  formula, the 18-index palette budget at 0x01–0x12 with RGB332-identity
+  restore in `onExit()`, all Section 6 colors, and the raw-index transparent
+  blit (~1–1.5 ms as estimated).
+
 ## Sources
 
 Web (Amiga originals):
@@ -365,7 +404,7 @@ LovyanGFX 1.2.x source (D:\source\smolbase\.pio\libdeps\smolbase\LovyanGFX\src\l
 - misc/SpriteBuffer.hpp:79 (`use_memcpy()` false only for PSRAM buffers).
 - LGFXBase.cpp:1425–1442 (`pushImage` clipping → `_panel->writeImage`).
 
-smolbase (D:\source\smolbase\.claude\worktrees\agent-ac0c4cda2e99f6d23\):
+smolbase (repo-relative; line numbers as of the research date):
 
 - src/core/Display.cpp:70–71 (static 240×240 8-bpp buffer), 93–107 (PALETTE_8 setup, RGB332
   identity palette loop), 114 (`present()` = full-frame `pushSprite(0,0)`), 23 & 40–43
