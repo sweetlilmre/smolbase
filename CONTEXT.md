@@ -9,7 +9,7 @@
 - **AP Mode** — the device acting as its own access point (`smolbase-XXXX`) because it has no joinable network. The screen shows connection instructions while in this mode.
 - **AP Fallback** — entering AP Mode at boot when there are no stored credentials or the stored network cannot be joined within the connect timeout. Boot-time only: a runtime WiFi drop triggers silent auto-reconnect, forever, never AP Mode. (Amended from the charter, which allowed runtime fallback.)
 - **Settings UI** — the configuration web page served once the device is on a network. Covers: timezone, NTP server, brightness, hostname, WiFi re-configure, OTA, factory reset.
-- **Stock Screen** — the default on-network display (IP, hostname, NTP-synced time). It is the demo implementation of the App Screen extension point; Consumers replace it.
+- **Stock Screen** — the default on-network display: the Boing clock — an animated Amiga-Boing-Ball pastiche with the device identity (IP, hostname, NTP-synced time) overlaid, plus a setting that reduces it to a calm identity-only screen. It is the demo implementation of the App Screen extension point; Consumers replace it.
 - **App Screen** — the extension point where a Consumer's own UI lives.
 - **Config Store** — split persistence: WiFi credentials in NVS (the WiFi stack's native home); all other settings as JSON on LittleFS, extensible by Consumers.
 - **Extension Surface** — the set of hooks Smolbase offers Consumers, all reached from `src/app/` (*yours*) while `src/core/` stays *plumbing*: the App, Screens, route registration, the Settings Schema, touch events, and System Events.

@@ -6,7 +6,9 @@ the vocabulary (App, Screen, Extension Surface, …) is defined in
 [../CONTEXT.md](../CONTEXT.md).
 
 The template ships with `src/app/StockApp.cpp` — a complete worked example that
-touches every hook. Gut it and replace it; this guide walks its code at the end.
+touches every hook: the **Boing clock**, an Amiga-Boing-Ball pastiche animated
+through the framebuffer at 30 FPS with the device's identity (IP, hostname,
+NTP time) overlaid. Gut it and replace it; this guide walks its code at the end.
 
 ## The threading rule (read this first)
 
@@ -90,7 +92,10 @@ The contract:
   between ticks; whatever you leave on the panel stays there.
 - **`tick`** — called every main-loop pass. Draw **only when something
   changed** (dirty-flag pattern); an unconditional redraw burns your loop
-  budget for nothing.
+  budget for nothing. An **animated** screen is the sanctioned exception:
+  it redraws on a fixed timestep instead of a dirty flag — see
+  "Animating through the framebuffer" below for the contract and the real
+  costs.
 - **`onTap` / `onLongPress`** — the capacitive pad's events, delivered to the
   active screen only. Default no-ops.
 
@@ -251,91 +256,138 @@ sized to the region you actually redraw — and push it where needed.
 In `PALETTE_8` mode you get an opt-in composition sprite: draw into
 `Display::frame()`, then `Display::present()` pushes it to the panel in one
 DMA-backed transfer. It is a composition tool, never a requirement — screens
-keep drawing direct via `tick(LGFX_Device&)` if they prefer.
+keep drawing direct via `tick(LGFX_Device&)` if they prefer. (The shipped
+worked example uses the framebuffer; built with `SMOLBASE_FB_NONE` it falls
+back to a direct-draw identity screen — both paths compile.)
 
 In `PALETTE_8` mode the default palette maps index *i* as **RGB332** (bits
 `RRRGGGBB`), so `lgfx::color332(r, g, b)` yields a sensible index for any
 color, `0x00` is black and `0xFF` is white. Customize entries with
 `Display::frame().setPaletteColor(index, r, g, b)`; palette changes take
-effect on the next `present()`.
+effect on the next `present()`. One trap: `TFT_*` color constants are
+`uint16_t` and resolve as `color & 0xFF` on a palette sprite — always draw
+into `frame()` with raw indices or `color332()`.
 
-## The worked example: StockApp
+## Animating through the framebuffer
 
-`src/app/StockApp.cpp` wires all of the above into ~100 lines. The screen owns
-a dirty flag, the last-drawn minute, and the colon blink phase:
+The Boing clock demonstrates the animation path end to end; these are the
+facts it was built on (measured on hardware, ticket #46 on the Boing map):
+
+| Cost | Measured |
+| --- | --- |
+| `present()` (full 240×240 push over 40 MHz SPI) | **~24 ms, blocking core 1** — this IS the frame-rate ceiling |
+| Full representative frame render into `frame()` | ~2 ms |
+| Sustained FPS, web server live and being polled | 35 free-running; **30 at the fixed timestep** |
+
+What that means for your animated screen:
+
+- **Fix your timestep.** Render only when ≥33 ms has elapsed since the last
+  frame (30 Hz). Physics per-frame becomes deterministic (no `dt` plumbing),
+  and the skipped passes between frames keep touch and events responsive.
+  Free-running buys ~5 more FPS and costs both of those.
+- **The loop budget reads differently for animated apps.** A frame costs
+  ~26–28 ms of the pass, dominated by the blocking `present()` — an animated
+  tick consumes the ~25 ms soft budget *by design*. The budget's spirit (don't
+  starve touch sampling and the event queue) is preserved by the timestep: the
+  passes between frames take microseconds.
+- **Don't bother with partial redraws.** `present()` pushes the full frame
+  regardless, so dirty-rect bookkeeping saves internal-RAM writes worth well
+  under half a millisecond against a 24 ms push. Clear, redraw everything,
+  present.
+- **Palette animation is free.** `setPaletteColor()` is a 3-byte write applied
+  at the next `present()` — the Boing ball's whole rotation is 14 of them per
+  frame (the authentic 1984 technique: the ball never rotates as pixels; see
+  `docs/research/boing-ball-technique.md`).
+- **Reserve palette indices deliberately.** The Boing clock reserves
+  `0x01–0x12` (14 ball-cycle entries + grid/shadow/background) and restores
+  them to RGB332 identity in `onExit()`, since palette edits are global to the
+  shared `frame()`. The sacrificed RGB332 codes are the r=0 dark-blue corner;
+  everything else — including arbitrary user-picked text colors — still maps
+  via `color332()` (the demo nudges any color that lands in the reserved block
+  one green step out).
+- **Blitting pre-rendered art**: an 8-bpp sprite pushed into `frame()` with a
+  transparent index copies raw palette indices (no color conversion) at
+  ~1–1.5 ms for a 120-px ball. Author sprite pixels in the frame's index
+  space.
+- **Park on `OtaStarting`**, same as everyone — and if you moved your art to
+  flash (`.rodata`), parking during OTA stops being politeness and becomes
+  mandatory: reading flash-resident data while OTA writes flash can panic the
+  chip (see issue #53 for the full trade-off).
+
+## The worked example: the Boing clock
+
+`src/app/StockApp.cpp` wires all of the above into one screen: the red/white
+checkered ball bouncing on a purple grid, identity text drop-shadowed over it,
+running at a fixed 30 Hz through `frame()`/`present()`. The parts worth
+stealing:
+
+**The rotation is palette cycling, not pixels.** The ball is pre-rendered
+*once* at boot into an 8-bpp sprite of palette indices, using the original
+demo's facet formula (`((lat&1)*7 + lon) % 14` over 8 latitude bands × 56
+longitude facets). Each frame, 14 `setPaletteColor()` writes shift the
+red/white assignment by `SPIN_STEPS` stripes — the ball appears to spin while
+not a single ball pixel is redrawn. (The pre-render is the app's one
+deliberate heap allocation, 14.4 KB at boot: a static buffer would overflow
+the DRAM segment the 57.6 KB framebuffer already occupies.)
+
+**The animated tick is a fixed timestep, not a dirty flag:**
 
 ```cpp
-class StockScreen : public Screen {
-  bool dirty = true;
-  int lastMinute = -1;
-  bool colonOn = true;
-
-public:
-  void markDirty() { dirty = true; }
-
-  void onEnter(lgfx::LGFX_Device& d) override {
-    d.fillScreen(TFT_BLACK); // full paint: the system never repaints for you
-    dirty = true;
-    lastMinute = -1;
+void tick(lgfx::LGFX_Device&) override {
+  if (enabled && !paused) {
+    if (now - lastFrameMs < FRAME_MS) return; // 30 Hz gate; passes between
+    lastFrameMs += FRAME_MS;                  // frames cost microseconds
+    stepPhysics();
+    applyCycle(f);   // 14 palette writes = the whole rotation
+    drawScene(f);    // full clear + grid + shadow + ball blit + text, ~2 ms
+    Display::present(); // ~24 ms blocking push — the frame's real cost
+    return;
   }
-
-  void tick(lgfx::LGFX_Device& d) override {
-    time_t now = time(nullptr);
-    struct tm t;
-    localtime_r(&now, &t);
-    bool colonNow = !Clock::isSynced() || (t.tm_sec & 1) == 0;
-    if (!dirty && t.tm_min == lastMinute) {
-      if (colonNow != colonOn) { colonOn = colonNow; drawColon(d); }
-      return; // draw only on change
-    }
-    ...
-  }
-
-  void onTap() override { markDirty(); } // demo: any tap forces a repaint
-};
-```
-
-Note the shape of `tick`: the early-out is the whole performance story. The
-colon blinks at 1 Hz as visible proof the screen is live, and even that
-heartbeat honors the discipline — `drawColon` overdraws only the colon's own
-cell, never the digits. The full draw likewise fills only the rectangles it
-rewrites (`fillRect` + `drawString`), never the whole screen.
-
-The app glues the screen to the system — and registers its own settings:
-
-```cpp
-class StockApp : public App {
-  StockScreen screen;
-
-public:
-  void setup() override {
-    ConfigStore::registerString(SettingSection::App, "col_hour", "Clock hour color", "#ffffff");
-    // ... col_min, col_host, col_ip likewise ...
-    Display::setActive(&screen);
-  }
-
-  void onSystemEvent(SysEvent e) override {
-    if (e == SysEvent::NetworkUp || e == SysEvent::TimeSynced ||
-        e == SysEvent::SettingsChanged) screen.markDirty();
-  }
-};
-
-App& makeApp() {
-  static StockApp app;
-  return app;
+  // Frozen (paused by tap, or the "boing" setting off): classic dirty-draw —
+  // repaint only on settings change, minute rollover, or the colon heartbeat.
+  ...
 }
 ```
 
-Those four registrations are the whole app/config/html triangle in action.
-**App**: the screen re-reads the colors on every full repaint and reacts to
-`SettingsChanged` by marking dirty, so a change lands on the panel live.
+Both disciplines live in one screen: animation while the ball runs, dirty-draw
+when it's frozen. The colon still blinks at 1 Hz in both modes as visible
+proof the clock is live.
+
+**Touch drives app state**: `onTap()` toggles pause. **The `boing` bool
+setting** (default on) turns the animation off entirely for a calm black
+identity screen — off-by-settings survives reboots, pause-by-tap deliberately
+doesn't.
+
+The app glues the screen to the system — and registers its settings:
+
+```cpp
+void setup() override {
+  ConfigStore::registerString(SettingSection::App, "col_hour", "Clock hour color", "#ffffff");
+  // ... col_min, col_colon, col_host, col_ip likewise ...
+  ConfigStore::registerBool(SettingSection::App, "boing", "Boing ball", true);
+  screen.begin();               // pre-render the ball
+  Display::setActive(&screen);
+}
+
+void onSystemEvent(SysEvent e) override {
+  if (e == SysEvent::NetworkUp || e == SysEvent::TimeSynced ||
+      e == SysEvent::SettingsChanged) screen.markDirty();
+}
+```
+
+Those registrations are the whole app/config/html triangle in action.
+**App**: the screen re-reads colors and the `boing` flag on every dirty
+repaint, so a change lands on the panel live via `SettingsChanged`.
 **Config**: the values persist in `settings.json` and ride the standard
-`GET`/`POST /api/settings` contract — the settings UI's App section renders
-them automatically. **HTML**: `html/index.html` goes one step further and
-renders a color picker for every app-section string setting holding a
-`#RRGGBB` value — register a fifth color and it appears there with zero HTML
-changes. Colors are stored as the `#RRGGBB` string an `<input type="color">`
-speaks; the app parses hex once per repaint (`hexRgb` in StockApp.cpp).
+`GET`/`POST /api/settings` contract — the settings UI's App tab renders all
+six automatically, the bool as a checkbox. **HTML**: `html/index.html` goes
+one step further and renders a color picker for every app-section string
+setting holding a `#RRGGBB` value — register a sixth color and it appears
+there with zero HTML changes. Colors are stored as the `#RRGGBB` string an
+`<input type="color">` speaks; the app parses hex once per repaint (`hexRgb`),
+maps it to a palette index (`textIdx`), and draws every string twice — black
+offset +2,+2, then the real color — so the text stays legible over whatever
+the ball is doing.
 
 `NetworkUp` and `TimeSynced` don't draw anything — they mark dirty and let the
 next `tick` repaint on core 1, which is exactly the pattern your HTTP handlers
