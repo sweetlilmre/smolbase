@@ -66,7 +66,7 @@ function handoff(title, lead, hint, reconnect) {
   if (b) b.addEventListener("click", () => { location.href = reconnect.href; });
 }
 
-let STATUS = {}, ZONES = {}, SCHEMA = [];
+let STATUS = {}, ZONES = {}, SCHEMA = [], META = {};
 
 /* Brightness readout: percentage of the 0–255 firmware range (ticket #43). */
 const briPct = v => +v === 0 ? "off" : Math.max(1, Math.round(v * 100 / 255)) + "%";
@@ -106,7 +106,8 @@ function renderField(s) {
   }
   if (s.type === "string" && /^#[0-9a-f]{6}$/i.test(s.value)) {
     // Same convention as index.html's picker panel: a #RRGGBB string renders
-    // as a native color input (interim symmetry pending ticket #34).
+    // as a native color input (pattern-sniffed until ticket #58 gives color a
+    // first-class type).
     return `<div class="field"><label for="${id}">${esc(s.label)}</label>
       <input type="color" id="${id}" data-key="${esc(s.key)}" data-type="string" value="${esc(s.value)}"></div>`;
   }
@@ -127,15 +128,7 @@ function collect(page) {
   return out;
 }
 
-async function postSettings(values) {
-  const r = await fetch("/api/settings", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(values),
-  });
-  if (!r.ok) throw new Error("HTTP " + r.status);
-  return r.json();
-}
+/* postSettings() comes from smolbase.js. */
 
 /* ---- non-schema pages ---- */
 function wifiPage() {
@@ -192,10 +185,17 @@ function render() {
   const heapKb = STATUS.heapFree ? Math.round(STATUS.heapFree / 1024) + " kB free" : "";
   const sections = []; // [name, html, savable]
   for (const sec of ["system", "app"]) {
+    // The App tab is the free UI registration buys (stance A', ticket #34):
+    // it renders every app-section setting, prefixed by the app's registered
+    // note when there is one. An app that owns its UX suppresses the whole
+    // tab via the contract's appTabSuppressed — the settings stay in the API.
+    if (sec === "app" && META.appTabSuppressed) continue;
     const items = SCHEMA.filter(s => s.section === sec);
     if (!items.length) continue;
+    const note = sec === "app" && META.appNote
+      ? `<p class="hint" style="margin:-0.4rem 0 1rem">${esc(META.appNote)}</p>` : "";
     sections.push([sec === "system" ? "System" : "App",
-      items.map(renderField).join(""), true]);
+      note + items.map(renderField).join(""), true]);
   }
   sections.push(["WiFi", wifiPage(), false]);
   sections.push(["Update", updatePage(), false]);
@@ -418,6 +418,7 @@ async function init() {
     ]);
     STATUS = st || {};
     SCHEMA = (se && se.settings) || [];
+    META = { appNote: se && se.appNote, appTabSuppressed: !!(se && se.appTabSuppressed) };
     ZONES = zo || {};
     render();
   } catch (e) {

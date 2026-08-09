@@ -27,7 +27,15 @@ SETTINGS = [
     ("app", "col_colon", "string", "Clock colon color", "#ffffff", None, None),
     ("app", "col_host", "string", "Hostname color", "#ffffff", None, None),
     ("app", "col_ip", "string", "IP address color", "#ffffff", None, None),
+    ("app", "boing", "bool", "Boing ball", True, None, None),
 ]
+
+# Stance A' (ticket #34): the app-registered App-tab note; set to None to fake
+# an app without one, and flip APP_TAB_SUPPRESSED to fake a suppressing app.
+APP_NOTE = ("These render here for free — registering a setting is all it takes. "
+            "The landing page shows the other path: a custom UI over the same "
+            "values. Apps with their own UI can suppress this tab entirely.")
+APP_TAB_SUPPRESSED = False
 values = {s[1]: s[4] for s in SETTINGS}
 secrets = {}
 scan_started = 0.0
@@ -75,7 +83,12 @@ class Handler(BaseHTTPRequestHandler):
                 if typ == "int":
                     item["min"], item["max"] = mn, mx
                 out.append(item)
-            return self._send(200, {"settings": out})
+            doc: dict = {"settings": out}
+            if APP_NOTE:
+                doc["appNote"] = APP_NOTE
+            if APP_TAB_SUPPRESSED:
+                doc["appTabSuppressed"] = True
+            return self._send(200, doc)
         if path == "/api/wifi/scan":
             if "refresh=1" in self.path or scan_started == 0:
                 scan_started = time.time()

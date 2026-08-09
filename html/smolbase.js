@@ -31,6 +31,20 @@ function toast(text) {
   __toastTimer = setTimeout(function () { __toastEl.classList.remove("show"); }, 1600);
 }
 
+/* POST a flat {key: value} map to /api/settings; resolves with the parsed
+   JSON reply, rejects on HTTP error. Used by settings.html (per-section save)
+   and index.html (per-setting save). */
+function postSettings(values) {
+  return fetch("/api/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(values),
+  }).then(function (r) {
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  });
+}
+
 function esc(s) {
   return String(s).replace(/[&<>"']/g, function (c) {
     return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];

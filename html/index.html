@@ -1,8 +1,11 @@
 <!doctype html>
 <!-- Landing page AND the StockApp demo config: any app-section string setting
-     holding a #RRGGBB value renders as a live color picker — change one and
-     the panel repaints via SettingsChanged. This is the "html" corner of the
-     app/config/html extension-surface triangle (see docs/building-your-app.md). -->
+     holding a #RRGGBB value renders as a live color picker, any app-section
+     bool as a Behaviour toggle — change one and the panel repaints via
+     SettingsChanged. This is the "html" corner of the app/config/html
+     extension-surface triangle (see docs/building-your-app.md), and the
+     custom-skin half of the two-skins exhibit (stance A', ticket #34): the
+     settings page's App tab renders the same values as the free skin. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -29,8 +32,8 @@
   <p class="mono" id="status">loading…</p>
   <a class="btn" href="/settings.html">Open settings</a>
   <div class="cfg" id="cfg" hidden>
-    <h2>Screen colors</h2>
-    <div id="pickers"></div>
+    <div id="colors" hidden><h2>Screen colors</h2><div id="pickers"></div></div>
+    <div id="behaviour" hidden><h2>Behaviour</h2><div id="toggles"></div></div>
     <p class="msg" id="cfgmsg">Changes apply on the panel immediately.</p>
   </div>
 </main>
@@ -42,34 +45,42 @@ fetch("/api/status").then(r => r.json()).then(s => {
 }).catch(() => document.getElementById("status").textContent = "api unreachable");
 
 // Render a picker for every app-section string setting that holds a #RRGGBB
-// value. Generic on purpose: register another color in StockApp::setup() and
-// it appears here with zero HTML changes.
+// value, and a Behaviour toggle for every app-section bool. Generic on
+// purpose: register another color or bool in StockApp::setup() and it appears
+// here with zero HTML changes.
 fetch("/api/settings").then(r => r.json()).then(j => {
-  const colors = (j.settings || []).filter(s =>
-    s.section === "app" && s.type === "string" && /^#[0-9a-f]{6}$/i.test(s.value));
-  if (!colors.length) return;
-  const box = document.getElementById("pickers");
   const msg = document.getElementById("cfgmsg");
-  colors.forEach(s => {
+  const saveOne = (s, value) => postSettings({ [s.key]: value })
+    .then(() => {
+      setMsg(msg, "Changes apply on the panel immediately.");
+      toast(s.label + " saved");
+    }).catch(e => setMsg(msg, "Save failed — " + e.message, true));
+  const addRow = (boxId, s, inp, readValue) => {
     const row = document.createElement("label");
     row.textContent = s.label;
+    inp.addEventListener("change", () => saveOne(s, readValue()));
+    row.appendChild(inp);
+    document.getElementById(boxId).appendChild(row);
+  };
+
+  const app = (j.settings || []).filter(s => s.section === "app");
+  const colors = app.filter(s => s.type === "string" && /^#[0-9a-f]{6}$/i.test(s.value));
+  const bools = app.filter(s => s.type === "bool");
+  colors.forEach(s => {
     const inp = document.createElement("input");
     inp.type = "color";
     inp.value = s.value;
-    inp.addEventListener("change", async () => {
-      try {
-        const r = await fetch("/api/settings", { method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ [s.key]: inp.value }) });
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        setMsg(msg, "Changes apply on the panel immediately.");
-        toast(s.label + " saved");
-      } catch (e) { setMsg(msg, "Save failed — " + e.message, true); }
-    });
-    row.appendChild(inp);
-    box.appendChild(row);
+    addRow("pickers", s, inp, () => inp.value);
   });
-  document.getElementById("cfg").hidden = false;
+  bools.forEach(s => {
+    const inp = document.createElement("input");
+    inp.type = "checkbox";
+    inp.checked = !!s.value;
+    addRow("toggles", s, inp, () => inp.checked);
+  });
+  document.getElementById("colors").hidden = !colors.length;
+  document.getElementById("behaviour").hidden = !bools.length;
+  document.getElementById("cfg").hidden = !colors.length && !bools.length;
 }).catch(() => {});
 </script>
 </body>

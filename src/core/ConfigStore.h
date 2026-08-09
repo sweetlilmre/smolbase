@@ -43,14 +43,27 @@ bool registerInt(SettingSection s, const char* key, const char* label, int32_t d
                  int32_t min, int32_t max);
 bool registerBool(SettingSection s, const char* key, const char* label, bool def);
 
+// ---- App-section presentation (stance A', ticket #34) ----
+// The note renders at the top of the stock settings page's App tab; the
+// suppress flag removes that tab from stock rendering wholesale. Both affect
+// rendering ONLY — settings stay registered, persisted, and served over the
+// API (custom skins depend on that). Boot-time only, like registration; pass
+// static-lifetime strings.
+void setAppNote(const char* note);
+void suppressAppTab();
+const char* appNote();   // nullptr when unset
+bool appTabSuppressed();
+
 // ---- Schema introspection ----
 size_t settingCount();
 const SettingDef& settingAt(size_t i);       // i < settingCount()
 const SettingDef* findSetting(const char* key); // nullptr if unregistered
 
 // Serializes the full registry + current values into `out`:
-//   {"settings":[{"key","section","type","label","default","value"[,"min","max"]},…]}
-// This is the payload for GET /api/settings (ticket #14).
+//   {"settings":[{"key","section","type","label","default","value"[,"min","max"]},…]
+//    [,"appNote":"…"][,"appTabSuppressed":true]}
+// appNote/appTabSuppressed appear only when set — absence means "no note" /
+// "render the App tab". This is the payload for GET /api/settings (ticket #14).
 void schemaToJson(JsonDocument& out);
 
 // Applies a flat {key: value, …} object: unregistered keys and type mismatches are

@@ -66,6 +66,16 @@ bool registerBool(SettingSection s, const char* key, const char* label, bool def
   return true;
 }
 
+// App-tab presentation (stance A', ticket #34). Boot-time writes like
+// registration; read from the httpd task only via schemaToJson (under Guard).
+static const char* appNoteStr = nullptr;
+static bool appTabOff = false;
+
+void setAppNote(const char* note) { Guard g; appNoteStr = note; }
+void suppressAppTab() { Guard g; appTabOff = true; }
+const char* appNote() { Guard g; return appNoteStr; }
+bool appTabSuppressed() { Guard g; return appTabOff; }
+
 size_t settingCount() { return registryCount; }
 
 const SettingDef& settingAt(size_t i) { return registry[i]; }
@@ -85,6 +95,8 @@ static int32_t clampInt(const SettingDef& d, int32_t v) {
 
 void schemaToJson(JsonDocument& out) {
   Guard g;
+  if (appNoteStr) out["appNote"] = appNoteStr;
+  if (appTabOff) out["appTabSuppressed"] = true;
   JsonArray arr = out["settings"].to<JsonArray>();
   for (size_t i = 0; i < registryCount; ++i) {
     const SettingDef& d = registry[i];

@@ -409,9 +409,16 @@ class StockApp : public App {
 public:
   void setup() override {
     // The app's own settings: registered into the shared schema, persisted in
-    // settings.json, editable from the served pages (color pickers on
-    // index.html, plain fields in the settings UI's App section) — the
-    // app/config/html triangle. The bool joins the same contract.
+    // settings.json, editable from the served pages — the app/config/html
+    // triangle. Deliberately rendered in TWO skins (stance A', ticket #34):
+    // the settings UI's App tab is the free one registration buys, and
+    // index.html is a custom skin over the identical contract. The note below
+    // names that duplication so it reads as the exhibit it is; an app that
+    // brings its own UI calls ConfigStore::suppressAppTab() instead.
+    ConfigStore::setAppNote(
+        "These render here for free — registering a setting is all it takes. "
+        "The landing page shows the other path: a custom UI over the same "
+        "values. Apps with their own UI can suppress this tab entirely.");
     ConfigStore::registerString(SettingSection::App, "col_hour", "Clock hour color", "#ffffff");
     ConfigStore::registerString(SettingSection::App, "col_min", "Clock minute color", "#ffffff");
     ConfigStore::registerString(SettingSection::App, "col_colon", "Clock colon color", "#ffffff");

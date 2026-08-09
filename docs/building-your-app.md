@@ -143,11 +143,12 @@ ConfigStore::registerInt   (SettingSection::App, "poll",  "Poll interval (min)",
 ConfigStore::registerBool  (SettingSection::App, "metric", "Metric units", true);
 ```
 
-That is the whole feature: registered `App`-section settings are
-**auto-rendered** as an "App" tab in the served settings page
-(`html/settings.html` renders `GET /api/settings`), saves flow through
-`POST /api/settings` into the store, and you get `SysEvent::SettingsChanged`
-when anything persists. Read values anywhere on core 1:
+**The promise: registering = API + persistence + stock UI.** Registered
+`App`-section settings are **auto-rendered** as an "App" tab in the served
+settings page (`html/settings.html` renders `GET /api/settings`), saves flow
+through `POST /api/settings` into the store, and you get
+`SysEvent::SettingsChanged` when anything persists. Read values anywhere on
+core 1:
 
 ```cpp
 String city = ConfigStore::getString("city"); // falls back to the registered default
@@ -156,9 +157,29 @@ int32_t poll = ConfigStore::getInt("poll");   // ints are clamped to [min,max] o
 
 Keys and labels must be string literals (the registry stores pointers), keys
 are flat (no nesting), and the registry holds `SMOLBASE_MAX_SETTINGS` (24)
-entries — system entries included. For anything the schema can't express, raw
-`getString/setString/…` plus `ConfigStore::save()` work on unregistered keys
-too; `save()` is atomic (temp file + rename) and posts `SettingsChanged`.
+entries — system entries included.
+
+Two knobs shape how the App tab presents itself, both boot-time calls from
+`setup()`:
+
+```cpp
+ConfigStore::setAppNote("Tuning for the frobnicator.");  // blurb atop the App tab
+ConfigStore::suppressAppTab();  // my custom UI owns the UX — no App tab at all
+```
+
+The suppress flag affects **stock rendering only**: the settings stay
+registered, persisted, and served over `GET/POST /api/settings` — which is
+exactly what your custom skin consumes (both travel the same contract, as
+`appNote` / `appTabSuppressed`). So the ladder is:
+
+- **register** — API + persistence + a free stock UI; one line per setting,
+  zero HTML.
+- **register + `suppressAppTab()`** — API + persistence; your own page owns
+  the UX (see `html/index.html` for a worked custom skin).
+- **don't register** — persistence only, no schema treatment at all: raw
+  `getString/setString/…` plus `ConfigStore::save()` work on unregistered
+  keys; `save()` is atomic (temp file + rename) and posts `SettingsChanged`.
+  Right for machine-facing state no UI should ever touch.
 
 ## Secrets: API keys, tokens, webhook URLs
 
@@ -362,6 +383,7 @@ The app glues the screen to the system — and registers its settings:
 
 ```cpp
 void setup() override {
+  ConfigStore::setAppNote("These render here for free — ..."); // blurb atop the App tab
   ConfigStore::registerString(SettingSection::App, "col_hour", "Clock hour color", "#ffffff");
   // ... col_min, col_colon, col_host, col_ip likewise ...
   ConfigStore::registerBool(SettingSection::App, "boing", "Boing ball", true);
@@ -380,10 +402,15 @@ Those registrations are the whole app/config/html triangle in action.
 repaint, so a change lands on the panel live via `SettingsChanged`.
 **Config**: the values persist in `settings.json` and ride the standard
 `GET`/`POST /api/settings` contract — the settings UI's App tab renders all
-six automatically, the bool as a checkbox. **HTML**: `html/index.html` goes
-one step further and renders a color picker for every app-section string
-setting holding a `#RRGGBB` value — register a sixth color and it appears
-there with zero HTML changes. Colors are stored as the `#RRGGBB` string an
+six automatically, the bool as a checkbox. **HTML**: `html/index.html` renders
+the same six a second time as a custom skin — a color picker for every
+app-section string setting holding a `#RRGGBB` value, a Behaviour toggle for
+every app-section bool; register a seventh setting and it appears in both
+places with zero HTML changes. That duplication is deliberate: the App tab is
+the free UI registration buys (its `setAppNote()` blurb says so on the page),
+index.html is the hand-built one, and both read and write the identical
+contract — your app keeps whichever suits it, or suppresses the tab and keeps
+only its own. Colors are stored as the `#RRGGBB` string an
 `<input type="color">` speaks; the app parses hex once per repaint (`hexRgb`),
 maps it to a palette index (`textIdx`), and draws every string twice — black
 offset +2,+2, then the real color — so the text stays legible over whatever
