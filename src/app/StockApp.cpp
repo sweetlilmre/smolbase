@@ -1,12 +1,16 @@
 // YOUR APP GOES HERE. This file is the worked example consumers gut and replace:
-// a Screen showing the device's identity (IP, hostname, time), wired up through
-// every extension hook the template offers.
+// the Amiga Boing Ball (1984, Dale Luck & R.J. Mical) bouncing behind the device's
+// identity (IP, hostname, time), wired up through every extension hook the template
+// offers — including the PALETTE_8 framebuffer animation path (frame()/present())
+// and its signature trick: the ball never rotates as pixels, 14 cycling palette
+// entries do the work. Technique details: docs/research/boing-ball-technique.md.
 #include "../core/App.h"
 #include "../core/Clock.h"
 #include "../core/ConfigStore.h"
 #include "../core/Display.h"
 #include "../core/Net.h"
 #include <Arduino.h>
+#include <cmath>
 #include <ctime>
 
 namespace {
@@ -23,13 +27,275 @@ uint32_t hexRgb(const String& s, uint32_t fallback) {
   return fallback;
 }
 
+#if SMOLBASE_FRAMEBUFFER == SMOLBASE_FB_PALETTE_8
+
+// ---- Palette budget (research #45) ------------------------------------------
+// 18 reserved indices; the other 238 keep their RGB332 identity, so color332()
+// and ordinary text drawing keep working. The sacrificed RGB332 codes are the
+// r=0 dark-blue/teal corner of the cube — ballIdxGuard() below keeps arbitrary
+// user-picked text colors out of the reserved range.
+constexpr uint8_t IDX_TRANSP = 0x00; // also black
+constexpr uint8_t IDX_BALL = 0x01;   // 0x01–0x0E: the 14 cycling ball entries
+constexpr uint8_t IDX_GRID = 0x0F;
+constexpr uint8_t IDX_GRID_SHADOW = 0x10;
+constexpr uint8_t IDX_SHADOW = 0x11;
+constexpr uint8_t IDX_BG = 0x12;
+constexpr uint8_t IDX_RESERVED_END = 0x12;
+
+// A 24-bit RGB color as a framebuffer palette index: nearest RGB332 entry,
+// nudged out of the reserved block (adds one green step — visually negligible).
+uint8_t textIdx(uint32_t rgb) {
+  uint8_t i = lgfx::color332(rgb >> 16, (rgb >> 8) & 0xff, rgb & 0xff);
+  if (i >= IDX_BALL && i <= IDX_RESERVED_END) i |= 0x20;
+  return i;
+}
+
+// ---- Boing geometry ----------------------------------------------------------
+constexpr int BALL_R = 60; // 120-px ball = the original's visual weight on 240 px
+constexpr int BALL_D = BALL_R * 2;
+constexpr float TILT_DEG = 16.0f;  // original angle unrecorded; ~15–20° by eye
+constexpr int GRID_STEP = 16;      // 15 cells, ~the original's 16-cell wall
+constexpr int SHADOW_DX = 16, SHADOW_DY = 8;
+constexpr uint32_t FRAME_MS = 33;  // fixed 30 Hz timestep (ticket #47)
+
+// The original's startup act: draw the tilted checkered sphere ONCE, as palette
+// indices. Per pixel: project onto the front hemisphere, tilt, and apply the
+// original's facet formula ((lat&1)*7 + lon) % 14 across 8 latitude bands and
+// 56 longitude facets — so the 14-entry cycle animates it unchanged.
+void renderBall(lgfx::LGFX_Sprite& ball) {
+  const float tilt = TILT_DEG * (float)M_PI / 180.0f;
+  const float ct = cosf(tilt), st = sinf(tilt);
+  for (int y = 0; y < BALL_D; ++y) {
+    for (int x = 0; x < BALL_D; ++x) {
+      float dx = x - (BALL_R - 0.5f), dy = y - (BALL_R - 0.5f);
+      float r2 = dx * dx + dy * dy;
+      if (r2 > (float)(BALL_R * BALL_R)) {
+        ball.drawPixel(x, y, IDX_TRANSP);
+        continue;
+      }
+      float z = sqrtf((float)(BALL_R * BALL_R) - r2);
+      float tx = dx * ct - dy * st, ty = dx * st + dy * ct; // tilt = screen-plane rotation
+      float lat = asinf(ty / BALL_R);                 // [-pi/2, pi/2]
+      float lon = atan2f(tx, z);                      // (-pi/2, pi/2), front hemisphere
+      int band = (int)((lat / (float)M_PI + 0.5f) * 8.0f);
+      int facet = (int)((lon / (float)M_PI + 0.5f) * 56.0f);
+      if (band > 7) band = 7;
+      if (facet > 55) facet = 55;
+      ball.drawPixel(x, y, IDX_BALL + (uint8_t)(((band & 1) * 7 + facet) % 14));
+    }
+  }
+}
+
+class BoingScreen : public Screen {
+  bool dirty = true;
+  bool enabled = true, paused = false, ballOk = false;
+  int lastMinute = -1;
+  bool colonOn = true;
+  uint32_t lastFrameMs = 0;
+  int cyclePhase = 0;
+  float bx = 120, by = 90, vx = 2.2f, vy = 0;
+  // The pre-rendered ball. Its 14.4 KB pixel buffer is the one deliberate heap
+  // allocation in the app — a static buffer overflowed the DRAM data segment
+  // (the 57.6 KB framebuffer lives there already). Allocated once at boot and
+  // never freed, same footing as the framebuffer's own palette storage. Its
+  // palette contents never matter: palette-8 → palette-8 pushes copy raw
+  // indices, and the frame's palette decides the colors (research #45).
+  lgfx::LGFX_Sprite ball;
+
+  uint32_t colHour = 0xffffff, colMin = 0xffffff, colColon = 0xffffff,
+           colHost = 0xffffff, colIp = 0xffffff;
+
+  void loadSettings() {
+    colHour = hexRgb(ConfigStore::getString("col_hour"), 0xffffff);
+    colMin = hexRgb(ConfigStore::getString("col_min"), 0xffffff);
+    colColon = hexRgb(ConfigStore::getString("col_colon"), 0xffffff);
+    colHost = hexRgb(ConfigStore::getString("col_host"), 0xffffff);
+    colIp = hexRgb(ConfigStore::getString("col_ip"), 0xffffff);
+    enabled = ballOk && ConfigStore::getBool("boing"); // no ball buffer = calm screen
+  }
+
+  // The cycle: at any instant 7 consecutive entries are white and 7 red; one
+  // step shifts the pattern by one facet stripe (≈3.2° of apparent rotation).
+  // The entry at the white→red boundary gets the original's "reddish-white"
+  // blend — fake motion blur. Palette writes land at the next present().
+  void applyCycle(lgfx::LGFX_Sprite& f) {
+    for (int i = 0; i < 14; ++i) {
+      int pos = (i + cyclePhase) % 14;
+      if (pos == 6) f.setPaletteColor(IDX_BALL + i, 0xff, 0xdd, 0xdd);
+      else if (pos < 7) f.setPaletteColor(IDX_BALL + i, 0xff, 0xff, 0xff);
+      else f.setPaletteColor(IDX_BALL + i, 0xff, 0x00, 0x00);
+    }
+  }
+
+  void stepPhysics() {
+    bx += vx;
+    if (bx < BALL_R && vx < 0) { bx = BALL_R; vx = -vx; }
+    if (bx > 240 - BALL_R && vx > 0) { bx = 240 - BALL_R; vx = -vx; }
+    vy += 0.30f; // gravity
+    by += vy;
+    if (by > 240 - BALL_R - 12 && vy > 0) { by = 240 - BALL_R - 12; vy = -vy; } // elastic
+    if (by < BALL_R && vy < 0) { by = BALL_R; vy = -vy; }
+    // Spin follows travel direction, one facet stripe per frame, like the original.
+    cyclePhase = (cyclePhase + (vx > 0 ? 1 : 13)) % 14;
+  }
+
+  // Shadow = remap pass over the framebuffer bytes inside the shadow circle:
+  // grey -> dark grey, grid purple -> dark purple. Runs before the ball blit,
+  // so the ball is never darkened. Raw-buffer access; ~0.3 ms for an 11 K px disc.
+  void drawShadow(lgfx::LGFX_Sprite& f, int cx, int cy) {
+    uint8_t* fb = (uint8_t*)f.getBuffer();
+    const int r = BALL_R - 2;
+    for (int yy = cy - r; yy <= cy + r; ++yy) {
+      if (yy < 0 || yy > 239) continue;
+      int hw = (int)sqrtf((float)(r * r - (yy - cy) * (yy - cy)));
+      int x0 = cx - hw, x1 = cx + hw;
+      if (x0 < 0) x0 = 0;
+      if (x1 > 239) x1 = 239;
+      uint8_t* row = fb + yy * 240;
+      for (int xx = x0; xx <= x1; ++xx) {
+        if (row[xx] == IDX_BG) row[xx] = IDX_SHADOW;
+        else if (row[xx] == IDX_GRID) row[xx] = IDX_GRID_SHADOW;
+      }
+    }
+  }
+
+  static void shadowString(lgfx::LGFX_Sprite& f, const String& s, int x, int y,
+                           uint8_t idx) {
+    f.setTextColor(IDX_TRANSP); // index 0 doubles as black in the identity palette
+    f.drawString(s, x + 2, y + 2);
+    f.setTextColor(idx);
+    f.drawString(s, x, y);
+  }
+
+  void drawScene(lgfx::LGFX_Sprite& f) {
+    if (enabled) {
+      f.fillScreen(IDX_BG);
+      for (int x = 0; x < 240; x += GRID_STEP) f.drawFastVLine(x, 0, 240, IDX_GRID);
+      for (int y = 0; y < 240; y += GRID_STEP) f.drawFastHLine(0, y, 240, IDX_GRID);
+      drawShadow(f, (int)bx + SHADOW_DX, (int)by + SHADOW_DY);
+      ball.pushSprite(&f, (int)bx - BALL_R, (int)by - BALL_R, IDX_TRANSP);
+    } else {
+      f.fillScreen(IDX_TRANSP); // boing off: today's calm black identity screen
+    }
+
+    // The identity overlay, every string drop-shadowed (ticket #51): drawn once
+    // in black offset down-right, then in its real color on top — on an indexed
+    // framebuffer that's just a second cheap text pass, and it keeps the text
+    // readable over whatever the ball is doing behind it.
+    // Hour and minute wear their own colors, so they are drawn as separate
+    // strings hung off the colon cell; the colon blinks at 1 Hz as visible
+    // proof the clock is live (solid until first NTP sync).
+    time_t now = time(nullptr);
+    struct tm t;
+    localtime_r(&now, &t);
+    lastMinute = t.tm_min;
+    colonOn = !Clock::isSynced() || (t.tm_sec & 1) == 0;
+    char hh[3] = "--", mm[3] = "--";
+    if (Clock::isSynced()) {
+      snprintf(hh, sizeof(hh), "%02d", t.tm_hour);
+      snprintf(mm, sizeof(mm), "%02d", t.tm_min);
+    }
+    f.setFont(&fonts::FreeSansBold24pt7b);
+    int w = f.textWidth(":");
+    f.setTextDatum(lgfx::middle_right);
+    shadowString(f, hh, 120 - w / 2, 100, textIdx(colHour));
+    f.setTextDatum(lgfx::middle_left);
+    shadowString(f, mm, 120 + w / 2, 100, textIdx(colMin));
+    if (colonOn) {
+      f.setTextDatum(lgfx::middle_center);
+      shadowString(f, ":", 120, 100, textIdx(colColon));
+    }
+    f.setFont(&fonts::FreeSans9pt7b);
+    f.setTextDatum(lgfx::middle_center);
+    shadowString(f, Net::deviceName() + ".local", 120, 160, textIdx(colHost));
+    shadowString(f, Net::isUp() ? Net::ip().toString() : "connecting...", 120, 185,
+                 textIdx(colIp));
+  }
+
+public:
+  void markDirty() { dirty = true; }
+  void togglePause() { paused = !paused; }
+
+  void onEnter(lgfx::LGFX_Device&) override {
+    auto& f = Display::frame();
+    f.setPaletteColor(IDX_GRID, 0xaa, 0x00, 0xaa);
+    f.setPaletteColor(IDX_GRID_SHADOW, 0x66, 0x00, 0x66);
+    f.setPaletteColor(IDX_SHADOW, 0x66, 0x66, 0x66);
+    f.setPaletteColor(IDX_BG, 0xaa, 0xaa, 0xaa);
+    dirty = true;
+    lastFrameMs = 0;
+  }
+
+  void onExit() override {
+    // Palette edits are global to the shared frame(): hand the reserved block
+    // back as RGB332 identity so the next owner gets the documented contract.
+    auto& f = Display::frame();
+    for (int i = IDX_BALL; i <= IDX_RESERVED_END; ++i) {
+      f.setPaletteColor(i, ((i >> 5) & 0x07) * 255 / 7, ((i >> 2) & 0x07) * 255 / 7,
+                        (i & 0x03) * 255 / 3);
+    }
+  }
+
+  void tick(lgfx::LGFX_Device&) override {
+    auto& f = Display::frame();
+    uint32_t now = millis();
+
+    if (enabled && !paused) {
+      // Fixed 30 Hz timestep (ticket #47): deterministic ball speed, and the
+      // skipped passes between frames keep touch/events responsive. Catch-up
+      // scheduling holds the average; a stall >1 frame resets the baseline.
+      if (now - lastFrameMs < FRAME_MS) return;
+      lastFrameMs += FRAME_MS;
+      if (now - lastFrameMs >= FRAME_MS) lastFrameMs = now;
+      if (dirty) loadSettings();
+      dirty = false;
+      stepPhysics();
+      applyCycle(f);
+      drawScene(f);
+      Display::present();
+      return;
+    }
+
+    // Frozen (paused or boing off): dirty-draw discipline — repaint only when
+    // the displayed state changes (settings, minute rollover, colon heartbeat).
+    time_t tnow = time(nullptr);
+    struct tm t;
+    localtime_r(&tnow, &t);
+    bool colonNow = !Clock::isSynced() || (t.tm_sec & 1) == 0;
+    if (!dirty && t.tm_min == lastMinute && colonNow == colonOn) return;
+    if (dirty) loadSettings();
+    dirty = false;
+    if (enabled && !paused) { lastFrameMs = 0; return; } // settings re-enabled boing
+    applyCycle(f); // frozen ball keeps its current rotation phase
+    drawScene(f);
+    Display::present();
+  }
+
+  // Tap pauses/resumes the bounce — touch driving app state. (When the ball is
+  // off it just forces a repaint, the previous demo behavior.)
+  void onTap() override {
+    if (enabled) togglePause();
+    else markDirty();
+  }
+
+  void begin() {
+    ball.setColorDepth(8);
+    ballOk = ball.createSprite(BALL_D, BALL_D) != nullptr;
+    if (!ballOk) return; // boot-time 14.4 KB can't realistically fail, but degrade calmly
+    ball.createPalette(); // makes drawPixel/pushSprite treat colors as raw indices
+    renderBall(ball);
+  }
+};
+
+#endif // SMOLBASE_FRAMEBUFFER == SMOLBASE_FB_PALETTE_8
+
+// Direct-draw identity screen — the app's whole display when the framebuffer is
+// compiled out (SMOLBASE_FRAMEBUFFER=SMOLBASE_FB_NONE); see git history for its
+// dirty-draw walkthrough.
 class StockScreen : public Screen {
   bool dirty = true;
   int lastMinute = -1;
   bool colonOn = true;
-  // Colors come from app-registered settings (see StockApp::setup); cached as
-  // 24-bit RGB and re-read on every full repaint — SettingsChanged marks
-  // dirty, so a picker change on the web page lands on the panel live.
   uint32_t colHour = 0xffffff, colMin = 0xffffff, colColon = 0xffffff,
            colHost = 0xffffff, colIp = 0xffffff;
 
@@ -41,10 +307,6 @@ class StockScreen : public Screen {
     colIp = hexRgb(ConfigStore::getString("col_ip"), 0xffffff);
   }
 
-  // The colon blinks at 1 Hz as visible proof the screen is live. Only its
-  // own cell is overdrawn — the digits are never touched between minutes.
-  // "HH:MM" is drawn centered, HH and MM are equal-width, so the colon sits
-  // exactly at x=120; textWidth(":") bounds the cell without clipping digits.
   void drawColon(lgfx::LGFX_Device& d) {
     d.setFont(&fonts::FreeSansBold24pt7b);
     int w = d.textWidth(":");
@@ -69,10 +331,9 @@ public:
     time_t now = time(nullptr);
     struct tm t;
     localtime_r(&now, &t);
-    // Solid colon until first sync: blinking implies the clock is ticking.
     bool colonNow = !Clock::isSynced() || (t.tm_sec & 1) == 0;
     if (!dirty && t.tm_min == lastMinute) {
-      if (colonNow != colonOn) { // 1 Hz heartbeat, colon cell only
+      if (colonNow != colonOn) {
         colonOn = colonNow;
         drawColon(d);
       }
@@ -83,8 +344,6 @@ public:
     colonOn = colonNow;
     loadColors();
 
-    // Hour and minute wear their own colors, so they are drawn as separate
-    // strings hung off the colon cell instead of one centered "HH:MM".
     d.setFont(&fonts::FreeSansBold24pt7b);
     int w = d.textWidth(":");
     char hh[3] = "--", mm[3] = "--";
@@ -99,34 +358,42 @@ public:
     d.setTextColor(d.color888(colMin >> 16, (colMin >> 8) & 0xff, colMin & 0xff), TFT_BLACK);
     d.setTextDatum(lgfx::middle_left);
     d.drawString(mm, 120 + w / 2, 100);
-    drawColon(d); // honor the current blink phase on full repaints too
+    drawColon(d);
 
     d.setFont(&fonts::FreeSans9pt7b);
     d.setTextDatum(lgfx::middle_center);
-    d.fillRect(0, 145, 240, 65, TFT_BLACK); // covers 9pt ascenders/descenders fully
+    d.fillRect(0, 145, 240, 65, TFT_BLACK);
     d.setTextColor(d.color888(colHost >> 16, (colHost >> 8) & 0xff, colHost & 0xff), TFT_BLACK);
     d.drawString(Net::deviceName() + ".local", 120, 160);
     d.setTextColor(d.color888(colIp >> 16, (colIp >> 8) & 0xff, colIp & 0xff), TFT_BLACK);
     d.drawString(Net::isUp() ? Net::ip().toString() : "connecting...", 120, 185);
   }
 
-  void onTap() override { markDirty(); } // demo: any tap forces a repaint
+  void onTap() override { markDirty(); }
 };
 
 class StockApp : public App {
+#if SMOLBASE_FRAMEBUFFER == SMOLBASE_FB_PALETTE_8
+  BoingScreen screen;
+#else
   StockScreen screen;
+#endif
 
 public:
   void setup() override {
     // The app's own settings: registered into the shared schema, persisted in
     // settings.json, editable from the served pages (color pickers on
     // index.html, plain fields in the settings UI's App section) — the
-    // app/config/html triangle in four lines.
+    // app/config/html triangle. The bool joins the same contract.
     ConfigStore::registerString(SettingSection::App, "col_hour", "Clock hour color", "#ffffff");
     ConfigStore::registerString(SettingSection::App, "col_min", "Clock minute color", "#ffffff");
     ConfigStore::registerString(SettingSection::App, "col_colon", "Clock colon color", "#ffffff");
     ConfigStore::registerString(SettingSection::App, "col_host", "Hostname color", "#ffffff");
     ConfigStore::registerString(SettingSection::App, "col_ip", "IP address color", "#ffffff");
+#if SMOLBASE_FRAMEBUFFER == SMOLBASE_FB_PALETTE_8
+    ConfigStore::registerBool(SettingSection::App, "boing", "Boing ball", true);
+    screen.begin();
+#endif
     Display::setActive(&screen);
   }
 
