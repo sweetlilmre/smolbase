@@ -53,10 +53,20 @@ uint8_t textIdx(uint32_t rgb) {
 // ---- Boing geometry ----------------------------------------------------------
 constexpr int BALL_R = 60; // 120-px ball = the original's visual weight on 240 px
 constexpr int BALL_D = BALL_R * 2;
-constexpr float TILT_DEG = 16.0f;  // original angle unrecorded; ~15–20° by eye
-constexpr int GRID_STEP = 16;      // 15 cells, ~the original's 16-cell wall
-constexpr int SHADOW_DX = 16, SHADOW_DY = 8;
+constexpr float TILT_DEG = -16.0f; // axis leans RIGHT, per the reference video (#54)
+constexpr int GRID_STEP = 16;      // ~the original's 16-cell wall
+// The wall is INSET — grey margins all around, like the reference frame (#54):
+// 12 cells wide (24 px margins), top margin 8 px, base at FLOOR_Y with a
+// shallow perspective skirt of a few spreading rows below it.
+constexpr int WALL_X0 = 24, WALL_X1 = 216, WALL_Y0 = 8;
+constexpr int FLOOR_Y = 208;       // wall/floor junction: the ball bounces off this
+// Shadow: cast onto the wall behind, right of the ball and a hair above
+// level, ball-sized — user-tuned against the reference frame (#54).
+constexpr int SHADOW_DX = 24, SHADOW_DY = -2;
 constexpr uint32_t FRAME_MS = 33;  // fixed 30 Hz timestep (ticket #47)
+// Spin: two cycle steps per frame ≈ 6.4°/33 ms ≈ 193°/s — the original's rate
+// (one 3.2° step per NTSC vblank at 60 Hz) at our 30 Hz timestep (#54).
+constexpr int SPIN_STEPS = 2;
 
 // The original's startup act: draw the tilted checkered sphere ONCE, as palette
 // indices. Per pixel: project onto the front hemisphere, tilt, and apply the
@@ -133,10 +143,12 @@ class BoingScreen : public Screen {
     if (bx > 240 - BALL_R && vx > 0) { bx = 240 - BALL_R; vx = -vx; }
     vy += 0.30f; // gravity
     by += vy;
-    if (by > 240 - BALL_R - 12 && vy > 0) { by = 240 - BALL_R - 12; vy = -vy; } // elastic
+    // The bounce bottoms out on the grid floor (ball bottom kisses the
+    // wall/floor junction), not the screen edge — like the original.
+    if (by > FLOOR_Y - BALL_R + 6 && vy > 0) { by = FLOOR_Y - BALL_R + 6; vy = -vy; } // elastic
     if (by < BALL_R && vy < 0) { by = BALL_R; vy = -vy; }
-    // Spin follows travel direction, one facet stripe per frame, like the original.
-    cyclePhase = (cyclePhase + (vx > 0 ? 1 : 13)) % 14;
+    // Spin follows travel direction, SPIN_STEPS facet stripes per frame.
+    cyclePhase = (cyclePhase + (vx > 0 ? SPIN_STEPS : 14 - SPIN_STEPS)) % 14;
   }
 
   // Shadow = remap pass over the framebuffer bytes inside the shadow circle:
@@ -144,7 +156,7 @@ class BoingScreen : public Screen {
   // so the ball is never darkened. Raw-buffer access; ~0.3 ms for an 11 K px disc.
   void drawShadow(lgfx::LGFX_Sprite& f, int cx, int cy) {
     uint8_t* fb = (uint8_t*)f.getBuffer();
-    const int r = BALL_R - 2;
+    const int r = BALL_R;
     for (int yy = cy - r; yy <= cy + r; ++yy) {
       if (yy < 0 || yy > 239) continue;
       int hw = (int)sqrtf((float)(r * r - (yy - cy) * (yy - cy)));
@@ -169,9 +181,24 @@ class BoingScreen : public Screen {
 
   void drawScene(lgfx::LGFX_Sprite& f) {
     if (enabled) {
+      // Inset back wall, then a SHALLOW perspective floor skirt (#54): the
+      // wall's verticals fan slightly outward below the base and the few
+      // floor rows spread apart as they approach — the reference frame's look.
       f.fillScreen(IDX_BG);
-      for (int x = 0; x < 240; x += GRID_STEP) f.drawFastVLine(x, 0, 240, IDX_GRID);
-      for (int y = 0; y < 240; y += GRID_STEP) f.drawFastHLine(0, y, 240, IDX_GRID);
+      for (int x = WALL_X0; x <= WALL_X1; x += GRID_STEP)
+        f.drawFastVLine(x, WALL_Y0, FLOOR_Y - WALL_Y0 + 1, IDX_GRID);
+      for (int y = WALL_Y0; y <= FLOOR_Y; y += GRID_STEP)
+        f.drawFastHLine(WALL_X0, y, WALL_X1 - WALL_X0 + 1, IDX_GRID);
+      f.drawFastHLine(WALL_X0, FLOOR_Y, WALL_X1 - WALL_X0 + 1, IDX_GRID); // base
+      static const int floorRows[] = {212, 216, 221, 227};
+      for (int x = WALL_X0; x <= WALL_X1; x += GRID_STEP) {
+        int x2 = 120 + (int)((x - 120) * 1.18f);
+        f.drawLine(x, FLOOR_Y, x2, floorRows[3], IDX_GRID);
+      }
+      for (int y : floorRows) {
+        int spread = (int)((WALL_X1 - WALL_X0) / 2 * (1.0f + 0.18f * (y - FLOOR_Y) / (floorRows[3] - FLOOR_Y)));
+        f.drawFastHLine(120 - spread, y, spread * 2 + 1, IDX_GRID);
+      }
       drawShadow(f, (int)bx + SHADOW_DX, (int)by + SHADOW_DY);
       ball.pushSprite(&f, (int)bx - BALL_R, (int)by - BALL_R, IDX_TRANSP);
     } else {
