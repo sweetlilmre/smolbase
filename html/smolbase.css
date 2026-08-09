@@ -49,7 +49,7 @@ label { font-size: 0.85rem; color: var(--muted); display: block; margin-bottom: 
 .hint { font-size: 0.78rem; color: var(--muted); margin-top: 0.3rem; }
 .msg { font-size: 0.78rem; color: var(--muted); min-height: 1.1em; margin: 0.3rem 0 0; }
 .msg.err { color: var(--danger); }
-.toast { position: fixed; top: 1rem; left: 50%; transform: translateX(-50%);
+.toast { position: fixed; bottom: 2rem; left: 50%; transform: translateX(-50%);
   background: var(--accent); color: var(--accent-ink); padding: 0.45rem 1rem;
   border-radius: 999px; font-size: 0.85rem; opacity: 0; transition: opacity 0.25s;
   pointer-events: none; z-index: 98; }
