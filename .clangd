@@ -1,17 +1,42 @@
-# clangd config: use the PlatformIO-generated compilation database (regenerate
-# with `pio run -t compiledb` after adding files) and strip the xtensa-GCC
-# flags clang doesn't understand. Without this, clangd can't find the ESP32
-# toolchain headers and floods the editor with phantom errors — the real
-# arbiter of compilation is `pio run`.
 CompileFlags:
-  CompilationDatabase: .
+  BuiltinHeaders: QueryDriver
+  Add:
+    - "-Wall"
+    - "-Wextra"
+    - "-Wunused-variable"
+    - "-Wunused-function"
+    - "-Wno-unused-parameter"
+    - "-Wno-reserved-identifier"
   Remove:
-    - -mlongcalls
-    - -mtext-section-literals
-    - -fstrict-volatile-bitfields
-    - -fno-tree-switch-conversion
-    - -free
-    - -fipa-pta
+    - "-misc-unused-parameters"
+    - "-mfix-esp32-psram-cache-issue"
+    - "-mfix-esp32-psram-cache-strategy=*"
+    - "-fno-shrink-wrap"
+    - "-fno-malloc-dce"
+    - "-fno-tree-switch-conversion"
+    - "-fstrict-volatile-bitfields"
+    - "-fzero-init-padding-bits=*"
+    - "-free"
+    - "-fipa-pta"
+    - "-march=*"
+    - "-mtune=*"
+    - "-mdisable-hardware-atomics"
+    - "-mlongcalls"
+    - "-mtext-section-literals"
+    - "-mtarget-align"
+    - "-mno-target-align"
+    - "-isysroot"
 Diagnostics:
-  Suppress:
-    - pp_file_not_found
+  Suppress: [pp_expects_filename, unused-includes]
+Index:
+  Background: Skip
+  StandardLibrary: true
+---
+If:
+  PathMatch: .*\.ino
+CompileFlags:
+  Add:
+    - "-x"
+    - "c++"
+    - "-include"
+    - "Arduino.h"
