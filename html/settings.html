@@ -201,7 +201,7 @@ function render() {
   sections.push(["Update", updatePage(), false]);
 
   app.innerHTML = `<div class="d-wrap">
-    <div class="d-dev"><b>${esc(STATUS.name || "smolbase")}</b>
+    <div class="d-dev"><b>${esc(STATUS.name || "smolbase")}.local</b>
       <span class="mono">${esc(STATUS.ip || "")}</span>
       <span class="mono">${heapKb}</span>
       <span class="mono">fw ${esc(STATUS.fwVersion || "?")}</span></div>
