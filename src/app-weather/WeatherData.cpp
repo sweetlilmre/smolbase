@@ -361,6 +361,8 @@ void debugJson(JsonDocument& out) {
   out["lat"] = ConfigStore::getString("wx_lat", "");
   out["lon"] = ConfigStore::getString("wx_lon", "");
   out["msSinceFetch"] = millis() - lastFetchMs;
+  out["heapFree"] = esp_get_free_heap_size();
+  out["heapLargest"] = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT); // TLS gate (#64)
 }
 
 void onSettingsChanged() {
