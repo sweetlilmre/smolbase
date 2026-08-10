@@ -11,6 +11,12 @@ public:
   void loadSettings();
   void markWeatherDirty() { weatherDirty = true; }
   void park() { parked = true; } // OtaStarting: stop touching flash/panel
+  // RAM choreography (#74): the marquee sprite is the app's one big heap
+  // block (13.4 KB), and the TLS handshake needs every byte — the app frees
+  // it for the duration of a fetch and restores it after. The marquee
+  // freezes off-screen for those few seconds each refresh interval.
+  void suspendMarquee();
+  void resumeMarquee();
   // Screenshot capture: the BFFfont faces share stateful PointerWrappers, so
   // the httpd-task render must not run concurrently with the panel tick —
   // interleaved seeks garble glyph reads. Reversible, unlike park().

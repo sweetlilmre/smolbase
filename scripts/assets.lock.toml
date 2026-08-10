@@ -1,8 +1,10 @@
 # sha256 of every fetched input — build_assets.py hard-errors on drift.
+"cacert.pem" = "3ff344e30b9b1ed2971044eabb438a08f2e2245ddb5f8ab1a3ad8b63ab4eaf91"
 "clear-day.svg" = "05ec57e3bf50c723dd83849e24de2ddd91ee49fb7c72c3a80e4061eb723cacde"
 "cloudy.svg" = "ea7a657582d65aa1783672d99830e44ee628b90b8083f0882601ea3cac6c5436"
 "drizzle.svg" = "548b0cabeaa9e5c55e15b5867c4fee085797c9fba5e2fcc666edde7bcbf02571"
 "fog.svg" = "293d4e70da37f8ecfd17e43be27af479996581087c263ad2a07ff16852fce1a5"
+"gen_crt_bundle.py" = "367c046ed8138862e345b59620657f5fe7ec9af3d24f618a73fc17069cd7ef35"
 "humidity.svg" = "ff4658f91e1a21844cc368057a8476f7d0e55411b80f597e201d26514c68cbd1"
 "meteocons-LICENSE" = "b1271915b2aa8b5867a01ee6a93ae81c4829bae5712f01034f5165a366bbfd66"
 "montserrat-OFL.txt" = "8b7141c03fa4f8d44e6345d5d4931709290f0f67875e452e95ac1fd3a027802e"

@@ -22,6 +22,15 @@ url = "https://raw.githubusercontent.com/google/fonts/main/ofl/montserrat/Montse
 license_url = "https://raw.githubusercontent.com/google/fonts/main/ofl/montserrat/OFL.txt"
 license = "OFL-1.1"
 
+# Current Mozilla root store, converted to ESP bundle format by Espressif's
+# own generator (pinned to the IDF the platform pin ships). The core's baked
+# bundle is too old to verify 2026 chains (#74); shipping our own keeps the
+# weather fetches on real HTTPS. Hash-locked like everything else: when the
+# store legitimately updates, delete the cache and re-lock deliberately.
+[sources.ca_bundle]
+cacert_url = "https://curl.se/ca/cacert.pem"
+gen_url = "https://raw.githubusercontent.com/espressif/esp-idf/v5.5/components/mbedtls/esp_crt_bundle/gen_crt_bundle.py"
+
 [sources.meteocons]
 # v2.0.0 tag ONLY — main/dev were restructured after the Meteocons rename.
 # At this tag the named fill SVGs live under production/fill/all/.

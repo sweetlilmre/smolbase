@@ -10,47 +10,38 @@
 #include "../core/ConfigStore.h"
 #include "../core/Net.h"
 #include "../core/Secrets.h"
+#include "assets/wx_assets.h"
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
-#if SMOLBASE_WEATHER_TLS
+#if !SMOLBASE_WEATHER_HTTP
 #include <NetworkClientSecure.h>
 #endif
 
 namespace {
 
-#if SMOLBASE_WEATHER_TLS
-// First-flight finding (#74): contrary to the research doc, the 3.3.11 core
-// does NOT attach the CA bundle by default — a bare NetworkClientSecure has
-// no verification option and the handshake dies with connect error -1. The
-// stock setter (setCACertBundle) demands bundle BYTES, but the default
-// bundle embedded in the core's mbedTLS is reachable through
-// esp_crt_bundle_attach, which attach_ssl_certificate_bundle() wires up on
-// the protected sslclient context. This shim is the built-in-bundle switch.
+#if !SMOLBASE_WEATHER_HTTP
+// HTTPS journey (#74): the 3.3.11 core attaches NO CA by default (handshake
+// dies with connect -1), and its BAKED-IN bundle is too old to verify both
+// providers' 2026 chains node-dependently (X509 verify failures with heap
+// ruled out — 59 KB largest block at a failing handshake). So the asset
+// pipeline embeds the CURRENT Mozilla root store in ESP bundle format
+// (gen_crt_bundle.py, pinned to this platform's IDF) and every client wires
+// it up here. Real, verifying HTTPS — no pins, no setInsecure.
 class BundleClient : public NetworkClientSecure {
 public:
-  BundleClient() {
-    attach_ssl_certificate_bundle(sslclient.get(), true);
-    _use_ca_bundle = true;
-  }
+  BundleClient() { setCACertBundle(WX_CA_BUNDLE, WX_CA_BUNDLE_LEN); }
 };
 #endif
 
-// Transport (#74 flight verdict): plain HTTP by default for BOTH providers.
-// HTTPS was exercised per the charter and hit a real wall: the pinned core's
-// CA bundle fails X509 verification against both providers' served chains
-// node-dependently (Let's Encrypt mid-root-transition for Open-Meteo; OWM's
-// chain verified on some connects and not others) — with heap ruled out
-// (largest block 59 KB at a failing handshake). This is the research doc's
-// stated fallback posture: weather data is not secret, and the OWM key in a
-// query string on the LAN is the accepted cost — SmolTV-Pro's exact stance.
-// Define SMOLBASE_WEATHER_TLS=1 to opt OWM back into HTTPS via the built-in
-// bundle (worth retrying when the platform pin moves to a newer bundle).
-#if SMOLBASE_WEATHER_TLS
-constexpr const char* OWM_SCHEME = "https://";
-#else
+// Both providers over HTTPS (charter). SMOLBASE_WEATHER_HTTP=1 drops
+// everything to plain HTTP — the researched last-resort switch.
+#if SMOLBASE_WEATHER_HTTP
 constexpr const char* OWM_SCHEME = "http://";
-#endif
 constexpr const char* METEO_SCHEME = "http://";
+#else
+constexpr const char* OWM_SCHEME = "https://";
+constexpr const char* METEO_SCHEME = "https://";
+#endif
 
 // Geocode cache (raw Config Store keys, deliberately unregistered — machine
 // state, not user settings): wx_geo_for remembers WHICH city value the cached
@@ -98,6 +89,9 @@ bool fetchInFlight = false;
 volatile int dbgGeoCode = 0, dbgOwmCode = 0, dbgMeteoCode = 0;
 volatile uint32_t dbgAttempts = 0, dbgSuccesses = 0;
 volatile uint32_t dbgLargestAtFetch = 0; // heap largest block as the cycle began
+// Leak-curve probes (#74 heap hunt): largest free block after each stage,
+// plus the all-time heap minimum — where did ~50 KB go after cycle one?
+volatile uint32_t dbgLargestAfter[3] = {0, 0, 0}; // geo, owm, meteo
 char dbgLastErr[96] = "";
 
 // ---- helpers (task side) ----------------------------------------------------
@@ -121,8 +115,8 @@ String urlEncode(const char* s) {
 bool getJson(const String& url, const JsonDocument& filter, JsonDocument& out,
              volatile int& code) {
   NetworkClient plain;
-#if SMOLBASE_WEATHER_TLS
-  BundleClient tls; // built-in ESP x509 bundle (see shim above)
+#if !SMOLBASE_WEATHER_HTTP
+  BundleClient tls; // embedded current Mozilla bundle (see shim above)
   bool secure = url.startsWith("https");
   NetworkClient& client = secure ? tls : plain;
 #else
@@ -150,7 +144,7 @@ bool getJson(const String& url, const JsonDocument& filter, JsonDocument& out,
   } else if (code < 0) {
     int n = snprintf(dbgLastErr, sizeof(dbgLastErr), "%s | ",
                      HTTPClient::errorToString(code).c_str());
-#if SMOLBASE_WEATHER_TLS
+#if !SMOLBASE_WEATHER_HTTP
     if (secure && n > 0 && n < (int)sizeof(dbgLastErr))
       tls.lastError(dbgLastErr + n, sizeof(dbgLastErr) - n); // mbedTLS's words
 #endif
@@ -275,8 +269,12 @@ void fetchTaskFn(void*) {
     WeatherData::Reading r;
     GeoResult g = {};
     if (fetchArgs.geocode) geocode(g); // failure falls through: OWM may still answer a name
+    dbgLargestAfter[0] = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
     geoResult = g;                     // task-side scratch for fetchOpenMeteo
-    bool ok = (fetchArgs.key[0] && fetchOwm(r, g)) || fetchOpenMeteo(r);
+    bool owmOk = fetchArgs.key[0] && fetchOwm(r, g);
+    dbgLargestAfter[1] = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    bool ok = owmOk || fetchOpenMeteo(r);
+    dbgLargestAfter[2] = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
     if (ok) dbgSuccesses = dbgSuccesses + 1;
     // A geocode that never completed (network-level failure: begin/connect,
     // not an HTTP verdict) must not burn the one-attempt-per-city latch —
@@ -300,9 +298,10 @@ namespace WeatherData {
 void begin() {
   geoTriedFor = "";
   lastCity = ConfigStore::getString("city", "Durban");
-  // TLS work is heap-side; 8 KB of stack suffices for HTTPClient + mbedTLS
-  // callbacks, and every KB not parked here is TLS handshake headroom.
-  xTaskCreate(fetchTaskFn, "wx_fetch", 8192, nullptr, 1, &fetchTask);
+  // 10 KB stack: full handshakes completed on 12 KB, the high-water probe
+  // never saw more than ~5 KB used, and every KB parked here is heap the
+  // ~49 KB TLS peak (measured: heapMinEver 208 B) cannot use.
+  xTaskCreate(fetchTaskFn, "wx_fetch", 10240, nullptr, 1, &fetchTask);
 }
 
 void loop() {
@@ -361,6 +360,10 @@ void loop() {
   xTaskNotifyGive(fetchTask);
 }
 
+bool fetchQueued() { return fetchDue && !fetchInFlight && fetchTask && Net::isUp(); }
+
+bool fetchBusy() { return fetchInFlight || fetchQueued(); }
+
 const Reading& reading() { return current; }
 
 bool changed() {
@@ -395,6 +398,11 @@ void debugJson(JsonDocument& out) {
   out["msSinceFetch"] = millis() - lastFetchMs;
   out["lastErr"] = (const char*)dbgLastErr;
   out["largestAtFetch"] = dbgLargestAtFetch;
+  out["largestAfterGeo"] = dbgLargestAfter[0];
+  out["largestAfterOwm"] = dbgLargestAfter[1];
+  out["largestAfterMeteo"] = dbgLargestAfter[2];
+  out["heapMinEver"] = esp_get_minimum_free_heap_size();
+  out["stackMin"] = fetchTask ? uxTaskGetStackHighWaterMark(fetchTask) : 0;
   out["heapFree"] = esp_get_free_heap_size();
   out["heapLargest"] = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT); // TLS gate (#64)
 }

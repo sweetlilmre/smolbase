@@ -35,6 +35,13 @@ struct Reading {
 void begin(); // spawn the fetch task; call from App::setup (after registration)
 void loop();  // every main-loop pass: schedule fetches, promote results
 
+// Fetch lifecycle for RAM choreography (#74): the TLS handshake peaks at
+// ~49 KB on this heap, so the app frees what it can for the duration.
+// fetchQueued() is true on the pass that will arm the task; fetchBusy()
+// stays true until the cycle's result is promoted.
+bool fetchQueued();
+bool fetchBusy();
+
 const Reading& reading(); // main-loop only
 bool changed();           // one-shot: true once after each promoted reading
 

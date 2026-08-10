@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["fonttools>=4.53", "pillow>=10", "resvg-cli>=0.2"]
+# dependencies = ["fonttools>=4.53", "pillow>=10", "resvg-cli>=0.2", "cryptography>=42"]
 # ///
 """Weather dashboard asset pipeline (#71; design: docs/research/
 dashboard-asset-pipeline.md). Reads scripts/assets.toml, fetches the pinned
@@ -92,7 +92,15 @@ def render_icon(name: str, svg: Path, w: int, h: int, trim: bool) -> tuple[list[
         bbox = img.getchannel("A").getbbox()
         if bbox:
             img = img.crop(bbox)
-    img = img.resize((w, h), Image.LANCZOS)
+    # Fit into the slot PRESERVING ASPECT (resvg renders the square viewBox
+    # regardless of --height; a blind resize stretched the thermometer into
+    # a blob — #74 round 4). Centered on transparent.
+    f = min(w / img.width, h / img.height)
+    nw, nh = max(1, round(img.width * f)), max(1, round(img.height * f))
+    img = img.resize((nw, nh), Image.LANCZOS)
+    canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    canvas.paste(img, ((w - nw) // 2, (h - nh) // 2))
+    img = canvas
 
     # Composite over black, quantize the opaque pixels to 15 colors.
     alpha = img.getchannel("A")
@@ -147,6 +155,14 @@ def main() -> None:
                            f"{icon}.svg", lock, lock_out)
     lic = fetch(spec["sources"]["meteocons"]["license_url"], "meteocons-LICENSE", lock, lock_out)
     shutil.copy(lic, LICDIR / "MIT-meteocons.txt")
+    cacert = fetch(spec["sources"]["ca_bundle"]["cacert_url"], "cacert.pem", lock, lock_out)
+    genscript = fetch(spec["sources"]["ca_bundle"]["gen_url"], "gen_crt_bundle.py", lock, lock_out)
+
+    print("ca bundle:")
+    subprocess.run([sys.executable, str(genscript), "--input", str(cacert)],
+                   cwd=CACHE, check=True)
+    ca_bundle = (CACHE / "x509_crt_bundle").read_bytes()
+    print(f"  {len(ca_bundle)} B from {cacert.name}")
 
     print("fonts:")
     font_bins = {}
@@ -175,7 +191,11 @@ def main() -> None:
     h_lines += ["", f"constexpr size_t WX_ICON_COUNT = {len(codes)};",
                 "extern const uint8_t WX_ICON_CODES[WX_ICON_COUNT]; // OWM icon-prefix codes",
                 "extern const WxIcon WX_ICONS[WX_ICON_COUNT];       // lock-step with codes",
-                "extern const WxIcon WX_GAUGE_TEMP;", "extern const WxIcon WX_GAUGE_HUMI;", ""]
+                "extern const WxIcon WX_GAUGE_TEMP;", "extern const WxIcon WX_GAUGE_HUMI;", "",
+                "// Mozilla root store in ESP bundle format (gen_crt_bundle.py) — feed to",
+                "// NetworkClientSecure::setCACertBundle for HTTPS that verifies 2026 chains.",
+                f"constexpr size_t WX_CA_BUNDLE_LEN = {len(ca_bundle)};",
+                "extern const uint8_t WX_CA_BUNDLE[WX_CA_BUNDLE_LEN];", ""]
 
     c_lines = [banner, '#include "wx_assets.h"', ""]
     for name, blob in font_bins.items():
@@ -196,7 +216,8 @@ def main() -> None:
     for name in ("WX_GAUGE_TEMP", "WX_GAUGE_HUMI"):
         w, h, _, _ = icons[name]
         c_lines.append(f"const WxIcon {name} = {{ {w}, {h}, {name}_PAL, {name}_DATA }};")
-    c_lines.append("")
+    c_lines += ["", f"alignas(4) const uint8_t WX_CA_BUNDLE[{len(ca_bundle)}] = {{",
+                c_array(ca_bundle), "};", ""]
 
     # encoding pinned: without it Windows writes the locale codepage and the
     # banner's punctuation lands in the repo as mojibake.

@@ -180,7 +180,12 @@ public:
 
   void loop() override {
     if (parked) return;
+    // RAM choreography: free the marquee sprite BEFORE the fetch task is
+    // armed this same pass — the TLS peak needs its 13.4 KB — and restore
+    // it once the cycle's result lands.
+    if (WeatherData::fetchQueued()) screen.suspendMarquee();
     WeatherData::loop();
+    if (!WeatherData::fetchBusy()) screen.resumeMarquee();
     if (WeatherData::changed()) screen.markWeatherDirty();
   }
 

@@ -118,6 +118,23 @@ void WeatherScreen::onEnter(lgfx::LGFX_Device& gfx) {
 
 void WeatherScreen::onTap() { WeatherData::forceRefresh(); }
 
+// Both are idempotent, called every loop pass by the app (core 1, same as
+// tick — no race with the scroll). Suspend leaves the last-pushed pixels
+// frozen in the band; resume rebuilds the line from the cached reading.
+void WeatherScreen::suspendMarquee() {
+  if (marq.getBuffer()) {
+    marq.deleteSprite();
+    marqWidth = 0;
+  }
+}
+
+void WeatherScreen::resumeMarquee() {
+  if (!marq.getBuffer()) {
+    marq.setColorDepth(8);
+    if (marq.createSprite(MARQ_W_MAX, MARQ_H)) rebuildMarquee();
+  }
+}
+
 void WeatherScreen::tick(lgfx::LGFX_Device& gfx) {
   if (parked || paused) return; // OTA park, or a debug screenshot in flight
   if (weatherDirty) {
