@@ -8,6 +8,7 @@
 // On total failure nothing is promoted: the previous reading stays.
 #include "WeatherData.h"
 #include "../core/ConfigStore.h"
+#include "../core/Net.h"
 #include "../core/Secrets.h"
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
@@ -16,6 +17,23 @@
 #endif
 
 namespace {
+
+#if !SMOLBASE_WEATHER_HTTP
+// First-flight finding (#74): contrary to the research doc, the 3.3.11 core
+// does NOT attach the CA bundle by default — a bare NetworkClientSecure has
+// no verification option and the handshake dies with connect error -1. The
+// stock setter (setCACertBundle) demands bundle BYTES, but the default
+// bundle embedded in the core's mbedTLS is reachable through
+// esp_crt_bundle_attach, which attach_ssl_certificate_bundle() wires up on
+// the protected sslclient context. This shim is the built-in-bundle switch.
+class BundleClient : public NetworkClientSecure {
+public:
+  BundleClient() {
+    attach_ssl_certificate_bundle(sslclient.get(), true);
+    _use_ca_bundle = true;
+  }
+};
+#endif
 
 #if SMOLBASE_WEATHER_HTTP
 constexpr const char* SCHEME = "http://";
@@ -53,6 +71,7 @@ struct FetchArgs {
 FetchArgs fetchArgs;
 struct GeoResult { // task → loop, alongside `pending`
   bool fresh = false;
+  bool retryGeocode = false; // attempt never completed: don't keep the latch
   char lat[12], lon[12], name[32], cc[4];
 };
 GeoResult geoResult;
@@ -90,7 +109,7 @@ bool getJson(const String& url, const JsonDocument& filter, JsonDocument& out,
 #if SMOLBASE_WEATHER_HTTP
   NetworkClient client;
 #else
-  NetworkClientSecure client; // no setCACert/setInsecure: default ESP bundle
+  BundleClient client; // built-in ESP x509 bundle (see shim above)
 #endif
   HTTPClient http;
   http.setTimeout(10000);
@@ -228,9 +247,14 @@ void fetchTaskFn(void*) {
     geoResult = g;                     // task-side scratch for fetchOpenMeteo
     bool ok = (fetchArgs.key[0] && fetchOwm(r, g)) || fetchOpenMeteo(r);
     if (ok) dbgSuccesses = dbgSuccesses + 1;
+    // A geocode that never completed (network-level failure: begin/connect,
+    // not an HTTP verdict) must not burn the one-attempt-per-city latch —
+    // the boot race showed a pre-WiFi cycle latching Durban forever.
+    bool geoRetryable = fetchArgs.geocode && dbgGeoCode <= 0 && dbgGeoCode != -101;
     taskENTER_CRITICAL(&lock);
     if (ok) pending = r;
     geoResult = g;
+    geoResult.retryGeocode = geoRetryable;
     pendingReady = true; // even on failure: loop() must clear fetchInFlight
     taskEXIT_CRITICAL(&lock);
   }
@@ -264,6 +288,7 @@ void loop() {
     taskEXIT_CRITICAL(&lock);
     fetchInFlight = false;
     if (ok) changedFlag = true;
+    if (g.retryGeocode) geoTriedFor = ""; // incomplete attempt: allow another
     if (g.fresh) { // persist the geocode/harvest for reboots and keyless days
       ConfigStore::setString("wx_lat", g.lat);
       ConfigStore::setString("wx_lon", g.lon);
@@ -279,7 +304,9 @@ void loop() {
   // Schedule: honored wx_interval (#68 — fixing SmolTV-Pro's ignored w_i).
   uint32_t intervalMs = (uint32_t)ConfigStore::getInt("wx_interval", 20) * 60000UL;
   if (!fetchDue && millis() - lastFetchMs >= intervalMs) fetchDue = true;
-  if (!fetchDue || fetchInFlight || !fetchTask) return;
+  // Never arm without a network: the boot cycle otherwise fires pre-WiFi,
+  // fails, and (worse) used to burn the geocode latch on a dead link.
+  if (!fetchDue || fetchInFlight || !fetchTask || !Net::isUp()) return;
 
   // Arm the task: all policy reads happen here, on core 1.
   String city = ConfigStore::getString("city", "Durban");
