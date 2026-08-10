@@ -41,7 +41,7 @@ private:
   String dateFmt = "%d/%m/%Y";
   String nickname;
 
-  lgfx::LGFX_Sprite marq;  // 16-bpp strip, scrolled each frame
+  lgfx::LGFX_Sprite marq;  // 8-bpp line sprite, fixed size, allocated once
   int marqWidth = 0;       // pixel width of one marquee copy
   int marqX = 0;
   uint32_t lastFrameMs = 0;

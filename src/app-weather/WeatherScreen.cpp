@@ -21,15 +21,23 @@
 namespace {
 
 constexpr int W = 240;
-// Element bands (each element clears its own). Fine-tuned on-device in #74.
+// Element bands (each element clears its own). On-device tune, round 2 (#74):
+// marquee dropped below-badge overlap with the clock, so the clock moved to
+// y=98 (its Teko-96 digits ink 60 px tall) and the marquee got a 20 px band
+// for the 15 px face; gauge row grew for the larger icons and labels.
 constexpr int ICON_X = 8, ICON_Y = 8;
 constexpr int CITY_Y = 14;
-constexpr int BADGE_Y = 44, BADGE_H = 22;
-constexpr int MARQ_Y = 74, MARQ_H = 16;
-constexpr int CLOCK_Y = 92, CLOCK_H = 92; // the Teko 96 box
-constexpr int SEC_X = 196, SEC_Y = 114;
+constexpr int BADGE_Y = 44, BADGE_H = 24;
+constexpr int MARQ_Y = 72, MARQ_H = 20;
+constexpr int CLOCK_Y = 98, CLOCK_H = 64; // digit ink is 60 px; 4 px slack
+constexpr int SEC_X = 196, SEC_Y = 120;
 constexpr int DATE_Y = 186, DATE_H = 18;
-constexpr int GAUGE_Y = 212, GAUGE_H = 28;
+constexpr int GAUGE_Y = 206, GAUGE_H = 34;
+// The marquee sprite is allocated ONCE at begin(), full size, while the heap
+// is unfragmented: a mid-session (re)alloc carves up the largest free block
+// and TLS handshakes (2x ~16.7 KB record buffers) start failing — measured
+// on-device. 8 bpp (RGB332) halves the cost; the line colors survive fine.
+constexpr int MARQ_W_MAX = 672;
 
 // 24-bit RGB888 palette constants (see col() below for how LovyanGFX reads them).
 constexpr uint32_t COL_AMBER = 0xfeba00, COL_CYAN = 0x99ffff, COL_GREEN = 0x99ff1f;
@@ -82,8 +90,10 @@ void WeatherScreen::begin() {
   fSec.load(WX_SEC40);
   fCity.load(WX_CITY22);
   fDate.load(WX_DATE15);
-  fBadge.load(WX_BADGE13);
-  fText.load(WX_TEXT12);
+  fBadge.load(WX_BADGE16);
+  fText.load(WX_TEXT15);
+  marq.setColorDepth(8);
+  marq.createSprite(MARQ_W_MAX, MARQ_H); // once, pristine heap — see MARQ_W_MAX
   loadSettings();
 }
 
@@ -169,8 +179,8 @@ void WeatherScreen::fontProbe(JsonDocument& out) {
   const Sample samples[] = {
       {"clock96_0", &fClock, "0"},       {"clock96_x10", &fClock, "0000000000"},
       {"clock96_1805", &fClock, "18:05"},{"sec40_00", &fSec, "00"},
-      {"city22_Durban", &fCity, "Durban"}, {"badge13_Rain", &fBadge, "Rain"},
-      {"text12_marq", &fText, "Lowest 17"}, {"date15", &fDate, "10/08/2026"},
+      {"city22_Durban", &fCity, "Durban"}, {"badge16_Rain", &fBadge, "Rain"},
+      {"text15_marq", &fText, "Lowest 17"}, {"date15", &fDate, "10/08/2026"},
   };
   for (const Sample& s : samples) {
     probe.setFont(&s.face->font);
@@ -225,20 +235,20 @@ void WeatherScreen::drawWeather(lgfx::LovyanGFX& gfx) {
 
   // Gauge row: temp left, humidity right.
   gfx.fillRect(0, GAUGE_Y, W, GAUGE_H, col(COL_BLACK));
-  drawIcon(gfx, WX_GAUGE_TEMP, 10, GAUGE_Y + 3);
-  drawIcon(gfx, WX_GAUGE_HUMI, 128, GAUGE_Y + 6);
+  drawIcon(gfx, WX_GAUGE_TEMP, 8, GAUGE_Y + 2);
+  drawIcon(gfx, WX_GAUGE_HUMI, 122, GAUGE_Y + 7);
   auto bar = [&](int x, float frac, uint32_t c) {
-    gfx.drawRect(x, GAUGE_Y + 6, 52, 12, col(COL_WHITE));
+    gfx.drawRect(x, GAUGE_Y + 9, 56, 14, col(COL_WHITE));
     if (frac < 0) frac = 0;
     if (frac > 1) frac = 1;
-    gfx.fillRect(x + 2, GAUGE_Y + 8, (int)(48 * frac), 8, col(c));
+    gfx.fillRect(x + 2, GAUGE_Y + 11, (int)(52 * frac), 10, col(c));
   };
-  bar(28, (r.tempC + 50.0f) / 100.0f, COL_TEMPBAR); // SmolTV-Pro's -50..50 range
+  bar(30, (r.tempC + 50.0f) / 100.0f, COL_TEMPBAR); // SmolTV-Pro's -50..50 range
   bar(146, r.humidity / 100.0f, COL_BADGE_BG);
   gfx.setFont(&fText.font);
   gfx.setTextColor(col(COL_WHITE), col(COL_BLACK));
-  gfx.drawString(r.valid ? WeatherData::fmtTemp(r.tempC) : "--", 85, GAUGE_Y + 7);
-  gfx.drawString(r.valid ? String(r.humidity) + "%" : "--", 203, GAUGE_Y + 7);
+  gfx.drawString(r.valid ? WeatherData::fmtTemp(r.tempC) : "--", 92, GAUGE_Y + 11);
+  gfx.drawString(r.valid ? String(r.humidity) + "%" : "--", 206, GAUGE_Y + 11);
 }
 
 void WeatherScreen::rebuildMarquee() {
@@ -259,28 +269,21 @@ void WeatherScreen::rebuildMarquee() {
       {", ATM ", COL_WHITE},        {WeatherData::fmtPress(r.pressureHpa), COL_AMBER},
       {"      ", COL_WHITE},
   };
-  // The sprite holds ONE full copy of the line; tick() tiles it across the
-  // band. Rebuilt only on a weather/settings change, so the realloc is rare.
-  marq.setColorDepth(16);
+  // The fixed-size sprite (allocated once in begin()) holds ONE copy of the
+  // line; tick() tiles it across the band. A line wider than the sprite
+  // clips — at 15 px the full line fits MARQ_W_MAX with margin.
   marq.setFont(&fText.font);
   int w = 0;
   for (const Seg& s : segs) w += marq.textWidth(s.text);
-  if (w < W) w = W; // tiles must at least span the screen
-  if (w != marqWidth) {
-    marq.deleteSprite();
-    if (!marq.createSprite(w, MARQ_H)) { // ~(w*32) B heap; ~16 KB for a full line
-      marqWidth = 0;                     // OOM: skip the marquee, keep the rest
-      return;
-    }
-    marqWidth = w;
-    marqX = 0;
-  }
-  marq.fillSprite(marq.color565(0, 0, 0));
+  if (w < W) w = W;                    // tiles must at least span the screen
+  if (w > MARQ_W_MAX) w = MARQ_W_MAX;  // clip rather than realloc (heap!)
+  marqWidth = w;
+  marqX = 0;
+  marq.fillSprite(col(COL_BLACK));
   marq.setTextDatum(lgfx::top_left);
   int x = 0;
   for (const Seg& s : segs) {
-    marq.setTextColor(marq.color565(s.color >> 16, (s.color >> 8) & 0xff, s.color & 0xff),
-                      marq.color565(0, 0, 0));
+    marq.setTextColor(col(s.color), col(COL_BLACK));
     marq.drawString(s.text, x, 2);
     x += marq.textWidth(s.text);
   }
@@ -318,7 +321,7 @@ void WeatherScreen::drawSeconds(lgfx::LovyanGFX& gfx) {
   gfx.setFont(&fSec.font);
   gfx.setTextDatum(lgfx::top_left);
   gfx.setTextColor(col(colSec), col(COL_BLACK));
-  gfx.fillRect(SEC_X, SEC_Y, W - SEC_X, 44, col(COL_BLACK));
+  gfx.fillRect(SEC_X, SEC_Y, W - SEC_X, 30, col(COL_BLACK));
   gfx.drawString(s, SEC_X, SEC_Y);
 }
 

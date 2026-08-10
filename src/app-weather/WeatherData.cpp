@@ -35,11 +35,18 @@ public:
 };
 #endif
 
+// Transport split (#74 flight finding): OWM carries the API key, so it goes
+// HTTPS via the ESP bundle (its Sectigo chain verifies on-device). The
+// Open-Meteo hosts carry no secret AND intermittently fail bundle
+// verification — Let's Encrypt is mid-transition to 2025 roots the pinned
+// core's bundle predates — so they go plain HTTP, exactly the fallback
+// posture the research doc reserved for verification trouble.
 #if SMOLBASE_WEATHER_HTTP
-constexpr const char* SCHEME = "http://";
+constexpr const char* OWM_SCHEME = "http://"; // full-HTTP fallback flag
 #else
-constexpr const char* SCHEME = "https://";
+constexpr const char* OWM_SCHEME = "https://";
 #endif
+constexpr const char* METEO_SCHEME = "http://";
 
 // Geocode cache (raw Config Store keys, deliberately unregistered — machine
 // state, not user settings): wx_geo_for remembers WHICH city value the cached
@@ -82,9 +89,11 @@ bool fetchDue = true; // fetch immediately on entry
 bool fetchInFlight = false;
 
 // Fetch diagnostics for /api/debug/weather: last cycle's per-stage HTTP
-// codes (0 = not run, -100 = begin/connect fail, -101 = parse fail).
+// codes (0 = not run, -100 = begin/connect fail, -101 = parse fail), plus
+// the TLS layer's own words for the last failed connect.
 volatile int dbgGeoCode = 0, dbgOwmCode = 0, dbgMeteoCode = 0;
 volatile uint32_t dbgAttempts = 0, dbgSuccesses = 0;
+char dbgLastErr[96] = "";
 
 // ---- helpers (task side) ----------------------------------------------------
 
@@ -106,10 +115,14 @@ String urlEncode(const char* s) {
 // the stage outcome for the debug surface.
 bool getJson(const String& url, const JsonDocument& filter, JsonDocument& out,
              volatile int& code) {
-#if SMOLBASE_WEATHER_HTTP
-  NetworkClient client;
+  NetworkClient plain;
+#if !SMOLBASE_WEATHER_HTTP
+  BundleClient tls; // built-in ESP x509 bundle (see shim above)
+  bool secure = url.startsWith("https");
+  NetworkClient& client = secure ? tls : plain;
 #else
-  BundleClient client; // built-in ESP x509 bundle (see shim above)
+  bool secure = false;
+  NetworkClient& client = plain;
 #endif
   HTTPClient http;
   http.setTimeout(10000);
@@ -121,9 +134,21 @@ bool getJson(const String& url, const JsonDocument& filter, JsonDocument& out,
   code = http.GET();
   bool ok = false;
   if (code == HTTP_CODE_OK) {
-    ok = deserializeJson(out, http.getStream(),
-                         DeserializationOption::Filter(filter)) == DeserializationError::Ok;
+    // getString(), not getStream(): plain-HTTP responses arrive chunked, and
+    // the raw stream's chunk-size line ("2000\r\n") parses as a complete JSON
+    // number — a silent wrong-answer. Bodies here are ≤2 KB; buffering is
+    // cheaper than a chunked-decoding stream wrapper.
+    String body = http.getString();
+    ok = deserializeJson(out, body, DeserializationOption::Filter(filter)) ==
+         DeserializationError::Ok && !out.isNull();
     if (!ok) code = -101;
+  } else if (code < 0) {
+    int n = snprintf(dbgLastErr, sizeof(dbgLastErr), "%s | ",
+                     HTTPClient::errorToString(code).c_str());
+#if !SMOLBASE_WEATHER_HTTP
+    if (secure && n > 0 && n < (int)sizeof(dbgLastErr))
+      tls.lastError(dbgLastErr + n, sizeof(dbgLastErr) - n); // mbedTLS's words
+#endif
   }
   http.end();
   return ok;
@@ -155,7 +180,7 @@ bool geocode(GeoResult& g) {
   filter["results"][0]["name"] = true;
   filter["results"][0]["country_code"] = true;
   JsonDocument doc;
-  String url = String(SCHEME) + "geocoding-api.open-meteo.com/v1/search?name=" +
+  String url = String(METEO_SCHEME) + "geocoding-api.open-meteo.com/v1/search?name=" +
                urlEncode(fetchArgs.city) + "&count=1&language=en&format=json";
   if (!getJson(url, filter, doc, dbgGeoCode) || doc["results"][0].isNull()) return false;
   snprintf(g.lat, sizeof(g.lat), "%.4f", doc["results"][0]["latitude"].as<double>());
@@ -176,7 +201,7 @@ bool fetchOwm(WeatherData::Reading& r, GeoResult& g) {
   filter["name"] = true;
   JsonDocument doc;
   bool byId = isdigit((unsigned char)fetchArgs.city[0]);
-  String url = String(SCHEME) + "api.openweathermap.org/data/2.5/weather?" +
+  String url = String(OWM_SCHEME) + "api.openweathermap.org/data/2.5/weather?" +
                (byId ? "id=" : "q=") + urlEncode(fetchArgs.city) +
                "&appid=" + fetchArgs.key + "&units=metric&lang=en";
   if (!getJson(url, filter, doc, dbgOwmCode) || doc["main"].isNull()) return false;
@@ -214,7 +239,7 @@ bool fetchOpenMeteo(WeatherData::Reading& r) {
   filter["daily"]["temperature_2m_max"][0] = true;
   filter["daily"]["temperature_2m_min"][0] = true;
   JsonDocument doc;
-  String url = String(SCHEME) + "api.open-meteo.com/v1/forecast?latitude=" + lat +
+  String url = String(METEO_SCHEME) + "api.open-meteo.com/v1/forecast?latitude=" + lat +
                "&longitude=" + lon +
                "&current_weather=true&daily=temperature_2m_max,temperature_2m_min,weathercode"
                "&forecast_days=1&timezone=auto";
@@ -361,6 +386,7 @@ void debugJson(JsonDocument& out) {
   out["lat"] = ConfigStore::getString("wx_lat", "");
   out["lon"] = ConfigStore::getString("wx_lon", "");
   out["msSinceFetch"] = millis() - lastFetchMs;
+  out["lastErr"] = (const char*)dbgLastErr;
   out["heapFree"] = esp_get_free_heap_size();
   out["heapLargest"] = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT); // TLS gate (#64)
 }

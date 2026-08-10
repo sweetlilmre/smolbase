@@ -13,8 +13,8 @@ extern const uint8_t WX_CLOCK96[]; // lv_font_conv bin, 8800 B
 extern const uint8_t WX_SEC40[]; // lv_font_conv bin, 1752 B
 extern const uint8_t WX_CITY22[]; // lv_font_conv bin, 19408 B
 extern const uint8_t WX_DATE15[]; // lv_font_conv bin, 4364 B
-extern const uint8_t WX_BADGE13[]; // lv_font_conv bin, 3724 B
-extern const uint8_t WX_TEXT12[]; // lv_font_conv bin, 3376 B
+extern const uint8_t WX_BADGE16[]; // lv_font_conv bin, 5532 B
+extern const uint8_t WX_TEXT15[]; // lv_font_conv bin, 4400 B
 
 constexpr size_t WX_ICON_COUNT = 9;
 extern const uint8_t WX_ICON_CODES[WX_ICON_COUNT]; // OWM icon-prefix codes
