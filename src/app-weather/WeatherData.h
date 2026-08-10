@@ -7,9 +7,11 @@
 // the only consumer surface: loop() schedules fetches and promotes finished
 // readings under a spinlock; reading()/changed() are main-loop-only.
 //
-// Transport: HTTPS via NetworkClientSecure + the built-in ESP x509 bundle
-// (docs/research/https-weather-fetches.md). Define SMOLBASE_WEATHER_HTTP=1
-// to drop to plain HTTP — the researched fallback position, not a rewrite.
+// Transport: plain HTTP by default — the researched fallback position,
+// adopted after HTTPS was exercised on-device and the pinned core's CA
+// bundle failed X509 verification against both providers node-dependently
+// (see the verdict comment in WeatherData.cpp). Define SMOLBASE_WEATHER_TLS=1
+// to opt the keyed OWM request back into HTTPS via the built-in bundle.
 #pragma once
 #include <Arduino.h>
 #include <ArduinoJson.h>

@@ -31,8 +31,8 @@ constexpr int BADGE_Y = 44, BADGE_H = 24;
 constexpr int MARQ_Y = 72, MARQ_H = 20;
 constexpr int CLOCK_Y = 98, CLOCK_H = 64; // digit ink is 60 px; 4 px slack
 constexpr int SEC_X = 196, SEC_Y = 120;
-constexpr int DATE_Y = 186, DATE_H = 18;
-constexpr int GAUGE_Y = 206, GAUGE_H = 34;
+constexpr int DATE_Y = 180, DATE_H = 18;
+constexpr int GAUGE_Y = 200, GAUGE_H = 34; // up from the bottom bezel (round 3)
 // The marquee sprite is allocated ONCE at begin(), full size, while the heap
 // is unfragmented: a mid-session (re)alloc carves up the largest free block
 // and TLS handshakes (2x ~16.7 KB record buffers) start failing — measured
@@ -235,19 +235,21 @@ void WeatherScreen::drawWeather(lgfx::LovyanGFX& gfx) {
 
   // Gauge row: temp left, humidity right.
   gfx.fillRect(0, GAUGE_Y, W, GAUGE_H, col(COL_BLACK));
-  drawIcon(gfx, WX_GAUGE_TEMP, 8, GAUGE_Y + 2);
-  drawIcon(gfx, WX_GAUGE_HUMI, 122, GAUGE_Y + 7);
+  // x layout (round 3): temp icon in from the bezel; slimmer bars so the
+  // temp label clears the humidity icon and the % label clears the right edge.
+  drawIcon(gfx, WX_GAUGE_TEMP, 12, GAUGE_Y + 2);
+  drawIcon(gfx, WX_GAUGE_HUMI, 130, GAUGE_Y + 7);
   auto bar = [&](int x, float frac, uint32_t c) {
-    gfx.drawRect(x, GAUGE_Y + 9, 56, 14, col(COL_WHITE));
+    gfx.drawRect(x, GAUGE_Y + 9, 50, 14, col(COL_WHITE));
     if (frac < 0) frac = 0;
     if (frac > 1) frac = 1;
-    gfx.fillRect(x + 2, GAUGE_Y + 11, (int)(52 * frac), 10, col(c));
+    gfx.fillRect(x + 2, GAUGE_Y + 11, (int)(46 * frac), 10, col(c));
   };
-  bar(30, (r.tempC + 50.0f) / 100.0f, COL_TEMPBAR); // SmolTV-Pro's -50..50 range
-  bar(146, r.humidity / 100.0f, COL_BADGE_BG);
+  bar(32, (r.tempC + 50.0f) / 100.0f, COL_TEMPBAR); // SmolTV-Pro's -50..50 range
+  bar(152, r.humidity / 100.0f, COL_BADGE_BG);
   gfx.setFont(&fText.font);
   gfx.setTextColor(col(COL_WHITE), col(COL_BLACK));
-  gfx.drawString(r.valid ? WeatherData::fmtTemp(r.tempC) : "--", 92, GAUGE_Y + 11);
+  gfx.drawString(r.valid ? WeatherData::fmtTemp(r.tempC) : "--", 88, GAUGE_Y + 11);
   gfx.drawString(r.valid ? String(r.humidity) + "%" : "--", 206, GAUGE_Y + 11);
 }
 
@@ -273,11 +275,12 @@ void WeatherScreen::rebuildMarquee() {
   // line; tick() tiles it across the band. A line wider than the sprite
   // clips — at 15 px the full line fits MARQ_W_MAX with margin.
   marq.setFont(&fText.font);
-  int w = 0;
-  for (const Seg& s : segs) w += marq.textWidth(s.text);
-  if (w < W) w = W;                    // tiles must at least span the screen
-  if (w > MARQ_W_MAX) w = MARQ_W_MAX;  // clip rather than realloc (heap!)
-  marqWidth = w;
+  // The tile stride must equal the sprite width exactly: a shorter stride
+  // makes each push's black tail erase the start of the NEXT copy, which the
+  // following frame repaints — a flicker on the line's first words (seen
+  // on-device, round 3). Text shorter than the sprite just reads as a gap
+  // between repeats; text longer clips (never happens at 15 px).
+  marqWidth = MARQ_W_MAX;
   marqX = 0;
   marq.fillSprite(col(COL_BLACK));
   marq.setTextDatum(lgfx::top_left);

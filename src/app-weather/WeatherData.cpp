@@ -12,13 +12,13 @@
 #include "../core/Secrets.h"
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
-#if !SMOLBASE_WEATHER_HTTP
+#if SMOLBASE_WEATHER_TLS
 #include <NetworkClientSecure.h>
 #endif
 
 namespace {
 
-#if !SMOLBASE_WEATHER_HTTP
+#if SMOLBASE_WEATHER_TLS
 // First-flight finding (#74): contrary to the research doc, the 3.3.11 core
 // does NOT attach the CA bundle by default — a bare NetworkClientSecure has
 // no verification option and the handshake dies with connect error -1. The
@@ -35,16 +35,20 @@ public:
 };
 #endif
 
-// Transport split (#74 flight finding): OWM carries the API key, so it goes
-// HTTPS via the ESP bundle (its Sectigo chain verifies on-device). The
-// Open-Meteo hosts carry no secret AND intermittently fail bundle
-// verification — Let's Encrypt is mid-transition to 2025 roots the pinned
-// core's bundle predates — so they go plain HTTP, exactly the fallback
-// posture the research doc reserved for verification trouble.
-#if SMOLBASE_WEATHER_HTTP
-constexpr const char* OWM_SCHEME = "http://"; // full-HTTP fallback flag
-#else
+// Transport (#74 flight verdict): plain HTTP by default for BOTH providers.
+// HTTPS was exercised per the charter and hit a real wall: the pinned core's
+// CA bundle fails X509 verification against both providers' served chains
+// node-dependently (Let's Encrypt mid-root-transition for Open-Meteo; OWM's
+// chain verified on some connects and not others) — with heap ruled out
+// (largest block 59 KB at a failing handshake). This is the research doc's
+// stated fallback posture: weather data is not secret, and the OWM key in a
+// query string on the LAN is the accepted cost — SmolTV-Pro's exact stance.
+// Define SMOLBASE_WEATHER_TLS=1 to opt OWM back into HTTPS via the built-in
+// bundle (worth retrying when the platform pin moves to a newer bundle).
+#if SMOLBASE_WEATHER_TLS
 constexpr const char* OWM_SCHEME = "https://";
+#else
+constexpr const char* OWM_SCHEME = "http://";
 #endif
 constexpr const char* METEO_SCHEME = "http://";
 
@@ -93,6 +97,7 @@ bool fetchInFlight = false;
 // the TLS layer's own words for the last failed connect.
 volatile int dbgGeoCode = 0, dbgOwmCode = 0, dbgMeteoCode = 0;
 volatile uint32_t dbgAttempts = 0, dbgSuccesses = 0;
+volatile uint32_t dbgLargestAtFetch = 0; // heap largest block as the cycle began
 char dbgLastErr[96] = "";
 
 // ---- helpers (task side) ----------------------------------------------------
@@ -116,7 +121,7 @@ String urlEncode(const char* s) {
 bool getJson(const String& url, const JsonDocument& filter, JsonDocument& out,
              volatile int& code) {
   NetworkClient plain;
-#if !SMOLBASE_WEATHER_HTTP
+#if SMOLBASE_WEATHER_TLS
   BundleClient tls; // built-in ESP x509 bundle (see shim above)
   bool secure = url.startsWith("https");
   NetworkClient& client = secure ? tls : plain;
@@ -145,7 +150,7 @@ bool getJson(const String& url, const JsonDocument& filter, JsonDocument& out,
   } else if (code < 0) {
     int n = snprintf(dbgLastErr, sizeof(dbgLastErr), "%s | ",
                      HTTPClient::errorToString(code).c_str());
-#if !SMOLBASE_WEATHER_HTTP
+#if SMOLBASE_WEATHER_TLS
     if (secure && n > 0 && n < (int)sizeof(dbgLastErr))
       tls.lastError(dbgLastErr + n, sizeof(dbgLastErr) - n); // mbedTLS's words
 #endif
@@ -266,6 +271,7 @@ void fetchTaskFn(void*) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     dbgAttempts = dbgAttempts + 1;
     dbgGeoCode = dbgOwmCode = dbgMeteoCode = 0; // 0 = stage not run this cycle
+    dbgLargestAtFetch = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
     WeatherData::Reading r;
     GeoResult g = {};
     if (fetchArgs.geocode) geocode(g); // failure falls through: OWM may still answer a name
@@ -294,8 +300,9 @@ namespace WeatherData {
 void begin() {
   geoTriedFor = "";
   lastCity = ConfigStore::getString("city", "Durban");
-  // TLS handshake work happens heap-side, but mbedTLS still wants real stack.
-  xTaskCreate(fetchTaskFn, "wx_fetch", 12288, nullptr, 1, &fetchTask);
+  // TLS work is heap-side; 8 KB of stack suffices for HTTPClient + mbedTLS
+  // callbacks, and every KB not parked here is TLS handshake headroom.
+  xTaskCreate(fetchTaskFn, "wx_fetch", 8192, nullptr, 1, &fetchTask);
 }
 
 void loop() {
@@ -387,6 +394,7 @@ void debugJson(JsonDocument& out) {
   out["lon"] = ConfigStore::getString("wx_lon", "");
   out["msSinceFetch"] = millis() - lastFetchMs;
   out["lastErr"] = (const char*)dbgLastErr;
+  out["largestAtFetch"] = dbgLargestAtFetch;
   out["heapFree"] = esp_get_free_heap_size();
   out["heapLargest"] = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT); // TLS gate (#64)
 }

@@ -107,10 +107,11 @@ size = 40
 
 # Gauge glyphs: these sources pad their ink heavily; trim crops to the ink
 # before scaling so the mark fills the slot (SmolTV-Pro's finding).
-# thermometer-mercury: the classic red-bulb design — the plain "thermometer"
-# artwork didn't match the emoji the layout prototype was approved with.
+# "thermometer" is the red-bulb-in-glass design (the emoji look the prototype
+# was approved with) — it only read badly at the original tiny 12x20 render.
+# "thermometer-mercury" is just the bare mercury column; don't use it.
 [icons.WX_GAUGE_TEMP]
-icon = "thermometer-mercury"
+icon = "thermometer"
 width = 16
 height = 28
 trim = true
