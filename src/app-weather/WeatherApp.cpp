@@ -45,7 +45,11 @@ esp_err_t sendScreenshot(PsychicResponse* res) {
       shot.setPaletteColor(i, SHOT_PAL16[i] >> 16, (SHOT_PAL16[i] >> 8) & 0xff,
                            SHOT_PAL16[i] & 0xff);
   }
+  // Freeze the live tick: both renders walk the same stateful font wrappers.
+  s_screen->pause(true);
+  vTaskDelay(pdMS_TO_TICKS(50)); // let an in-flight tick finish
   s_screen->renderTo(shot);
+  s_screen->pause(false);
 
   File f = LittleFS.open("/shot.bmp", "w");
   if (!f) {
@@ -161,6 +165,16 @@ public:
     });
     server.on("/api/debug/screenshot", HTTP_GET, [](PsychicRequest*, PsychicResponse* res) {
       return sendScreenshot(res);
+    });
+    // Font metric probe: the WX_CLOCK96 bin carries adv=37 for '0' (verified
+    // host-side); if the loader reports way less here, the BFF advance path
+    // is the corruption. Uses a throwaway 8x8 sprite as the metric context.
+    server.on("/api/debug/fonts", HTTP_GET, [](PsychicRequest*, PsychicResponse* res) {
+      JsonDocument doc;
+      WeatherScreen::fontProbe(doc);
+      String out;
+      serializeJson(doc, out);
+      return res->send(200, "application/json", out.c_str());
     });
   }
 

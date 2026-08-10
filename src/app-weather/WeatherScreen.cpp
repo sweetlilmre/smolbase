@@ -109,7 +109,7 @@ void WeatherScreen::onEnter(lgfx::LGFX_Device& gfx) {
 void WeatherScreen::onTap() { WeatherData::forceRefresh(); }
 
 void WeatherScreen::tick(lgfx::LGFX_Device& gfx) {
-  if (parked) return; // OtaStarting: .rodata reads during a flash write can panic
+  if (parked || paused) return; // OTA park, or a debug screenshot in flight
   if (weatherDirty) {
     weatherDirty = false;
     drawWeather(gfx);
@@ -155,6 +155,29 @@ void WeatherScreen::renderTo(lgfx::LovyanGFX& g) {
   drawDate(g);
   if (marqWidth > 0)
     for (int x = marqX; x < W; x += marqWidth) marq.pushSprite(&g, x, MARQ_Y);
+}
+
+void WeatherScreen::fontProbe(JsonDocument& out) {
+  lgfx::LGFX_Sprite probe;
+  probe.setColorDepth(8);
+  probe.createSprite(8, 8); // metric context only; nothing is drawn
+  struct Sample {
+    const char* name;
+    Face* face;
+    const char* text;
+  };
+  const Sample samples[] = {
+      {"clock96_0", &fClock, "0"},       {"clock96_x10", &fClock, "0000000000"},
+      {"clock96_1805", &fClock, "18:05"},{"sec40_00", &fSec, "00"},
+      {"city22_Durban", &fCity, "Durban"}, {"badge13_Rain", &fBadge, "Rain"},
+      {"text12_marq", &fText, "Lowest 17"}, {"date15", &fDate, "10/08/2026"},
+  };
+  for (const Sample& s : samples) {
+    probe.setFont(&s.face->font);
+    out[s.name] = probe.textWidth(s.text);
+    out[String(s.name) + "_h"] = probe.fontHeight();
+  }
+  probe.deleteSprite();
 }
 
 // ---- element painters --------------------------------------------------------

@@ -1,4 +1,4 @@
-# sha256 of every fetched input — build_assets.py hard-errors on drift.
+# sha256 of every fetched input â€” build_assets.py hard-errors on drift.
 "clear-day.svg" = "05ec57e3bf50c723dd83849e24de2ddd91ee49fb7c72c3a80e4061eb723cacde"
 "cloudy.svg" = "ea7a657582d65aa1783672d99830e44ee628b90b8083f0882601ea3cac6c5436"
 "drizzle.svg" = "548b0cabeaa9e5c55e15b5867c4fee085797c9fba5e2fcc666edde7bcbf02571"

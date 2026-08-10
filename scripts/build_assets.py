@@ -65,8 +65,12 @@ def render_font(name: str, ttf: Path, spec: dict) -> bytes:
     npx = shutil.which("npx") or shutil.which("npx.cmd")
     if not npx:
         sys.exit("npx not found — node is required for lv_font_conv")
+    # --no-compress: first flight (#74) showed LovyanGFX 1.2.26's BFF RLE
+    # decode double-striking glyphs; raw bits render correctly and cost only
+    # ~15 KB more flash. The research doc named this exact fallback switch.
     cmd = [npx, "--yes", LV_FONT_CONV, "--font", str(ttf), "--size", str(spec["size"]),
-           "--bpp", "4", "-r", spec["range"], "--format", "bin", "-o", str(out)]
+           "--bpp", "4", "-r", spec["range"], "--format", "bin", "--no-compress",
+           "-o", str(out)]
     if not spec.get("kerning", True):
         cmd.append("--no-kerning")
     print(f"  lv_font_conv {name} ({spec['size']} px, {spec['range']})")
