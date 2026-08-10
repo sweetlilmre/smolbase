@@ -419,11 +419,11 @@ public:
         "These render here for free — registering a setting is all it takes. "
         "The landing page shows the other path: a custom UI over the same "
         "values. Apps with their own UI can suppress this tab entirely.");
-    ConfigStore::registerString(SettingSection::App, "col_hour", "Clock hour color", "#ffffff");
-    ConfigStore::registerString(SettingSection::App, "col_min", "Clock minute color", "#ffffff");
-    ConfigStore::registerString(SettingSection::App, "col_colon", "Clock colon color", "#ffffff");
-    ConfigStore::registerString(SettingSection::App, "col_host", "Hostname color", "#ffffff");
-    ConfigStore::registerString(SettingSection::App, "col_ip", "IP address color", "#ffffff");
+    ConfigStore::registerColor(SettingSection::App, "col_hour", "Clock hour color", "#ffffff");
+    ConfigStore::registerColor(SettingSection::App, "col_min", "Clock minute color", "#ffffff");
+    ConfigStore::registerColor(SettingSection::App, "col_colon", "Clock colon color", "#ffffff");
+    ConfigStore::registerColor(SettingSection::App, "col_host", "Hostname color", "#ffffff");
+    ConfigStore::registerColor(SettingSection::App, "col_ip", "IP address color", "#ffffff");
 #if SMOLBASE_FRAMEBUFFER == SMOLBASE_FB_PALETTE_8
     ConfigStore::registerBool(SettingSection::App, "boing", "Boing ball", true);
     screen.begin();

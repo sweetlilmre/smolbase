@@ -46,6 +46,14 @@ static SettingDef* addEntry(SettingSection s, SettingType t, const char* key, co
 // "tz" stores the POSIX value, "tz_name" the IANA label the user picked.
 static String labelKey(const char* key) { return String(key) + "_name"; }
 
+// "#RRGGBB", case-insensitive — the exact format <input type="color"> emits.
+static bool isHexColor(const char* s) {
+  if (!s || s[0] != '#' || strlen(s) != 7) return false;
+  for (int i = 1; i < 7; ++i)
+    if (!isxdigit((unsigned char)s[i])) return false;
+  return true;
+}
+
 bool registerString(SettingSection s, const char* key, const char* label, const char* def) {
   SettingDef* d = addEntry(s, SettingType::String, key, label);
   if (!d) return false;
@@ -95,6 +103,14 @@ bool registerChoiceUrl(SettingSection s, const char* key, const char* label,
   return true;
 }
 
+bool registerColor(SettingSection s, const char* key, const char* label, const char* def) {
+  if (!isHexColor(def)) return false;
+  SettingDef* d = addEntry(s, SettingType::Color, key, label);
+  if (!d) return false;
+  d->defStr = def;
+  return true;
+}
+
 // App-tab presentation (stance A', ticket #34). Boot-time writes like
 // registration; read from the httpd task only via schemaToJson (under Guard).
 static const char* appNoteStr = nullptr;
@@ -136,6 +152,11 @@ void schemaToJson(JsonDocument& out) {
     switch (d.type) {
       case SettingType::String:
         o["type"] = "string";
+        o["default"] = d.defStr;
+        o["value"] = doc[d.key] | d.defStr;
+        break;
+      case SettingType::Color:
+        o["type"] = "color";
         o["default"] = d.defStr;
         o["value"] = doc[d.key] | d.defStr;
         break;
@@ -181,6 +202,16 @@ bool applyJson(JsonObjectConst src) {
       case SettingType::String: {
         if (!v.is<const char*>()) break;
         const char* nv = v.as<const char*>();
+        const char* cur = doc[d.key] | d.defStr;
+        if (strcmp(cur, nv) != 0) { doc[d.key] = nv; changed = true; }
+        break;
+      }
+      case SettingType::Color: {
+        // Like String, but a malformed value is rejected (type mismatch),
+        // keeping the store parseable by hexRgb-style consumers.
+        if (!v.is<const char*>()) break;
+        const char* nv = v.as<const char*>();
+        if (!isHexColor(nv)) break;
         const char* cur = doc[d.key] | d.defStr;
         if (strcmp(cur, nv) != 0) { doc[d.key] = nv; changed = true; }
         break;

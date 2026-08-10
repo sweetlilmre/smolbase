@@ -141,6 +141,7 @@ serving) via `src/core/ConfigStore.h`:
 ConfigStore::registerString(SettingSection::App, "city",  "Weather city", "London");
 ConfigStore::registerInt   (SettingSection::App, "poll",  "Poll interval (min)", 15, 1, 120);
 ConfigStore::registerBool  (SettingSection::App, "metric", "Metric units", true);
+ConfigStore::registerColor (SettingSection::App, "accent", "Accent color", "#00d0ff");
 
 // Pick-from-a-catalog settings: the user chooses by LABEL, your code reads the
 // VALUE, and both persist (value under "mode", label under the derived
@@ -394,7 +395,7 @@ The app glues the screen to the system — and registers its settings:
 ```cpp
 void setup() override {
   ConfigStore::setAppNote("These render here for free — ..."); // blurb atop the App tab
-  ConfigStore::registerString(SettingSection::App, "col_hour", "Clock hour color", "#ffffff");
+  ConfigStore::registerColor(SettingSection::App, "col_hour", "Clock hour color", "#ffffff");
   // ... col_min, col_colon, col_host, col_ip likewise ...
   ConfigStore::registerBool(SettingSection::App, "boing", "Boing ball", true);
   screen.begin();               // pre-render the ball
@@ -412,11 +413,12 @@ Those registrations are the whole app/config/html triangle in action.
 repaint, so a change lands on the panel live via `SettingsChanged`.
 **Config**: the values persist in `settings.json` and ride the standard
 `GET`/`POST /api/settings` contract — the settings UI's App tab renders all
-six automatically, the bool as a checkbox. **HTML**: `html/index.html` renders
-the same six a second time as a custom skin — a color picker for every
-app-section string setting holding a `#RRGGBB` value, a Behaviour toggle for
-every app-section bool; register a seventh setting and it appears in both
-places with zero HTML changes. That duplication is deliberate: the App tab is
+six automatically, colors as pickers, the bool as a checkbox. **HTML**:
+`html/index.html` renders the same six a second time as a custom skin — a
+color picker for every app-section color setting, a Behaviour toggle for
+every app-section bool, driven by the schema's `type` (never by sniffing
+values); register a seventh setting and it appears in both places with zero
+HTML changes. That duplication is deliberate: the App tab is
 the free UI registration buys (its `setAppNote()` blurb says so on the page),
 index.html is the hand-built one, and both read and write the identical
 contract — your app keeps whichever suits it, or suppresses the tab and keeps

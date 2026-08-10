@@ -17,7 +17,7 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 
-enum class SettingType : uint8_t { String, Int, Bool, Choice };
+enum class SettingType : uint8_t { String, Int, Bool, Choice, Color };
 enum class SettingSection : uint8_t { System, App };
 
 // One option of a Choice setting: the user picks by label, the machine
@@ -66,6 +66,11 @@ bool registerChoice(SettingSection s, const char* key, const char* label,
 bool registerChoiceUrl(SettingSection s, const char* key, const char* label,
                        const char* defLabel, const char* defValue,
                        const char* optionsUrl);
+
+// Color settings (ticket #58): stored as the "#RRGGBB" string an
+// <input type="color"> speaks; the served UIs render a picker on the type
+// (never by sniffing string values), and applyJson rejects malformed values.
+bool registerColor(SettingSection s, const char* key, const char* label, const char* def);
 
 // ---- App-section presentation (stance A', ticket #34) ----
 // The note renders at the top of the stock settings page's App tab; the

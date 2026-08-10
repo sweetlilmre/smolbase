@@ -109,10 +109,7 @@ function renderField(s) {
         min="${s.min}" max="${s.max}" value="${s.value}">
       <p class="hint">${s.min} – ${s.max}</p></div>`;
   }
-  if (s.type === "string" && /^#[0-9a-f]{6}$/i.test(s.value)) {
-    // Same convention as index.html's picker panel: a #RRGGBB string renders
-    // as a native color input (pattern-sniffed until ticket #58 gives color a
-    // first-class type).
+  if (s.type === "color") {
     return `<div class="field"><label for="${id}">${esc(s.label)}</label>
       <input type="color" id="${id}" data-key="${esc(s.key)}" data-type="string" value="${esc(s.value)}"></div>`;
   }

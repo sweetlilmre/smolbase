@@ -21,11 +21,11 @@ SETTINGS = [
     ("system", "hostname", "string", "Hostname", "", None, None),
     ("system", "ntp", "string", "NTP server", "pool.ntp.org", None, None),
     ("system", "brightness", "int", "Brightness", 200, 0, 255),
-    ("app", "col_hour", "string", "Clock hour color", "#ffffff", None, None),
-    ("app", "col_min", "string", "Clock minute color", "#ffffff", None, None),
-    ("app", "col_colon", "string", "Clock colon color", "#ffffff", None, None),
-    ("app", "col_host", "string", "Hostname color", "#ffffff", None, None),
-    ("app", "col_ip", "string", "IP address color", "#ffffff", None, None),
+    ("app", "col_hour", "color", "Clock hour color", "#ffffff", None, None),
+    ("app", "col_min", "color", "Clock minute color", "#ffffff", None, None),
+    ("app", "col_colon", "color", "Clock colon color", "#ffffff", None, None),
+    ("app", "col_host", "color", "Hostname color", "#ffffff", None, None),
+    ("app", "col_ip", "color", "IP address color", "#ffffff", None, None),
     ("app", "boing", "bool", "Boing ball", True, None, None),
 ]
 

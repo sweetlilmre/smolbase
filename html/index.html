@@ -1,11 +1,11 @@
 <!doctype html>
-<!-- Landing page AND the StockApp demo config: any app-section string setting
-     holding a #RRGGBB value renders as a live color picker, any app-section
-     bool as a Behaviour toggle — change one and the panel repaints via
-     SettingsChanged. This is the "html" corner of the app/config/html
-     extension-surface triangle (see docs/building-your-app.md), and the
-     custom-skin half of the two-skins exhibit (stance A', ticket #34): the
-     settings page's App tab renders the same values as the free skin. -->
+<!-- Landing page AND the StockApp demo config: any app-section color setting
+     renders as a live color picker, any app-section bool as a Behaviour
+     toggle — change one and the panel repaints via SettingsChanged. This is
+     the "html" corner of the app/config/html extension-surface triangle (see
+     docs/building-your-app.md), and the custom-skin half of the two-skins
+     exhibit (stance A', ticket #34): the settings page's App tab renders the
+     same values as the free skin. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -44,10 +44,10 @@ fetch("/api/status").then(r => r.json()).then(s => {
     `${s.name}.local · ${s.ip} · ${Math.round(s.heapFree / 1024)} kB heap free`;
 }).catch(() => document.getElementById("status").textContent = "api unreachable");
 
-// Render a picker for every app-section string setting that holds a #RRGGBB
-// value, and a Behaviour toggle for every app-section bool. Generic on
-// purpose: register another color or bool in StockApp::setup() and it appears
-// here with zero HTML changes.
+// Render a picker for every app-section color setting and a Behaviour toggle
+// for every app-section bool — driven by the schema's type (ticket #58), not
+// by sniffing values. Generic on purpose: register another color or bool in
+// StockApp::setup() and it appears here with zero HTML changes.
 fetch("/api/settings").then(r => r.json()).then(j => {
   const msg = document.getElementById("cfgmsg");
   const saveOne = (s, value) => postSettings({ [s.key]: value })
@@ -64,7 +64,7 @@ fetch("/api/settings").then(r => r.json()).then(j => {
   };
 
   const app = (j.settings || []).filter(s => s.section === "app");
-  const colors = app.filter(s => s.type === "string" && /^#[0-9a-f]{6}$/i.test(s.value));
+  const colors = app.filter(s => s.type === "color");
   const bools = app.filter(s => s.type === "bool");
   colors.forEach(s => {
     const inp = document.createElement("input");
