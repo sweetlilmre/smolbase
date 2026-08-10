@@ -62,6 +62,25 @@ App& makeApp() {
 }
 ```
 
+### More than one app in the repo
+
+The repo carries two apps — the Boing demo in `src/app/` and the weather
+clock in `src/app-weather/` — and one PlatformIO env per app selects which
+one links. Each env's `build_src_filter` excludes every *other* `src/app*/`
+directory, so exactly one directory provides `makeApp()` per build (two
+selected = duplicate-symbol linker error, zero = missing-symbol; both by
+design). To add your own app, copy the pattern in `platformio.ini`:
+
+```ini
+[env:myapp]
+build_src_filter = +<*> -<app/> -<app-weather/>
+```
+
+put your code in `src/app-myapp/`, and build with `pio run -e myapp`. A bare
+`pio run` (and CI) builds **every** env, so no app in the repo can silently
+rot. `src/core/` and `src/main.cpp` always compile; only the app directory
+swaps.
+
 ## App lifecycle
 
 - **`setup()`** — called once at boot, after every core module (config,
