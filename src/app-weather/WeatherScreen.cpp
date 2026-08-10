@@ -254,8 +254,8 @@ void WeatherScreen::drawWeather(lgfx::LovyanGFX& gfx) {
   gfx.fillRect(0, GAUGE_Y, W, GAUGE_H, col(COL_BLACK));
   // x layout (round 3): temp icon in from the bezel; slimmer bars so the
   // temp label clears the humidity icon and the % label clears the right edge.
-  drawIcon(gfx, WX_GAUGE_TEMP, 12, GAUGE_Y + 2);
-  drawIcon(gfx, WX_GAUGE_HUMI, 130, GAUGE_Y + 7);
+  drawIcon(gfx, WX_GAUGE_TEMP, 10, GAUGE_Y + 2);
+  drawIcon(gfx, WX_GAUGE_HUMI, 130, GAUGE_Y + 5);
   auto bar = [&](int x, float frac, uint32_t c) {
     gfx.drawRect(x, GAUGE_Y + 9, 50, 14, col(COL_WHITE));
     if (frac < 0) frac = 0;

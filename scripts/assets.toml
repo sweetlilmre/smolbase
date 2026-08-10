@@ -38,6 +38,14 @@ base = "https://raw.githubusercontent.com/basmilius/weather-icons/v2.0.0/product
 license_url = "https://raw.githubusercontent.com/basmilius/weather-icons/v2.0.0/LICENSE"
 license = "MIT"
 
+[sources.twemoji]
+# The gauge glyphs are the actual emoji artwork the layout prototype was
+# approved with. Graphics are CC-BY 4.0 (Twemoji's code-vs-graphics split);
+# jdecked/twemoji is the maintained continuation of twitter/twemoji.
+base = "https://raw.githubusercontent.com/jdecked/twemoji/v15.1.0/assets/svg"
+license_url = "https://raw.githubusercontent.com/jdecked/twemoji/v15.1.0/LICENSE-GRAPHICS"
+license = "CC-BY-4.0"
+
 # ---- Fonts (variant C layout, ticket #67 resolution) -------------------------
 
 [fonts.WX_CLOCK96]
@@ -114,20 +122,20 @@ size = 40
 icon = "fog"
 size = 40
 
-# Gauge glyphs: these sources pad their ink heavily; trim crops to the ink
-# before scaling so the mark fills the slot (SmolTV-Pro's finding).
-# "thermometer" is the red-bulb-in-glass design (the emoji look the prototype
-# was approved with) — it only read badly at the original tiny 12x20 render.
-# "thermometer-mercury" is just the bare mercury column; don't use it.
+# Gauge glyphs: the real emoji artworks (Twemoji, CC-BY 4.0) — the ones the
+# layout prototype was approved with; 1f321 leans natively. trim crops to the
+# ink before the aspect-preserving fit.
 [icons.WX_GAUGE_TEMP]
-icon = "thermometer"
-width = 16
+set = "twemoji"
+icon = "1f321"   # thermometer emoji
+width = 20
 height = 28
 trim = true
 [icons.WX_GAUGE_HUMI]
-icon = "humidity"
-width = 18
-height = 18
+set = "twemoji"
+icon = "1f4a7"   # droplet emoji
+width = 16
+height = 20
 trim = true
 
 [order]

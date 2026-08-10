@@ -50,10 +50,18 @@ SIL Open Font License 1.1 — full texts in `docs/licenses/OFL-teko.txt` and
 
 ### Weather-app icons — Meteocons
 
-The condition and gauge artworks in `src/app-weather/assets/wx_assets.*` are
-rasterized from [basmilius/weather-icons](https://github.com/basmilius/weather-icons)
+The nine weather-condition artworks in `src/app-weather/assets/wx_assets.*`
+are rasterized from [basmilius/weather-icons](https://github.com/basmilius/weather-icons)
 (Meteocons, `v2.0.0` tag), MIT License, Copyright (c) 2020-2021 Bas Milius —
 full text in `docs/licenses/MIT-meteocons.txt`.
+
+### Weather-app gauge icons — Twemoji
+
+The thermometer and droplet gauge glyphs are rasterized from the
+[Twemoji](https://github.com/jdecked/twemoji) graphics (`v15.1.0` tag),
+Copyright 2020 Twitter, Inc and other contributors, licensed
+[CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/) — full text in
+`docs/licenses/CC-BY-twemoji.txt`.
 
 ## Linked libraries
 
