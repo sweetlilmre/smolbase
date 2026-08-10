@@ -9,6 +9,7 @@
 #include "core/Display.h"
 #include "core/Events.h"
 #include "core/Net.h"
+#include "core/Ota.h"
 #include "core/Portal.h"
 #include "core/SystemScreens.h"
 #include "core/Touch.h"
@@ -62,5 +63,6 @@ void loop() {
   Touch::loop();
   Display::tick();
   AppHost::loop();
+  Ota::tickRollbackGuard(); // confirm a fresh image after healthy uptime (#76)
   delay(2); // yield to the idle task; keeps the WDT fed without busy-spinning
 }
