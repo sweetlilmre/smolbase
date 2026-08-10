@@ -16,7 +16,6 @@ Needs node/npx on PATH for lv_font_conv. Downloads cache in
 scripts/.assets-cache/ (gitignored); only the emitted sources are committed.
 """
 import hashlib
-import io
 import shutil
 import subprocess
 import sys

@@ -2,7 +2,6 @@
 // centered symmetric composition — bound to the WeatherData layer.
 #pragma once
 #include "../core/App.h"
-#include <ArduinoJson.h>
 #include <LovyanGFX.hpp>
 
 class WeatherScreen : public Screen {
@@ -30,10 +29,6 @@ public:
   // /api/debug/screenshot renders: the panel is write-only, so a screenshot
   // is a re-render, not a read-back.
   void renderTo(lgfx::LovyanGFX& g);
-
-  // /api/debug/fonts: textWidth of known strings per loaded face, compared
-  // against the advances measured in the bin files themselves.
-  static void fontProbe(JsonDocument& out);
 
 private:
   void drawWeather(lgfx::LovyanGFX& gfx); // icon, city, badge, gauges, marquee text

@@ -88,10 +88,6 @@ bool fetchInFlight = false;
 // the TLS layer's own words for the last failed connect.
 volatile int dbgGeoCode = 0, dbgOwmCode = 0, dbgMeteoCode = 0;
 volatile uint32_t dbgAttempts = 0, dbgSuccesses = 0;
-volatile uint32_t dbgLargestAtFetch = 0; // heap largest block as the cycle began
-// Leak-curve probes (#74 heap hunt): largest free block after each stage,
-// plus the all-time heap minimum — where did ~50 KB go after cycle one?
-volatile uint32_t dbgLargestAfter[3] = {0, 0, 0}; // geo, owm, meteo
 char dbgLastErr[96] = "";
 
 // ---- helpers (task side) ----------------------------------------------------
@@ -109,8 +105,8 @@ String urlEncode(const char* s) {
   return out;
 }
 
-// One serial GET → filtered parse → disconnect (research doc: never two TLS
-// connections at once; stream-parse, don't buffer the body). `code` records
+// One serial GET → buffered body → filtered parse → disconnect. Never two
+// connections at once (the TLS peak barely fits as it is). `code` records
 // the stage outcome for the debug surface.
 bool getJson(const String& url, const JsonDocument& filter, JsonDocument& out,
              volatile int& code) {
@@ -265,16 +261,11 @@ void fetchTaskFn(void*) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     dbgAttempts = dbgAttempts + 1;
     dbgGeoCode = dbgOwmCode = dbgMeteoCode = 0; // 0 = stage not run this cycle
-    dbgLargestAtFetch = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
     WeatherData::Reading r;
     GeoResult g = {};
     if (fetchArgs.geocode) geocode(g); // failure falls through: OWM may still answer a name
-    dbgLargestAfter[0] = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
     geoResult = g;                     // task-side scratch for fetchOpenMeteo
-    bool owmOk = fetchArgs.key[0] && fetchOwm(r, g);
-    dbgLargestAfter[1] = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-    bool ok = owmOk || fetchOpenMeteo(r);
-    dbgLargestAfter[2] = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    bool ok = (fetchArgs.key[0] && fetchOwm(r, g)) || fetchOpenMeteo(r);
     if (ok) dbgSuccesses = dbgSuccesses + 1;
     // A geocode that never completed (network-level failure: begin/connect,
     // not an HTTP verdict) must not burn the one-attempt-per-city latch —
@@ -397,14 +388,11 @@ void debugJson(JsonDocument& out) {
   out["lon"] = ConfigStore::getString("wx_lon", "");
   out["msSinceFetch"] = millis() - lastFetchMs;
   out["lastErr"] = (const char*)dbgLastErr;
-  out["largestAtFetch"] = dbgLargestAtFetch;
-  out["largestAfterGeo"] = dbgLargestAfter[0];
-  out["largestAfterOwm"] = dbgLargestAfter[1];
-  out["largestAfterMeteo"] = dbgLargestAfter[2];
-  out["heapMinEver"] = esp_get_minimum_free_heap_size();
-  out["stackMin"] = fetchTask ? uxTaskGetStackHighWaterMark(fetchTask) : 0;
+  // The heap trio that diagnosed the TLS OOM (#74) — cheap, keep: min-ever
+  // near zero means a handshake is scraping bottom again (docs/app-weather-memory.md).
   out["heapFree"] = esp_get_free_heap_size();
-  out["heapLargest"] = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT); // TLS gate (#64)
+  out["heapLargest"] = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  out["heapMinEver"] = esp_get_minimum_free_heap_size();
 }
 
 void onSettingsChanged() {

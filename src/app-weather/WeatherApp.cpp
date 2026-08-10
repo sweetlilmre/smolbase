@@ -166,16 +166,6 @@ public:
     server.on("/api/debug/screenshot", HTTP_GET, [](PsychicRequest*, PsychicResponse* res) {
       return sendScreenshot(res);
     });
-    // Font metric probe: the WX_CLOCK96 bin carries adv=37 for '0' (verified
-    // host-side); if the loader reports way less here, the BFF advance path
-    // is the corruption. Uses a throwaway 8x8 sprite as the metric context.
-    server.on("/api/debug/fonts", HTTP_GET, [](PsychicRequest*, PsychicResponse* res) {
-      JsonDocument doc;
-      WeatherScreen::fontProbe(doc);
-      String out;
-      serializeJson(doc, out);
-      return res->send(200, "application/json", out.c_str());
-    });
   }
 
   void loop() override {

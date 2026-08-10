@@ -3,9 +3,10 @@
 // the panel — no full framebuffer: every element owns a black rectangle it
 // clears and repaints on its own cadence (dirty-flag pattern, ticket #6), and
 // AA text blends toward the drawn background per the asset research. The
-// marquee is the exception: a 16-bpp sprite holding the full line, pushed at
+// marquee is the exception: an 8-bpp sprite holding the full line, tiled at
 // a scrolling offset each frame (LovyanGFX clips to the panel, so only the
-// visible band is transmitted).
+// visible band is transmitted) — and surrendered to the TLS handshake for
+// the duration of each fetch (see suspendMarquee).
 //
 // Fonts are lv_font_conv bin blobs (scripts/build_assets.py) parsed once into
 // static BFFfont instances — LovyanGFX's loadFont() slot holds only one
@@ -182,29 +183,6 @@ void WeatherScreen::renderTo(lgfx::LovyanGFX& g) {
   drawDate(g);
   if (marqWidth > 0)
     for (int x = marqX; x < W; x += marqWidth) marq.pushSprite(&g, x, MARQ_Y);
-}
-
-void WeatherScreen::fontProbe(JsonDocument& out) {
-  lgfx::LGFX_Sprite probe;
-  probe.setColorDepth(8);
-  probe.createSprite(8, 8); // metric context only; nothing is drawn
-  struct Sample {
-    const char* name;
-    Face* face;
-    const char* text;
-  };
-  const Sample samples[] = {
-      {"clock96_0", &fClock, "0"},       {"clock96_x10", &fClock, "0000000000"},
-      {"clock96_1805", &fClock, "18:05"},{"sec40_00", &fSec, "00"},
-      {"city22_Durban", &fCity, "Durban"}, {"badge16_Rain", &fBadge, "Rain"},
-      {"text15_marq", &fText, "Lowest 17"}, {"date15", &fDate, "10/08/2026"},
-  };
-  for (const Sample& s : samples) {
-    probe.setFont(&s.face->font);
-    out[s.name] = probe.textWidth(s.text);
-    out[String(s.name) + "_h"] = probe.fontHeight();
-  }
-  probe.deleteSprite();
 }
 
 // ---- element painters --------------------------------------------------------
