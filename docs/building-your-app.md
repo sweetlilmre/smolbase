@@ -141,6 +141,15 @@ serving) via `src/core/ConfigStore.h`:
 ConfigStore::registerString(SettingSection::App, "city",  "Weather city", "London");
 ConfigStore::registerInt   (SettingSection::App, "poll",  "Poll interval (min)", 15, 1, 120);
 ConfigStore::registerBool  (SettingSection::App, "metric", "Metric units", true);
+
+// Pick-from-a-catalog settings: the user chooses by LABEL, your code reads the
+// VALUE, and both persist (value under "mode", label under the derived
+// "mode_name"). Inline catalogs are validated on save; a catalog too big for
+// flash goes in a served asset instead (registerChoiceUrl — that's how the
+// system timezone works, over /zones.json) and the browser does the lookup.
+static const SettingChoice kModes[] = {{"Compact", "c"}, {"Detailed", "d"}};
+ConfigStore::registerChoice(SettingSection::App, "mode", "Display mode",
+                            "Compact", "c", kModes, 2);
 ```
 
 **The promise: registering = API + persistence + stock UI.** Registered
@@ -153,6 +162,7 @@ core 1:
 ```cpp
 String city = ConfigStore::getString("city"); // falls back to the registered default
 int32_t poll = ConfigStore::getInt("poll");   // ints are clamped to [min,max] on write
+String mode = ConfigStore::getString("mode"); // a choice reads as its machine VALUE
 ```
 
 Keys and labels must be string literals (the registry stores pointers), keys

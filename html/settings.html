@@ -4,8 +4,9 @@
      A pure static asset over the JSON contract (ticket #14): sections and fields
      render from GET /api/settings (schema + values), saves POST a flat value map.
      Swap this file (and repack the filesystem image) to change the UI — zero
-     firmware changes. Timezone dropdown is fed by zones.json (IANA -> POSIX,
-     nayarsystems/posix_tz_db, MIT). -->
+     firmware changes. Choice settings render as dropdowns from a {label: value}
+     catalog, inline or URL-sourced — the timezone is one, fed by zones.json
+     (IANA -> POSIX, nayarsystems/posix_tz_db, MIT). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -66,23 +67,27 @@ function handoff(title, lead, hint, reconnect) {
   if (b) b.addEventListener("click", () => { location.href = reconnect.href; });
 }
 
-let STATUS = {}, ZONES = {}, SCHEMA = [], META = {};
+let STATUS = {}, SCHEMA = [], META = {}, OPTS = {}; // OPTS: optionsUrl -> {label: value}
 
 /* Brightness readout: percentage of the 0–255 firmware range (ticket #43). */
 const briPct = v => +v === 0 ? "off" : Math.max(1, Math.round(v * 100 / 255)) + "%";
 
-/* ---- field renderers (from the schema; "tz" is hidden, "tz_name" becomes the
-   zones.json-backed dropdown, "brightness" gets a slider) ---- */
+/* ---- field renderers (from the schema; "choice" renders a dropdown from its
+   inline or URL-sourced {label: value} catalog, "brightness" gets a slider) ---- */
 function renderField(s) {
   const id = "f_" + s.key;
-  if (s.key === "tz") return ""; // applied POSIX string; staged via the tz_name dropdown
-  if (s.key === "tz_name") {
-    const names = Object.keys(ZONES);
-    if (s.value && !ZONES[s.value]) names.unshift(s.value); // keep an unknown stored zone selectable
+  if (s.type === "choice") {
+    // A choice pairs the user's LABEL with the machine's VALUE (ticket #57);
+    // both are POSTed together as {key: value, key_name: label}. An unknown
+    // stored pick (e.g. a zone missing from a newer catalog) stays selectable.
+    const opts = s.options || OPTS[s.optionsUrl] || {};
+    const labels = Object.keys(opts);
+    if (s.valueLabel && !(s.valueLabel in opts)) labels.unshift(s.valueLabel);
     return `<div class="field"><label for="${id}">${esc(s.label)}</label>
-      <select id="${id}" data-key="tz_name" data-type="tz">${names.map(z =>
-        `<option value="${esc(z)}"${z === s.value ? " selected" : ""}>${esc(z)}</option>`).join("")}</select>
-      <p class="hint">${names.length} zones from <span class="mono">zones.json</span>; the matching POSIX rule is saved with it.</p></div>`;
+      <select id="${id}" data-key="${esc(s.key)}" data-type="choice">${labels.map(l =>
+        `<option value="${esc(l in opts ? opts[l] : s.value)}" data-label="${esc(l)}"${
+          l === s.valueLabel ? " selected" : ""}>${esc(l)}</option>`).join("")}</select>
+      ${s.optionsUrl ? `<p class="hint">${labels.length} options from <span class="mono">${esc(s.optionsUrl)}</span>; the matching value is saved with the name.</p>` : ""}</div>`;
   }
   if (s.type === "bool") {
     return `<div class="field"><label style="color:var(--ink)"><input type="checkbox" id="${id}"
@@ -122,7 +127,11 @@ function collect(page) {
     const t = el.dataset.type;
     if (t === "bool") out[el.dataset.key] = el.checked;
     else if (t === "int") out[el.dataset.key] = Math.round(Number(el.value) || 0);
-    else if (t === "tz") { out.tz_name = el.value; if (ZONES[el.value]) out.tz = ZONES[el.value]; }
+    else if (t === "choice") {
+      const o = el.selectedOptions[0];
+      out[el.dataset.key] = el.value;
+      out[el.dataset.key + "_name"] = o ? o.dataset.label : "";
+    }
     else out[el.dataset.key] = el.value;
   });
   return out;
@@ -411,15 +420,20 @@ function render() {
 
 async function init() {
   try {
-    const [st, se, zo] = await Promise.all([
+    const [st, se] = await Promise.all([
       fetch("/api/status").then(r => r.json()),
       fetch("/api/settings").then(r => r.json()),
-      fetch("/zones.json").then(r => r.ok ? r.json() : {}).catch(() => ({})),
     ]);
     STATUS = st || {};
     SCHEMA = (se && se.settings) || [];
     META = { appNote: se && se.appNote, appTabSuppressed: !!(se && se.appTabSuppressed) };
-    ZONES = zo || {};
+    // URL-sourced choice catalogs (e.g. /zones.json for tz): fetch each
+    // distinct URL once; a failed catalog degrades to the stored pick only.
+    const urls = [...new Set(SCHEMA.filter(s => s.type === "choice" && s.optionsUrl)
+      .map(s => s.optionsUrl))];
+    await Promise.all(urls.map(u =>
+      fetch(u).then(r => r.ok ? r.json() : {}).catch(() => ({}))
+        .then(j => { OPTS[u] = j || {}; })));
     render();
   } catch (e) {
     app.innerHTML = `<p class="hint" style="padding:1.5rem 1rem">Failed to load settings — ${esc(e.message)}.

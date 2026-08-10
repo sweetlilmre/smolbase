@@ -38,9 +38,13 @@ static SettingDef* addEntry(SettingSection s, SettingType t, const char* key, co
   if (registryCount >= SMOLBASE_MAX_SETTINGS) return nullptr;
   if (findSettingLocked(key)) return nullptr; // duplicate
   SettingDef& d = registry[registryCount++];
-  d = SettingDef{key, label, t, s, "", 0, false, 0, 0};
+  d = SettingDef{key, label, t, s, "", 0, false, 0, 0, "", nullptr, 0, nullptr};
   return &d;
 }
+
+// A Choice setting's label persists under this derived key (ADR 0002) —
+// "tz" stores the POSIX value, "tz_name" the IANA label the user picked.
+static String labelKey(const char* key) { return String(key) + "_name"; }
 
 bool registerString(SettingSection s, const char* key, const char* label, const char* def) {
   SettingDef* d = addEntry(s, SettingType::String, key, label);
@@ -63,6 +67,31 @@ bool registerBool(SettingSection s, const char* key, const char* label, bool def
   SettingDef* d = addEntry(s, SettingType::Bool, key, label);
   if (!d) return false;
   d->defBool = def;
+  return true;
+}
+
+bool registerChoice(SettingSection s, const char* key, const char* label,
+                    const char* defLabel, const char* defValue,
+                    const SettingChoice* options, uint8_t count) {
+  if (!defLabel || !defValue || !options || count == 0) return false;
+  SettingDef* d = addEntry(s, SettingType::Choice, key, label);
+  if (!d) return false;
+  d->defStr = defValue;
+  d->defLabel = defLabel;
+  d->options = options;
+  d->optionCount = count;
+  return true;
+}
+
+bool registerChoiceUrl(SettingSection s, const char* key, const char* label,
+                       const char* defLabel, const char* defValue,
+                       const char* optionsUrl) {
+  if (!defLabel || !defValue || !optionsUrl) return false;
+  SettingDef* d = addEntry(s, SettingType::Choice, key, label);
+  if (!d) return false;
+  d->defStr = defValue;
+  d->defLabel = defLabel;
+  d->optionsUrl = optionsUrl;
   return true;
 }
 
@@ -122,6 +151,21 @@ void schemaToJson(JsonDocument& out) {
         o["default"] = d.defBool;
         o["value"] = doc[d.key] | d.defBool;
         break;
+      case SettingType::Choice: {
+        o["type"] = "choice";
+        o["default"] = d.defStr;
+        o["defaultLabel"] = d.defLabel;
+        o["value"] = doc[d.key] | d.defStr;
+        o["valueLabel"] = doc[labelKey(d.key)] | d.defLabel;
+        if (d.optionsUrl) {
+          o["optionsUrl"] = d.optionsUrl;
+        } else {
+          JsonObject opts = o["options"].to<JsonObject>();
+          for (uint8_t j = 0; j < d.optionCount; ++j)
+            opts[d.options[j].label] = d.options[j].value;
+        }
+        break;
+      }
     }
   }
 }
@@ -153,6 +197,33 @@ bool applyJson(JsonObjectConst src) {
         if ((doc[d.key] | d.defBool) != nv) { doc[d.key] = nv; changed = true; }
         break;
       }
+      case SettingType::Choice: {
+        // The pair arrives as {key: value, key_name: label}. Inline catalogs
+        // are validated and the label is derived HERE (the catalog is
+        // authoritative, the posted label ignored); URL catalogs live
+        // browser-side, so both halves are trusted as-is — but only as a
+        // pair, a value without its label would desync the display.
+        if (!v.is<const char*>()) break;
+        const char* nv = v.as<const char*>();
+        const char* nl = nullptr;
+        if (d.options) {
+          for (uint8_t j = 0; j < d.optionCount; ++j)
+            if (strcmp(d.options[j].value, nv) == 0) { nl = d.options[j].label; break; }
+        } else {
+          JsonVariantConst lv = src[labelKey(d.key)];
+          if (lv.is<const char*>()) nl = lv.as<const char*>();
+        }
+        if (!nl) break; // not in the catalog / label missing: ignored
+        String lk = labelKey(d.key);
+        const char* curV = doc[d.key] | d.defStr;
+        const char* curL = doc[lk] | d.defLabel;
+        if (strcmp(curV, nv) != 0 || strcmp(curL, nl) != 0) {
+          doc[d.key] = nv;
+          doc[lk] = nl;
+          changed = true;
+        }
+        break;
+      }
     }
   }
   return changed;
@@ -163,7 +234,12 @@ bool applyJson(JsonObjectConst src) {
 // The core's own settings. Section "system" renders above the Consumer's "app"
 // section in the served Settings UI. Blank hostname = auto (smolbase-XXXX).
 static void registerSystemSettings() {
-  registerString(SettingSection::System, "tz", "Timezone (POSIX TZ)", "UTC0");
+  // Timezone is the founding Choice setting (ticket #57): the user picks an
+  // IANA name, the firmware applies the matching POSIX rule. The catalog is
+  // the verbatim upstream zones.json (ticket #5), fetched by the browser —
+  // the firmware never parses it. Persists as "tz" (POSIX) + "tz_name" (IANA).
+  registerChoiceUrl(SettingSection::System, "tz", "Timezone", "Etc/UTC", "UTC0",
+                    "/zones.json");
   registerString(SettingSection::System, "ntp", "NTP server", "pool.ntp.org");
   registerInt(SettingSection::System, "brightness", "Brightness", 200, 0, 255);
   // ".local" is added by mDNS — typing it here would sanitize to "...local".

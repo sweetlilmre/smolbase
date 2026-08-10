@@ -51,10 +51,9 @@ static void kick() {
 }
 
 void begin() {
-  // "tz" (POSIX string) and "ntp" are registered by ConfigStore::begin(); "tz_name"
-  // is the IANA zone the Settings UI picked from zones.json — stored so the UI can
-  // round-trip the dropdown selection. The firmware only ever applies "tz".
-  ConfigStore::registerString(SettingSection::System, "tz_name", "Timezone", "Etc/UTC");
+  // Nothing to register since ticket #57: timezone is a Choice setting owned
+  // by ConfigStore::begin() — "tz" holds the POSIX value the firmware applies,
+  // its derived "tz_name" the IANA label the UI picked from zones.json.
 }
 
 void sync() {

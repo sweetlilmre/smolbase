@@ -17,9 +17,8 @@ PORT = 8123
 
 SETTINGS = [
     # section, key, type, label, default, min, max
+    ("system", "tz", "choice", "Timezone", "UTC0", None, None),
     ("system", "hostname", "string", "Hostname", "", None, None),
-    ("system", "tz_name", "string", "Timezone", "Etc/UTC", None, None),
-    ("system", "tz", "string", "POSIX TZ", "UTC0", None, None),
     ("system", "ntp", "string", "NTP server", "pool.ntp.org", None, None),
     ("system", "brightness", "int", "Brightness", 200, 0, 255),
     ("app", "col_hour", "string", "Clock hour color", "#ffffff", None, None),
@@ -37,6 +36,10 @@ APP_NOTE = ("These render here for free — registering a setting is all it take
             "values. Apps with their own UI can suppress this tab entirely.")
 APP_TAB_SUPPRESSED = False
 values = {s[1]: s[4] for s in SETTINGS}
+# Choice settings (ticket #57) persist as a value + <key>_name label pair; the
+# catalog is a {label: value} map, URL-sourced here like the real tz.
+CHOICES = {"tz": {"optionsUrl": "/zones.json", "defaultLabel": "Etc/UTC"}}
+values["tz_name"] = "Etc/UTC"
 secrets = {}
 scan_started = 0.0
 
@@ -82,6 +85,14 @@ class Handler(BaseHTTPRequestHandler):
                         "default": default, "value": values[key]}
                 if typ == "int":
                     item["min"], item["max"] = mn, mx
+                if typ == "choice":
+                    meta = CHOICES[key]
+                    item["defaultLabel"] = meta["defaultLabel"]
+                    item["valueLabel"] = values.get(key + "_name", meta["defaultLabel"])
+                    if "optionsUrl" in meta:
+                        item["optionsUrl"] = meta["optionsUrl"]
+                    else:
+                        item["options"] = meta["options"]
                 out.append(item)
             doc: dict = {"settings": out}
             if APP_NOTE:

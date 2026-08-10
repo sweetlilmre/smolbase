@@ -17,8 +17,15 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 
-enum class SettingType : uint8_t { String, Int, Bool };
+enum class SettingType : uint8_t { String, Int, Bool, Choice };
 enum class SettingSection : uint8_t { System, App };
+
+// One option of a Choice setting: the user picks by label, the machine
+// consumes the value (ADR 0002). Static-lifetime strings only.
+struct SettingChoice {
+  const char* label;
+  const char* value;
+};
 
 // One registered setting. Keys and labels are stored as pointers: pass string
 // literals (or other static-lifetime strings) only. Keys are flat — no nesting.
@@ -27,11 +34,15 @@ struct SettingDef {
   const char* label;
   SettingType type;
   SettingSection section;
-  const char* defStr; // String type only
+  const char* defStr; // String type: default; Choice type: default VALUE
   int32_t defInt;     // Int type only
   bool defBool;       // Bool type only
   int32_t minInt;     // Int type only, inclusive
   int32_t maxInt;     // Int type only, inclusive
+  const char* defLabel;          // Choice only: label of the default option
+  const SettingChoice* options;  // Choice only: inline catalog (nullptr if URL-sourced)
+  uint8_t optionCount;           // Choice only: inline catalog size
+  const char* optionsUrl;        // Choice only: served asset holding a {label: value} map
 };
 
 namespace ConfigStore {
@@ -42,6 +53,19 @@ bool registerString(SettingSection s, const char* key, const char* label, const 
 bool registerInt(SettingSection s, const char* key, const char* label, int32_t def,
                  int32_t min, int32_t max);
 bool registerBool(SettingSection s, const char* key, const char* label, bool def);
+
+// Choice settings (ticket #57, ADR 0002): the user picks by LABEL, the machine
+// consumes the VALUE, and both persist — as the registered key (value) plus a
+// derived "<key>_name" key (label), since the label→value map need not be
+// reversible. Options are a {label: value} catalog: inline (a static array,
+// validated on apply) or by URL (a served asset the BROWSER fetches — e.g.
+// /zones.json — never parsed by the firmware, so applies are trusted as-is).
+bool registerChoice(SettingSection s, const char* key, const char* label,
+                    const char* defLabel, const char* defValue,
+                    const SettingChoice* options, uint8_t count);
+bool registerChoiceUrl(SettingSection s, const char* key, const char* label,
+                       const char* defLabel, const char* defValue,
+                       const char* optionsUrl);
 
 // ---- App-section presentation (stance A', ticket #34) ----
 // The note renders at the top of the stock settings page's App tab; the
