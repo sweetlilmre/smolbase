@@ -2,15 +2,12 @@
 // weather dashboard onto the smolbase extension surface. Built by
 // [env:weatherclock]; the stock demo in src/app/ stays untouched.
 //
-// Current state: settings schema (#68) + data layer (#70) are real; the
-// Screen is still the #69 placeholder, upgraded just enough to prove the
-// data path on-device. The dashboard visuals land with #71 (after the #67
-// prototype); until then this text readout is deliberately throwaway.
 #include "../core/App.h"
 #include "../core/ConfigStore.h"
 #include "../core/Display.h"
 #include "../core/Secrets.h"
 #include "WeatherData.h"
+#include "WeatherScreen.h"
 #include <Arduino.h>
 
 namespace {
@@ -31,55 +28,8 @@ constexpr SettingChoice WIND_UNITS[] = {{"m/s", "ms"}, {"km/h", "kmh"}, {"mile/h
 constexpr SettingChoice PRESS_UNITS[] = {
     {"hPa", "hpa"}, {"kPa", "kpa"}, {"mmHg", "mmhg"}, {"inHg", "inhg"}};
 
-// Placeholder Screen (#69, data-aware since #70): plain text readout of the
-// latest Reading. Gutted wholesale by the real dashboard (#71).
-class PlaceholderScreen : public Screen {
-  bool dirty = true;
-
-public:
-  void markDirty() { dirty = true; }
-
-  void onEnter(lgfx::LGFX_Device& gfx) override {
-    gfx.fillScreen(TFT_BLACK);
-    dirty = true;
-  }
-
-  void tick(lgfx::LGFX_Device& gfx) override {
-    if (!dirty) return;
-    dirty = false;
-    gfx.fillScreen(TFT_BLACK);
-    gfx.setTextColor(TFT_WHITE, TFT_BLACK);
-    gfx.setTextDatum(lgfx::middle_center);
-    const WeatherData::Reading& r = WeatherData::reading();
-    if (!r.valid) {
-      gfx.setTextSize(2);
-      gfx.drawString("weather clock", 120, 100);
-      gfx.setTextSize(1);
-      gfx.drawString("waiting for first fetch (#70)", 120, 130);
-      return;
-    }
-    String name = ConfigStore::getString("nickname", "");
-    if (!name.length()) name = r.city;
-    gfx.setTextSize(2);
-    gfx.drawString(name + (r.country[0] ? " " + String(r.country) : ""), 120, 60);
-    gfx.drawString(WeatherData::fmtTemp(r.tempC) + "  " + r.condition, 120, 95);
-    gfx.setTextSize(1);
-    gfx.drawString("min " + WeatherData::fmtTemp(r.tempMinC) + "  max " +
-                       WeatherData::fmtTemp(r.tempMaxC),
-                   120, 125);
-    gfx.drawString(WeatherData::fmtWind(r.windMs) + "  " + WeatherData::fmtPress(r.pressureHpa) +
-                       "  " + String(r.humidity) + "%",
-                   120, 145);
-    gfx.drawString(r.keyless ? "source: Open-Meteo (keyless)" : "source: OpenWeatherMap", 120,
-                   175);
-  }
-
-  // Tap = force refresh (charter); long-press stays a no-op.
-  void onTap() override { WeatherData::forceRefresh(); }
-};
-
 class WeatherApp : public App {
-  PlaceholderScreen screen;
+  WeatherScreen screen;
 
 public:
   void setup() override {
@@ -111,19 +61,20 @@ public:
                       "Optional — without a key, weather falls back to Open-Meteo "
                       "(no humidity, pressure, or feels-like).");
     WeatherData::begin();
+    screen.begin();
     Display::setActive(&screen);
   }
 
   void loop() override {
     WeatherData::loop();
-    if (WeatherData::changed()) screen.markDirty();
+    if (WeatherData::changed()) screen.markWeatherDirty();
   }
 
   void onSystemEvent(SysEvent e) override {
     if (e == SysEvent::NetworkUp) WeatherData::forceRefresh();
     if (e == SysEvent::SettingsChanged) {
       WeatherData::onSettingsChanged();
-      screen.markDirty(); // units/colours/formats live-apply from cache
+      screen.loadSettings(); // units/colours/formats live-apply from cache
     }
   }
 };

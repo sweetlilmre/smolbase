@@ -1,0 +1,123 @@
+# Weather dashboard asset manifest (#71, pipeline design docs/research/
+# dashboard-asset-pipeline.md). Frozen fixed point: edit by hand, never
+# regenerated. scripts/build_assets.py turns this into
+# src/app-weather/assets/wx_assets.{h,cpp}.
+#
+# 'weight' is the variable-font axis instance to render at — MUST be set:
+# the upstream variable fonts default to their thinnest axis value.
+# Ranges are lv_font_conv -r syntax. All faces 4 bpp, RLE (tool default).
+
+[meta]
+schema = 1
+
+# Pinned inputs. sha256 lives in assets.lock.toml (written on first fetch;
+# a changed upstream hash afterwards is a hard error).
+[sources.teko]
+url = "https://raw.githubusercontent.com/google/fonts/main/ofl/teko/Teko%5Bwght%5D.ttf"
+license_url = "https://raw.githubusercontent.com/google/fonts/main/ofl/teko/OFL.txt"
+license = "OFL-1.1"
+
+[sources.montserrat]
+url = "https://raw.githubusercontent.com/google/fonts/main/ofl/montserrat/Montserrat%5Bwght%5D.ttf"
+license_url = "https://raw.githubusercontent.com/google/fonts/main/ofl/montserrat/OFL.txt"
+license = "OFL-1.1"
+
+[sources.meteocons]
+# v2.0.0 tag ONLY — main/dev were restructured after the Meteocons rename.
+# At this tag the named fill SVGs live under production/fill/all/.
+base = "https://raw.githubusercontent.com/basmilius/weather-icons/v2.0.0/production/fill/all"
+license_url = "https://raw.githubusercontent.com/basmilius/weather-icons/v2.0.0/LICENSE"
+license = "MIT"
+
+# ---- Fonts (variant C layout, ticket #67 resolution) -------------------------
+
+[fonts.WX_CLOCK96]
+family = "teko"
+weight = 400
+size = 96
+range = "0x30-0x3A"   # digits + colon
+kerning = false
+
+[fonts.WX_SEC40]
+family = "teko"
+weight = 400
+size = 40
+range = "0x30-0x39"
+kerning = false
+
+[fonts.WX_CITY22]
+family = "montserrat"
+weight = 500
+size = 22
+range = "0x20-0x7E,0xA0-0xFF"   # Latin-1: city names carry accents
+kerning = true
+
+[fonts.WX_DATE15]
+family = "montserrat"
+weight = 500
+size = 15
+range = "0x20-0x7E"
+kerning = true
+
+[fonts.WX_BADGE13]
+family = "montserrat"
+weight = 700
+size = 13
+range = "0x20-0x7E"
+kerning = true
+
+[fonts.WX_TEXT12]
+family = "montserrat"
+weight = 500
+size = 12
+range = "0x20-0x7E,0xB0"   # marquee needs the degree sign
+kerning = true
+
+# ---- Icons (4-bit indexed, 15 colors + transparent index 0, AA baked
+# against the black panel) -----------------------------------------------------
+
+# The nine condition artworks, scanned in lock-step with wx_codes below.
+[icons.WX_ICON_01]
+icon = "clear-day"
+size = 40
+[icons.WX_ICON_02]
+icon = "partly-cloudy-day"
+size = 40
+[icons.WX_ICON_03]
+icon = "cloudy"
+size = 40
+[icons.WX_ICON_04]
+icon = "overcast"
+size = 40
+[icons.WX_ICON_09]
+icon = "drizzle"
+size = 40
+[icons.WX_ICON_10]
+icon = "rain"
+size = 40
+[icons.WX_ICON_11]
+icon = "thunderstorms"
+size = 40
+[icons.WX_ICON_13]
+icon = "snow"
+size = 40
+[icons.WX_ICON_50]
+icon = "fog"
+size = 40
+
+# Gauge glyphs: these sources pad their ink heavily; trim crops to the ink
+# before scaling so the mark fills the slot (SmolTV-Pro's finding).
+[icons.WX_GAUGE_TEMP]
+icon = "thermometer"
+width = 12
+height = 20
+trim = true
+[icons.WX_GAUGE_HUMI]
+icon = "humidity"
+width = 14
+height = 14
+trim = true
+
+[order]
+# OWM icon-prefix codes, lock-step with the WX_ICON_* entries above.
+wx_codes = [1, 2, 3, 4, 9, 10, 11, 13, 50]
