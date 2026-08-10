@@ -42,6 +42,6 @@ void onSettingsChanged(); // detects a city change: new geocode + refetch
 // the cached metric reading. SmolTV-Pro's exact display constants.
 String fmtTemp(float c);      // "22°C" / "72°F" (integer)
 String fmtWind(float ms);     // "3.60 m/s" / "12.96 km/h" / "8.05 mile/h"
-String fmtPress(int hpa);     // "1013 hPa" / "101 kPa" / "760 mmHg" / "29 inHg"
+String fmtPress(int hpa);     // "1013 hPa" / "101 kPa" / "760 mmHg" / "30 inHg"
 
 } // namespace WeatherData

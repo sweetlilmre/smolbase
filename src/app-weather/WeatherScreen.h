@@ -6,9 +6,10 @@
 
 class WeatherScreen : public Screen {
 public:
-  void begin();   // load fonts, build the marquee sprite; call once from setup
+  void begin();   // load fonts; call once from setup
   void loadSettings();
   void markWeatherDirty() { weatherDirty = true; }
+  void park() { parked = true; } // OtaStarting: stop touching flash/panel
 
   void onEnter(lgfx::LGFX_Device& gfx) override;
   void tick(lgfx::LGFX_Device& gfx) override;
@@ -32,4 +33,5 @@ private:
   uint32_t lastFrameMs = 0;
   int lastMin = -1, lastSec = -1, lastDay = -1;
   bool weatherDirty = true;
+  bool parked = false;
 };

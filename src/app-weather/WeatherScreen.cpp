@@ -106,6 +106,7 @@ void WeatherScreen::onEnter(lgfx::LGFX_Device& gfx) {
 void WeatherScreen::onTap() { WeatherData::forceRefresh(); }
 
 void WeatherScreen::tick(lgfx::LGFX_Device& gfx) {
+  if (parked) return; // OtaStarting: .rodata reads during a flash write can panic
   if (weatherDirty) {
     weatherDirty = false;
     drawWeather(gfx);
@@ -175,6 +176,7 @@ void WeatherScreen::drawWeather(lgfx::LGFX_Device& gfx) {
   gfx.drawString(cond, W / 2, BADGE_Y + BADGE_H / 2);
   gfx.setTextDatum(lgfx::top_left);
 
+  gfx.fillRect(0, MARQ_Y, W, MARQ_H, c565(COL_BLACK)); // stale marquee pixels
   rebuildMarquee();
 
   // Gauge row: temp left, humidity right.
@@ -197,6 +199,10 @@ void WeatherScreen::drawWeather(lgfx::LGFX_Device& gfx) {
 
 void WeatherScreen::rebuildMarquee() {
   const WeatherData::Reading& r = WeatherData::reading();
+  if (!r.valid) { // no fetch yet: a scroll of zeros would read as data
+    marqWidth = 0; // tick() skips the push; drawWeather cleared the band
+    return;
+  }
   struct Seg {
     String text;
     uint32_t color;

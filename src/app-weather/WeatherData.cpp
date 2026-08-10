@@ -28,6 +28,10 @@ constexpr const char* SCHEME = "https://";
 // lat/lon belong to. The failed-attempt latch is RAM-only: a typo isn't
 // re-queried this boot, but a reboot retries — cheap self-healing.
 String geoTriedFor;
+// The city value as of the last settings pass: onSettingsChanged compares
+// against this — ONLY a city change refetches (#68 Q4); every other save
+// re-renders from cache with no network traffic.
+String lastCity;
 
 // ---- cross-task handoff -----------------------------------------------------
 // The fetch task writes `pending` under the spinlock and flips pendingReady;
@@ -95,32 +99,22 @@ bool getJson(const String& url, const JsonDocument& filter, JsonDocument& out) {
 }
 
 // WMO weathercode → the 9 OWM icon-prefix artworks + local condition text
-// (SmolTV-Pro's exact mapping).
-uint8_t wmoIcon(int c) {
-  if (c == 0) return 1;
-  if (c <= 2) return 2;
-  if (c == 3) return 4;
-  if (c == 45 || c == 48) return 50;
-  if (c >= 51 && c <= 57) return 9;
-  if (c >= 61 && c <= 67) return 10;
-  if (c >= 71 && c <= 77) return 13;
-  if (c >= 80 && c <= 82) return 9;
-  if (c == 85 || c == 86) return 13;
-  if (c >= 95) return 11;
-  return 1;
-}
-const char* wmoText(int c) {
-  if (c == 0) return "Clear";
-  if (c <= 2) return "Partly Cloudy";
-  if (c == 3) return "Overcast";
-  if (c == 45 || c == 48) return "Fog";
-  if (c >= 51 && c <= 57) return "Drizzle";
-  if (c >= 61 && c <= 67) return "Rain";
-  if (c >= 71 && c <= 77) return "Snow";
-  if (c >= 80 && c <= 82) return "Showers";
-  if (c == 85 || c == 86) return "Snow Showers";
-  if (c >= 95) return "Thunderstorm";
-  return "Unknown";
+// (SmolTV-Pro's exact mapping): one table so icon and text can't drift apart.
+// First matching [lo, hi] range wins.
+struct WmoMap {
+  uint8_t lo, hi, icon;
+  const char* text;
+};
+constexpr WmoMap WMO_MAP[] = {
+    {0, 0, 1, "Clear"},        {1, 2, 2, "Partly Cloudy"}, {3, 3, 4, "Overcast"},
+    {45, 48, 50, "Fog"},       {51, 57, 9, "Drizzle"},     {61, 67, 10, "Rain"},
+    {71, 77, 13, "Snow"},      {80, 82, 9, "Showers"},     {85, 86, 13, "Snow Showers"},
+    {95, 255, 11, "Thunderstorm"},
+};
+const WmoMap& wmo(int c) {
+  for (const WmoMap& m : WMO_MAP)
+    if (c >= m.lo && c <= m.hi) return m;
+  return WMO_MAP[0]; // unknown → clear (parity fallback)
 }
 
 bool geocode(GeoResult& g) {
@@ -196,9 +190,9 @@ bool fetchOpenMeteo(WeatherData::Reading& r) {
   if (!getJson(url, filter, doc) || doc["current_weather"].isNull()) return false;
   r.tempC = doc["current_weather"]["temperature"] | 0.0f;
   r.windMs = (doc["current_weather"]["windspeed"] | 0.0f) / 3.6f; // km/h → m/s
-  int code = doc["current_weather"]["weathercode"] | 0;
-  r.iconCode = wmoIcon(code);
-  strlcpy(r.condition, wmoText(code), sizeof(r.condition));
+  const WmoMap& m = wmo(doc["current_weather"]["weathercode"] | 0);
+  r.iconCode = m.icon;
+  strlcpy(r.condition, m.text, sizeof(r.condition));
   r.tempMaxC = doc["daily"]["temperature_2m_max"][0] | 0.0f;
   r.tempMinC = doc["daily"]["temperature_2m_min"][0] | 0.0f;
   r.feelsC = 0; // free tier has none — the three zeros are the keyless tell
@@ -235,6 +229,7 @@ namespace WeatherData {
 
 void begin() {
   geoTriedFor = "";
+  lastCity = ConfigStore::getString("city", "Durban");
   // TLS handshake work happens heap-side, but mbedTLS still wants real stack.
   xTaskCreate(fetchTaskFn, "wx_fetch", 12288, nullptr, 1, &fetchTask);
 }
@@ -259,7 +254,9 @@ void loop() {
       ConfigStore::setString("wx_lon", g.lon);
       ConfigStore::setString("wx_geo_name", g.name);
       ConfigStore::setString("wx_geo_cc", g.cc);
-      ConfigStore::setString("wx_geo_for", ConfigStore::getString("city", "Durban"));
+      // Stamp the city the fetch RAN FOR — reading the live setting here
+      // would mis-tag the cache when the city changes mid-fetch.
+      ConfigStore::setString("wx_geo_for", fetchArgs.city);
       ConfigStore::save();
     }
   }
@@ -301,10 +298,13 @@ bool changed() {
 void forceRefresh() { fetchDue = true; }
 
 void onSettingsChanged() {
-  // A city change invalidates the geocode latch and refetches immediately
-  // (#68 Q4); every other setting re-renders from cache, no fetch.
+  // ONLY a city change refetches (#68 Q4): compare against the value we last
+  // saw, not the geocode cache — so switching back to a cached city still
+  // refetches, a re-saved failed geocode gets its fresh attempt, and unit/
+  // colour saves never touch the network.
   String city = ConfigStore::getString("city", "Durban");
-  if (ConfigStore::getString("wx_geo_for", "") != city && geoTriedFor != city) {
+  if (city != lastCity) {
+    lastCity = city;
     geoTriedFor = "";
     fetchDue = true;
   }
@@ -324,7 +324,7 @@ String fmtWind(float ms) {
   return String(ms, 2) + " m/s";
 }
 
-String fmtPress(int hpa) {
+String fmtPress(int hpa) { // "1013 hPa" / "101 kPa" / "760 mmHg" / "30 inHg"
   String u = unit("unit_press", "hpa");
   if (u == "kpa") return String(hpa / 10) + " kPa";
   if (u == "mmhg") return String((int)lroundf(hpa * 0.75f)) + " mmHg"; // parity constant

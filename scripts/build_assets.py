@@ -194,11 +194,13 @@ def main() -> None:
         c_lines.append(f"const WxIcon {name} = {{ {w}, {h}, {name}_PAL, {name}_DATA }};")
     c_lines.append("")
 
-    (OUT / "wx_assets.h").write_text("\n".join(h_lines), newline="\n")
-    (OUT / "wx_assets.cpp").write_text("\n".join(c_lines), newline="\n")
+    # encoding pinned: without it Windows writes the locale codepage and the
+    # banner's punctuation lands in the repo as mojibake.
+    (OUT / "wx_assets.h").write_text("\n".join(h_lines), newline="\n", encoding="utf-8")
+    (OUT / "wx_assets.cpp").write_text("\n".join(c_lines), newline="\n", encoding="utf-8")
     LOCK.write_text("# sha256 of every fetched input — build_assets.py hard-errors on drift.\n"
                     + "".join(f'"{k}" = "{v}"\n' for k, v in sorted(lock_out.items())),
-                    newline="\n")
+                    newline="\n", encoding="utf-8")
     total = sum(len(b) for b in font_bins.values()) + sum(len(d) + 32 for *_ , d in icons.values())
     print(f"done: {len(font_bins)} fonts + {len(icons)} icons ~= {total // 1024} KB flash "
           f"-> {OUT.relative_to(ROOT)}")
