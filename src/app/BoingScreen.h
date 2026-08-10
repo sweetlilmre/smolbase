@@ -12,7 +12,7 @@
 
 class BoingScreen : public Screen {
   bool dirty = true;
-  bool enabled = true, paused = false, ballOk = false;
+  bool enabled = true, ballOk = false;
   int lastMinute = -1;
   bool colonOn = true;
   uint32_t lastFrameMs = 0;
@@ -39,14 +39,15 @@ class BoingScreen : public Screen {
 
 public:
   void markDirty() { dirty = true; }
-  void togglePause() { paused = !paused; }
 
   void onEnter(lgfx::LGFX_Device&) override;
   void onExit() override;
   void tick(lgfx::LGFX_Device&) override;
-  // Tap pauses/resumes the bounce — touch driving app state. (When the ball is
-  // off it just forces a repaint, the previous demo behavior.)
+  // Touch (ticket #60): tap kicks the ball upward (the boost decays back to
+  // the natural bounce); long press is the physical twin of the settings
+  // UI's "Boing ball" toggle — it flips and persists the setting.
   void onTap() override;
+  void onLongPress() override;
 
   void begin(); // pre-render the ball (boot-time, once)
 };

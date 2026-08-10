@@ -370,7 +370,7 @@ the DRAM segment the 57.6 KB framebuffer already occupies.)
 
 ```cpp
 void tick(lgfx::LGFX_Device&) override {
-  if (enabled && !paused) {
+  if (enabled) {
     if (now - lastFrameMs < FRAME_MS) return; // 30 Hz gate; passes between
     lastFrameMs += FRAME_MS;                  // frames cost microseconds
     stepPhysics();
@@ -379,7 +379,7 @@ void tick(lgfx::LGFX_Device&) override {
     Display::present(); // ~24 ms blocking push — the frame's real cost
     return;
   }
-  // Frozen (paused by tap, or the "boing" setting off): classic dirty-draw —
+  // Frozen (the "boing" setting off — the basic clock): classic dirty-draw —
   // repaint only on settings change, minute rollover, or the colon heartbeat.
   ...
 }
@@ -389,10 +389,13 @@ Both disciplines live in one screen: animation while the ball runs, dirty-draw
 when it's frozen. The colon still blinks at 1 Hz in both modes as visible
 proof the clock is live.
 
-**Touch drives app state**: `onTap()` toggles pause. **The `boing` bool
-setting** (default on) turns the animation off entirely for a calm black
-identity screen — off-by-settings survives reboots, pause-by-tap deliberately
-doesn't.
+**Touch drives app state** (#60): `onTap()` kicks the ball upward — a pure
+physics impulse whose extra energy decays back to the natural bounce over a
+few floor contacts. `onLongPress()` is the physical twin of the settings UI's
+**`boing` bool setting** (default on): it flips and persists the setting via
+`ConfigStore::setBool` + `save()`, riding the same `SettingsChanged` path as a
+web save, so screen and settings pages never disagree. Boing off is the calm
+black identity screen; either surface turns it back on.
 
 The app glues the screen to the system — and registers its settings:
 
