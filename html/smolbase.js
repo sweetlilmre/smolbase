@@ -1,8 +1,8 @@
 /* Shared helpers for smolbase pages (tickets #31/#36). ES5 syntax on purpose —
    the portal runs inside captive-portal webviews of unknown vintage.
-   CONVENTION: only helpers used by 2+ pages live here (esc, the eye toggle);
-   page flows keep their own fetch/error handling. Move something here when a
-   second page needs it, not before.
+   CONVENTION: only helpers used by 2+ pages live here (esc, the eye toggle,
+   setMsg/toast, postSettings); page flows keep their own DOM rendering and
+   error handling. Move something here when a second page needs it, not before.
    NOTE: the firmware-embedded pages (fallback portal, /recover) must stay
    self-contained and never reference this file. */
 "use strict";

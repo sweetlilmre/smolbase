@@ -1,11 +1,11 @@
 /* Shared base for smolbase pages (tickets #31/#36).
    CONVENTION — what belongs here: the theme tokens, the base theme for EVERY
    form control (even ones only one page uses today — a future page gets
-   themed controls for free), and chrome used by 2+ pages (.pw/.eye). What
-   does NOT: page layout, and components with page-specific DOM (the two
-   network lists are deliberately separate designs; toast is settings-only;
-   spinner is portal-only). Move something here when a second page needs it,
-   not before.
+   themed controls for free), and chrome used by 2+ pages (.pw/.eye, .toast —
+   index and settings both toast saves). What does NOT: page layout, and
+   components with page-specific DOM (the two network lists are deliberately
+   separate designs; spinner is portal-only). Move something here when a
+   second page needs it, not before.
    NOTE: the two firmware-embedded pages (fallback portal, /recover in
    src/core/Web.cpp) must NOT reference this file — they exist precisely for
    when the filesystem, and thus this asset, is missing or broken. */
