@@ -50,6 +50,16 @@ constexpr uint32_t FRAME_MS = 33;  // fixed 30 Hz timestep (ticket #47)
 // Spin: two cycle steps per frame ≈ 6.4°/33 ms ≈ 193°/s — the original's rate
 // (one 3.2° step per NTSC vblank at 60 Hz) at our 30 Hz timestep (#54).
 constexpr int SPIN_STEPS = 2;
+constexpr float GRAVITY = 0.30f;         // px/frame² at the fixed timestep
+constexpr float BASE_APEX_Y = 90.0f;     // the natural bounce apex (the boot drop height)
+constexpr int FLOOR_CONTACT_Y = FLOOR_Y - BALL_R + 6; // ball center at floor kiss
+// Tap kick (ticket #60): the upward impulse a tap adds, and how fast that
+// extra energy bleeds off. The bounce is otherwise perfectly elastic, so
+// without the decay a kicked apex would persist forever; instead each floor
+// contact keeps at most DAMP of any rebound speed above the natural one,
+// settling back to the regular bounce in a few hops.
+constexpr float KICK_VY = 4.0f;
+constexpr float KICK_DAMP = 0.85f;
 
 // The original's startup act: draw the tilted checkered sphere ONCE, as palette
 // indices. Per pixel: project onto the front hemisphere, tilt, and apply the
@@ -107,11 +117,17 @@ void BoingScreen::stepPhysics() {
   bx += vx;
   if (bx < BALL_R && vx < 0) { bx = BALL_R; vx = -vx; }
   if (bx > 240 - BALL_R && vx > 0) { bx = 240 - BALL_R; vx = -vx; }
-  vy += 0.30f; // gravity
+  vy += GRAVITY;
   by += vy;
   // The bounce bottoms out on the grid floor (ball bottom kisses the
-  // wall/floor junction), not the screen edge — like the original.
-  if (by > FLOOR_Y - BALL_R + 6 && vy > 0) { by = FLOOR_Y - BALL_R + 6; vy = -vy; } // elastic
+  // wall/floor junction), not the screen edge — like the original. Elastic up
+  // to the natural rebound speed (a fall from BASE_APEX_Y); anything above
+  // that is tap-kick energy (#60) and decays by KICK_DAMP per contact.
+  if (by > FLOOR_CONTACT_Y && vy > 0) {
+    by = FLOOR_CONTACT_Y;
+    const float natural = sqrtf(2.0f * GRAVITY * (FLOOR_CONTACT_Y - BASE_APEX_Y));
+    vy = -(vy <= natural ? vy : fmaxf(natural, vy * KICK_DAMP));
+  }
   if (by < BALL_R && vy < 0) { by = BALL_R; vy = -vy; }
   // Spin follows travel direction, SPIN_STEPS facet stripes per frame.
   cyclePhase = (cyclePhase + (vx > 0 ? SPIN_STEPS : 14 - SPIN_STEPS)) % 14;
@@ -229,7 +245,7 @@ void BoingScreen::tick(lgfx::LGFX_Device&) {
   auto& f = Display::frame();
   uint32_t now = millis();
 
-  if (enabled && !paused) {
+  if (enabled) {
     // Fixed 30 Hz timestep (ticket #47): deterministic ball speed, and the
     // skipped passes between frames keep touch/events responsive. Catch-up
     // scheduling holds the average; a stall >1 frame resets the baseline.
@@ -245,8 +261,8 @@ void BoingScreen::tick(lgfx::LGFX_Device&) {
     return;
   }
 
-  // Frozen (paused or boing off): dirty-draw discipline — repaint only when
-  // the displayed state changes (settings, minute rollover, colon heartbeat).
+  // Frozen (boing off — the basic clock): dirty-draw discipline — repaint only
+  // when the displayed state changes (settings, minute rollover, colon heartbeat).
   time_t tnow = time(nullptr);
   struct tm t;
   localtime_r(&tnow, &t);
@@ -254,15 +270,27 @@ void BoingScreen::tick(lgfx::LGFX_Device&) {
   if (!dirty && t.tm_min == lastMinute && colonNow == colonOn) return;
   if (dirty) loadSettings();
   dirty = false;
-  if (enabled && !paused) { lastFrameMs = 0; return; } // settings re-enabled boing
+  if (enabled) { lastFrameMs = 0; return; } // settings re-enabled boing
   applyCycle(f); // frozen ball keeps its current rotation phase
   drawScene(f);
   Display::present();
 }
 
+// Tap: kick the ball upward (#60) — pure physics, the boost decays back to
+// the natural bounce at the floor. On the basic clock a tap just forces a
+// repaint (the previous demo behavior).
 void BoingScreen::onTap() {
-  if (enabled) togglePause();
+  if (enabled) vy -= KICK_VY;
   else markDirty();
+}
+
+// Long press: the physical twin of the settings UI's "Boing ball" toggle
+// (#60). Flip and persist the setting; save() posts SettingsChanged, which
+// marks the screen dirty and loadSettings() re-reads `enabled` — the exact
+// path a web save takes, so all three surfaces stay in sync.
+void BoingScreen::onLongPress() {
+  ConfigStore::setBool("boing", !ConfigStore::getBool("boing"));
+  ConfigStore::save();
 }
 
 void BoingScreen::begin() {
