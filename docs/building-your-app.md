@@ -5,10 +5,14 @@ Everything your code needs is reached through the types in `src/core/App.h`;
 the vocabulary (App, Screen, Extension Surface, …) is defined in
 [../CONTEXT.md](../CONTEXT.md).
 
-The template ships with `src/app/StockApp.cpp` — a complete worked example that
-touches every hook: the **Boing clock**, an Amiga-Boing-Ball pastiche animated
-through the framebuffer at 30 FPS with the device's identity (IP, hostname,
-NTP time) overlaid. Gut it and replace it; this guide walks its code at the end.
+The template ships with a complete worked example that touches every hook: the
+**Boing clock**, an Amiga-Boing-Ball pastiche animated through the framebuffer
+at 30 FPS with the device's identity (IP, hostname, NTP time) overlaid. One
+file per class so you can gut it piecewise: `src/app/BoingScreen.h/.cpp` (the
+animated screen), `src/app/StockScreen.h/.cpp` (the direct-draw fallback when
+the framebuffer is compiled out), `src/app/StockApp.cpp` (the App glue and the
+`makeApp()` seam), `src/app/hex_color.h` (the shared `#RRGGBB` parser). This
+guide walks the code at the end.
 
 ## The threading rule (read this first)
 
@@ -348,10 +352,10 @@ What that means for your animated screen:
 
 ## The worked example: the Boing clock
 
-`src/app/StockApp.cpp` wires all of the above into one screen: the red/white
-checkered ball bouncing on a purple grid, identity text drop-shadowed over it,
-running at a fixed 30 Hz through `frame()`/`present()`. The parts worth
-stealing:
+`src/app/BoingScreen.cpp` wires all of the above into one screen (with
+`src/app/StockApp.cpp` as the App glue): the red/white checkered ball bouncing
+on a purple grid, identity text drop-shadowed over it, running at a fixed
+30 Hz through `frame()`/`present()`. The parts worth stealing:
 
 **The rotation is palette cycling, not pixels.** The ball is pre-rendered
 *once* at boot into an 8-bpp sprite of palette indices, using the original

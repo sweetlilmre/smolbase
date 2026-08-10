@@ -56,8 +56,8 @@ and a display stack already working — instead of a blank `setup()`.
 5. **Thereafter: OTA** — open `http://smolbase-XXXX.local/settings.html`, set
    timezone and friends, and push future firmware/filesystem builds from the
    Update tab. You never open the case again.
-6. **Make it yours** — replace `src/app/StockApp.cpp` with your own app:
-   [docs/building-your-app.md](docs/building-your-app.md).
+6. **Make it yours** — replace the worked example in `src/app/` with your own
+   app: [docs/building-your-app.md](docs/building-your-app.md).
 
 ## Hardware
 
