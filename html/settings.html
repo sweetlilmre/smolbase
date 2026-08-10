@@ -68,6 +68,7 @@ function handoff(title, lead, hint, reconnect) {
 }
 
 let STATUS = {}, SCHEMA = [], META = {}, OPTS = {}; // OPTS: optionsUrl -> {label: value}
+let SECRETS = {}; // GET /api/secrets: {key: {label, hint, set}} — never values (ADR 0003)
 
 /* Brightness readout: percentage of the 0–255 firmware range (ticket #43). */
 const briPct = v => +v === 0 ? "off" : Math.max(1, Math.round(v * 100 / 255)) + "%";
@@ -137,6 +138,30 @@ function collect(page) {
 /* postSettings() comes from smolbase.js. */
 
 /* ---- non-schema pages ---- */
+
+/* Secrets section (ADR 0003): renders the app-declared Secret Descriptors as
+   write-only rows — input always blank, a set/not-set badge from the
+   existence map, Set posts the value, Clear two-click-arms then posts null.
+   Undeclared entries (no label) are curl-only and never render. */
+const declaredSecrets = () => Object.keys(SECRETS).filter(k => SECRETS[k] && SECRETS[k].label);
+
+function secretsPage() {
+  return `<p class="hint" style="margin:-0.4rem 0 1rem">Write-only: a stored value can be
+    replaced or cleared, but never read back — not by this page, not by anyone on the network.</p>`
+    + declaredSecrets().map((k, i) => {
+      const s = SECRETS[k];
+      return `<div class="field" data-sk="${esc(k)}">
+        <label for="sk${i}">${esc(s.label)} — <span class="mono sk-state">${s.set ? "set ●" : "not set"}</span></label>
+        <div class="pw"><input id="sk${i}" type="password" autocomplete="off"
+          placeholder="${s.set ? "enter a new value to replace" : "enter value"}">
+          <button type="button" class="eye" data-eye="sk${i}" aria-label="Show value">${EYE_OFF}</button></div>
+        ${s.hint ? `<p class="hint">${esc(s.hint)}</p>` : ""}
+        <button class="primary" style="margin-top:0.4rem" data-skset="${esc(k)}">Set</button>
+        <button data-skclear="${esc(k)}"${s.set ? "" : " disabled"}>Clear</button>
+        <p class="msg sk-msg"></p></div>`;
+    }).join("");
+}
+
 function wifiPage() {
   const net = STATUS.apMode
     ? `<p>The device is in <b>setup mode</b>, serving its own access point.</p>`
@@ -203,6 +228,9 @@ function render() {
     sections.push([sec === "system" ? "System" : "App",
       note + items.map(renderField).join(""), true]);
   }
+  // Hidden entirely when the app declares no Secret Descriptors (ADR 0003):
+  // the section is registration-bought UI, like the App tab.
+  if (declaredSecrets().length) sections.push(["Secrets", secretsPage(), false]);
   sections.push(["WiFi", wifiPage(), false]);
   sections.push(["Update", updatePage(), false]);
 
@@ -259,9 +287,54 @@ function render() {
     if (t.id === "fwfile" || t.name === "uptarget") setMsg(document.getElementById("fwmsg"), "");
     if (t.id === "dzconfirm") setMsg(document.getElementById("dzerr"), "");
     if (t.matches("#wflist input")) setMsg(document.getElementById("wfmsg"), "");
+    const skf = t.closest("[data-sk]");
+    if (skf) { const m = skf.querySelector(".sk-msg"); if (m) setMsg(m, ""); }
   };
   app.addEventListener("input", clearOnEdit);
   app.addEventListener("change", clearOnEdit);
+
+  // Secrets (ADR 0003): Set posts {key: value}; Clear arms, then posts
+  // {key: null}. State badges update in place — never a value round-trip.
+  const postSecret = body => fetch("/api/secrets", { method: "POST",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+    .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); });
+  app.querySelectorAll("[data-skset]").forEach(b => b.addEventListener("click", async () => {
+    const field = b.closest("[data-sk]");
+    const inp = field.querySelector("input"), msg = field.querySelector(".sk-msg");
+    if (!inp.value) { setMsg(msg, "Enter a value first.", true); return; }
+    b.disabled = true;
+    try {
+      await postSecret({ [b.dataset.skset]: inp.value });
+      inp.value = "";
+      field.querySelector(".sk-state").textContent = "set ●";
+      field.querySelector("[data-skclear]").disabled = false;
+      setMsg(msg, "");
+      toast("Secret stored");
+    } catch (e) {
+      setMsg(msg, "Store failed — " + e.message, true);
+    }
+    b.disabled = false;
+  }));
+  app.querySelectorAll("[data-skclear]").forEach(b => b.addEventListener("click", async () => {
+    if (!b.dataset.armed) {
+      b.dataset.armed = "1";
+      b.textContent = "Really clear? Click again";
+      return;
+    }
+    const field = b.closest("[data-sk]"), msg = field.querySelector(".sk-msg");
+    b.disabled = true; // stays disabled on success: the key is now not-set
+    try {
+      await postSecret({ [b.dataset.skclear]: null });
+      field.querySelector(".sk-state").textContent = "not set";
+      setMsg(msg, "");
+      toast("Secret cleared");
+    } catch (e) {
+      setMsg(msg, "Clear failed — " + e.message, true);
+      b.disabled = false;
+    }
+    delete b.dataset.armed;
+    b.textContent = "Clear";
+  }));
 
   // firmware / filesystem update
   const upTarget = () => app.querySelector('[name="uptarget"]:checked').value;
@@ -417,11 +490,15 @@ function render() {
 
 async function init() {
   try {
-    const [st, se] = await Promise.all([
+    const [st, se, sk] = await Promise.all([
       fetch("/api/status").then(r => r.json()),
       fetch("/api/settings").then(r => r.json()),
+      // Older firmwares answer {key: true}; boolean entries have no label,
+      // so the Secrets section simply stays hidden there.
+      fetch("/api/secrets").then(r => r.ok ? r.json() : {}).catch(() => ({})),
     ]);
     STATUS = st || {};
+    SECRETS = sk || {};
     SCHEMA = (se && se.settings) || [];
     META = { appNote: se && se.appNote, appTabSuppressed: !!(se && se.appTabSuppressed) };
     // URL-sourced choice catalogs (e.g. /zones.json for tz): fetch each

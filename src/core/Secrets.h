@@ -22,5 +22,15 @@ String get(const char* key);                // "" when absent
 bool set(const char* key, const String& v); // false = NVS write failed (full?)
 bool clear(const char* key);                // true when removed or already absent
 bool has(const char* key);
-void listJson(JsonDocument& out); // {"key": true, ...} — the existence map
+
+// Secret Descriptor (ADR 0003): an App declares a secret it consumes — key,
+// label, hint — and registration buys UI: the stock Settings UI renders one
+// write-only input per descriptor. Call from App::setup with string literals
+// (pointers are kept, not copied). Values are NEVER part of a descriptor.
+void describe(const char* key, const char* label, const char* hint = nullptr);
+
+// {"key": {"label":..., "hint":..., "set":bool}, ...} — descriptors with
+// their set-flags, plus any set-but-undeclared key as {"set":true} (reachable
+// by curl, invisible to the panel). Still never values (ADR 0003).
+void listJson(JsonDocument& out);
 } // namespace Secrets

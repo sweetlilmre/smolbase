@@ -7,6 +7,7 @@
 // settings schema (#68) land on top of this.
 #include "../core/App.h"
 #include "../core/Display.h"
+#include "../core/Secrets.h"
 #include <Arduino.h>
 
 namespace {
@@ -28,7 +29,15 @@ class WeatherApp : public App {
   PlaceholderScreen screen;
 
 public:
-  void setup() override { Display::setActive(&screen); }
+  void setup() override {
+    // The one Secret Descriptor this app consumes (ADR 0003): declaring it
+    // here is all it takes for the Settings UI to grow a Secrets section.
+    // The data layer (#70) reads it back with Secrets::get("owm_api_key").
+    Secrets::describe("owm_api_key", "OpenWeatherMap API key",
+                      "Optional — without a key, weather falls back to Open-Meteo "
+                      "(no humidity, pressure, or feels-like).");
+    Display::setActive(&screen);
+  }
 };
 
 } // namespace

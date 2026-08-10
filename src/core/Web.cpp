@@ -199,9 +199,10 @@ void begin(App& app) {
     return r;
   });
 
-  // Secret store web surface (design: ticket #23). Write-only by
-  // construction: GET returns an existence map, never values; POST accepts a
-  // flat multi-key object where null deletes; nothing is ever echoed back.
+  // Secret store web surface (design: ticket #23; panel contract ADR 0003).
+  // Write-only by construction: GET returns the descriptor map — labels,
+  // hints, set-flags — NEVER values; POST accepts a flat multi-key object
+  // where null deletes; nothing is ever echoed back.
   httpServer.on("/api/secrets", HTTP_GET, [](PsychicRequest*, PsychicResponse* res) {
     JsonDocument doc;
     Secrets::listJson(doc);
