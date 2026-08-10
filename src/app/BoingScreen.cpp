@@ -54,10 +54,11 @@ constexpr float GRAVITY = 0.30f;         // px/frame² at the fixed timestep
 constexpr float BASE_APEX_Y = 90.0f;     // the natural bounce apex (the boot drop height)
 constexpr int FLOOR_CONTACT_Y = FLOOR_Y - BALL_R + 6; // ball center at floor kiss
 // Tap kick (ticket #60): the upward impulse a tap adds, and how fast that
-// extra energy bleeds off. The bounce is otherwise perfectly elastic, so
-// without the decay a kicked apex would persist forever; instead each floor
-// contact keeps at most DAMP of any rebound speed above the natural one,
-// settling back to the regular bounce in a few hops.
+// extra energy bleeds off. Without the decay a kicked apex would persist
+// forever; instead each floor contact keeps at most DAMP of any rebound speed
+// above the natural one, settling back to the regular bounce in a few hops.
+// The rebound never drops below natural, so the bounce always recovers the
+// default apex even when taps sap fall speed (#61).
 constexpr float KICK_VY = 4.0f;
 constexpr float KICK_DAMP = 0.85f;
 
@@ -120,13 +121,15 @@ void BoingScreen::stepPhysics() {
   vy += GRAVITY;
   by += vy;
   // The bounce bottoms out on the grid floor (ball bottom kisses the
-  // wall/floor junction), not the screen edge — like the original. Elastic up
-  // to the natural rebound speed (a fall from BASE_APEX_Y); anything above
-  // that is tap-kick energy (#60) and decays by KICK_DAMP per contact.
+  // wall/floor junction), not the screen edge — like the original. The rebound
+  // is clamped to at least the natural speed (a fall from BASE_APEX_Y): a tap
+  // caught mid-fall bleeds arrival speed, and an elastic bounce would keep
+  // that low apex forever (#61). Anything above natural is tap-kick energy
+  // (#60) and decays by KICK_DAMP per contact.
   if (by > FLOOR_CONTACT_Y && vy > 0) {
     by = FLOOR_CONTACT_Y;
     const float natural = sqrtf(2.0f * GRAVITY * (FLOOR_CONTACT_Y - BASE_APEX_Y));
-    vy = -(vy <= natural ? vy : fmaxf(natural, vy * KICK_DAMP));
+    vy = -fmaxf(natural, vy * KICK_DAMP);
   }
   if (by < BALL_R && vy < 0) { by = BALL_R; vy = -vy; }
   // Spin follows travel direction, SPIN_STEPS facet stripes per frame.
