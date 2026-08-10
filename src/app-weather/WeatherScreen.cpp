@@ -31,14 +31,17 @@ constexpr int SEC_X = 196, SEC_Y = 114;
 constexpr int DATE_Y = 186, DATE_H = 18;
 constexpr int GAUGE_Y = 212, GAUGE_H = 28;
 
-// 24-bit palette (converted per-draw with color888 — raw ints would be read
-// as RGB565 on the 16-bpp panel and come out wrong).
+// 24-bit RGB888 palette constants (see col() below for how LovyanGFX reads them).
 constexpr uint32_t COL_AMBER = 0xfeba00, COL_CYAN = 0x99ffff, COL_GREEN = 0x99ff1f;
 constexpr uint32_t COL_WDAY = 0x87cefa, COL_BADGE_BG = 0x2196f3, COL_TEMPBAR = 0xe53935;
 constexpr uint32_t COL_WHITE = 0xffffff, COL_BLACK = 0x000000;
 const char* const WDAY[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
-uint32_t c565(uint32_t rgb) { return lgfx::color565(rgb >> 16, (rgb >> 8) & 0xff, rgb & 0xff); }
+// LovyanGFX resolves integer color arguments by TYPE: 32-bit ints are RGB888
+// on every target — the 16-bpp panel and the 8-bpp screenshot sprite alike
+// (uint16_t would mean RGB565, uint8_t RGB332). This identity wrapper exists
+// to make that contract visible at each call site.
+constexpr uint32_t col(uint32_t rgb888) { return rgb888; }
 
 // #RRGGBB → 0xRRGGBB (settings store the picker string; bad input = default).
 uint32_t hexRgb(const String& s, uint32_t def) {
@@ -59,7 +62,7 @@ struct Face {
 };
 Face fClock, fSec, fCity, fDate, fBadge, fText;
 
-void drawIcon(lgfx::LGFX_Device& gfx, const WxIcon& ic, int x, int y) {
+void drawIcon(lgfx::LovyanGFX& gfx, const WxIcon& ic, int x, int y) {
   gfx.pushImage(x, y, ic.w, ic.h, (const void*)ic.data, 0u, lgfx::palette_4bit,
                 (const lgfx::rgb565_t*)ic.palette);
 }
@@ -97,8 +100,8 @@ void WeatherScreen::loadSettings() {
 }
 
 void WeatherScreen::onEnter(lgfx::LGFX_Device& gfx) {
-  gfx.setBaseColor(c565(COL_BLACK));
-  gfx.fillScreen(c565(COL_BLACK));
+  gfx.setBaseColor(col(COL_BLACK));
+  gfx.fillScreen(col(COL_BLACK));
   weatherDirty = true;
   lastMin = lastSec = lastDay = -1;
 }
@@ -136,13 +139,31 @@ void WeatherScreen::tick(lgfx::LGFX_Device& gfx) {
   }
 }
 
+// Full repaint into any target (debug screenshots re-render — the panel is
+// write-only). Mutates the same dirty-state the live tick uses; the races
+// with the main loop are benign (worst case: one extra repaint).
+void WeatherScreen::renderTo(lgfx::LovyanGFX& g) {
+  g.setBaseColor(col(COL_BLACK));
+  g.fillScreen(col(COL_BLACK));
+  drawWeather(g);
+  drawClock(g);
+  time_t t = time(nullptr);
+  struct tm tm;
+  localtime_r(&t, &tm);
+  lastSec = tm.tm_sec;
+  drawSeconds(g);
+  drawDate(g);
+  if (marqWidth > 0)
+    for (int x = marqX; x < W; x += marqWidth) marq.pushSprite(&g, x, MARQ_Y);
+}
+
 // ---- element painters --------------------------------------------------------
 
-void WeatherScreen::drawWeather(lgfx::LGFX_Device& gfx) {
+void WeatherScreen::drawWeather(lgfx::LovyanGFX& gfx) {
   const WeatherData::Reading& r = WeatherData::reading();
 
   // Icon + city + badge share the top band; clear it wholesale.
-  gfx.fillRect(0, 0, W, MARQ_Y, c565(COL_BLACK));
+  gfx.fillRect(0, 0, W, MARQ_Y, col(COL_BLACK));
 
   String city = nickname.length() ? nickname : String(r.city);
   if (!city.length()) city = ConfigStore::getString("city", "Durban");
@@ -157,11 +178,11 @@ void WeatherScreen::drawWeather(lgfx::LGFX_Device& gfx) {
   int ccw = r.country[0] ? gfx.textWidth(r.country) + 6 : 0;
   int x0 = (W - cw - ccw) / 2;
   gfx.setFont(&fCity.font);
-  gfx.setTextColor(c565(COL_WHITE), c565(COL_BLACK));
+  gfx.setTextColor(col(COL_WHITE), col(COL_BLACK));
   gfx.drawString(city, x0, CITY_Y);
   if (ccw) {
     gfx.setFont(&fBadge.font);
-    gfx.setTextColor(c565(COL_AMBER), c565(COL_BLACK));
+    gfx.setTextColor(col(COL_AMBER), col(COL_BLACK));
     gfx.drawString(r.country, x0 + cw + 6, CITY_Y + 7);
   }
 
@@ -170,29 +191,29 @@ void WeatherScreen::drawWeather(lgfx::LGFX_Device& gfx) {
   gfx.setFont(&fBadge.font);
   int bw = gfx.textWidth(cond) + 14;
   if (bw < 72) bw = 72;
-  gfx.fillRoundRect((W - bw) / 2, BADGE_Y, bw, BADGE_H, 4, c565(COL_BADGE_BG));
+  gfx.fillRoundRect((W - bw) / 2, BADGE_Y, bw, BADGE_H, 4, col(COL_BADGE_BG));
   gfx.setTextDatum(lgfx::middle_center);
-  gfx.setTextColor(c565(COL_WHITE), c565(COL_BADGE_BG));
+  gfx.setTextColor(col(COL_WHITE), col(COL_BADGE_BG));
   gfx.drawString(cond, W / 2, BADGE_Y + BADGE_H / 2);
   gfx.setTextDatum(lgfx::top_left);
 
-  gfx.fillRect(0, MARQ_Y, W, MARQ_H, c565(COL_BLACK)); // stale marquee pixels
+  gfx.fillRect(0, MARQ_Y, W, MARQ_H, col(COL_BLACK)); // stale marquee pixels
   rebuildMarquee();
 
   // Gauge row: temp left, humidity right.
-  gfx.fillRect(0, GAUGE_Y, W, GAUGE_H, c565(COL_BLACK));
+  gfx.fillRect(0, GAUGE_Y, W, GAUGE_H, col(COL_BLACK));
   drawIcon(gfx, WX_GAUGE_TEMP, 10, GAUGE_Y + 3);
   drawIcon(gfx, WX_GAUGE_HUMI, 128, GAUGE_Y + 6);
-  auto bar = [&](int x, float frac, uint32_t col) {
-    gfx.drawRect(x, GAUGE_Y + 6, 52, 12, c565(COL_WHITE));
+  auto bar = [&](int x, float frac, uint32_t c) {
+    gfx.drawRect(x, GAUGE_Y + 6, 52, 12, col(COL_WHITE));
     if (frac < 0) frac = 0;
     if (frac > 1) frac = 1;
-    gfx.fillRect(x + 2, GAUGE_Y + 8, (int)(48 * frac), 8, c565(col));
+    gfx.fillRect(x + 2, GAUGE_Y + 8, (int)(48 * frac), 8, col(c));
   };
   bar(28, (r.tempC + 50.0f) / 100.0f, COL_TEMPBAR); // SmolTV-Pro's -50..50 range
   bar(146, r.humidity / 100.0f, COL_BADGE_BG);
   gfx.setFont(&fText.font);
-  gfx.setTextColor(c565(COL_WHITE), c565(COL_BLACK));
+  gfx.setTextColor(col(COL_WHITE), col(COL_BLACK));
   gfx.drawString(r.valid ? WeatherData::fmtTemp(r.tempC) : "--", 85, GAUGE_Y + 7);
   gfx.drawString(r.valid ? String(r.humidity) + "%" : "--", 203, GAUGE_Y + 7);
 }
@@ -242,7 +263,7 @@ void WeatherScreen::rebuildMarquee() {
   }
 }
 
-void WeatherScreen::drawClock(lgfx::LGFX_Device& gfx) {
+void WeatherScreen::drawClock(lgfx::LovyanGFX& gfx) {
   time_t t = time(nullptr);
   struct tm tm;
   localtime_r(&t, &tm);
@@ -255,30 +276,30 @@ void WeatherScreen::drawClock(lgfx::LGFX_Device& gfx) {
   snprintf(hs, sizeof(hs), h24 ? "%02d:" : "%d:", hour);
   snprintf(ms, sizeof(ms), "%02d", tm.tm_min);
 
-  gfx.fillRect(0, CLOCK_Y, W, CLOCK_H, c565(COL_BLACK));
+  gfx.fillRect(0, CLOCK_Y, W, CLOCK_H, col(COL_BLACK));
   gfx.setFont(&fClock.font);
   int wh = gfx.textWidth(hs), wm = gfx.textWidth(ms);
   int x0 = (W - wh - wm) / 2;
   gfx.setTextDatum(lgfx::top_left);
-  gfx.setTextColor(c565(colHour), c565(COL_BLACK)); // colon inherits hour color (#67)
+  gfx.setTextColor(col(colHour), col(COL_BLACK)); // colon inherits hour color (#67)
   gfx.drawString(hs, x0, CLOCK_Y);
-  gfx.setTextColor(c565(colMin), c565(COL_BLACK));
+  gfx.setTextColor(col(colMin), col(COL_BLACK));
   gfx.drawString(ms, x0 + wh, CLOCK_Y);
   lastSec = -1; // the seconds label sits inside this band; repaint next tick
 }
 
-void WeatherScreen::drawSeconds(lgfx::LGFX_Device& gfx) {
+void WeatherScreen::drawSeconds(lgfx::LovyanGFX& gfx) {
   if (lastSec < 0) return;
   char s[3];
   snprintf(s, sizeof(s), "%02d", lastSec);
   gfx.setFont(&fSec.font);
   gfx.setTextDatum(lgfx::top_left);
-  gfx.setTextColor(c565(colSec), c565(COL_BLACK));
-  gfx.fillRect(SEC_X, SEC_Y, W - SEC_X, 44, c565(COL_BLACK));
+  gfx.setTextColor(col(colSec), col(COL_BLACK));
+  gfx.fillRect(SEC_X, SEC_Y, W - SEC_X, 44, col(COL_BLACK));
   gfx.drawString(s, SEC_X, SEC_Y);
 }
 
-void WeatherScreen::drawDate(lgfx::LGFX_Device& gfx) {
+void WeatherScreen::drawDate(lgfx::LovyanGFX& gfx) {
   time_t t = time(nullptr);
   struct tm tm;
   localtime_r(&t, &tm);
@@ -286,13 +307,13 @@ void WeatherScreen::drawDate(lgfx::LGFX_Device& gfx) {
   strftime(buf, sizeof(buf), dateFmt.c_str(), &tm);
   const char* wd = WDAY[tm.tm_wday];
 
-  gfx.fillRect(0, DATE_Y, W, DATE_H, c565(COL_BLACK));
+  gfx.fillRect(0, DATE_Y, W, DATE_H, col(COL_BLACK));
   gfx.setFont(&fDate.font);
   int dw = gfx.textWidth(buf), ww = gfx.textWidth(wd);
   int x0 = (W - dw - ww - 6) / 2;
   gfx.setTextDatum(lgfx::top_left);
-  gfx.setTextColor(c565(COL_WHITE), c565(COL_BLACK));
+  gfx.setTextColor(col(COL_WHITE), col(COL_BLACK));
   gfx.drawString(buf, x0, DATE_Y);
-  gfx.setTextColor(c565(COL_WDAY), c565(COL_BLACK));
+  gfx.setTextColor(col(COL_WDAY), col(COL_BLACK));
   gfx.drawString(wd, x0 + dw + 6, DATE_Y);
 }

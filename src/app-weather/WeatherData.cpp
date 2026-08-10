@@ -62,6 +62,11 @@ uint32_t lastFetchMs = 0;
 bool fetchDue = true; // fetch immediately on entry
 bool fetchInFlight = false;
 
+// Fetch diagnostics for /api/debug/weather: last cycle's per-stage HTTP
+// codes (0 = not run, -100 = begin/connect fail, -101 = parse fail).
+volatile int dbgGeoCode = 0, dbgOwmCode = 0, dbgMeteoCode = 0;
+volatile uint32_t dbgAttempts = 0, dbgSuccesses = 0;
+
 // ---- helpers (task side) ----------------------------------------------------
 
 String urlEncode(const char* s) {
@@ -78,8 +83,10 @@ String urlEncode(const char* s) {
 }
 
 // One serial GET → filtered parse → disconnect (research doc: never two TLS
-// connections at once; stream-parse, don't buffer the body).
-bool getJson(const String& url, const JsonDocument& filter, JsonDocument& out) {
+// connections at once; stream-parse, don't buffer the body). `code` records
+// the stage outcome for the debug surface.
+bool getJson(const String& url, const JsonDocument& filter, JsonDocument& out,
+             volatile int& code) {
 #if SMOLBASE_WEATHER_HTTP
   NetworkClient client;
 #else
@@ -88,11 +95,16 @@ bool getJson(const String& url, const JsonDocument& filter, JsonDocument& out) {
   HTTPClient http;
   http.setTimeout(10000);
   http.setConnectTimeout(10000);
-  if (!http.begin(client, url)) return false;
+  if (!http.begin(client, url)) {
+    code = -100;
+    return false;
+  }
+  code = http.GET();
   bool ok = false;
-  if (http.GET() == HTTP_CODE_OK) {
+  if (code == HTTP_CODE_OK) {
     ok = deserializeJson(out, http.getStream(),
                          DeserializationOption::Filter(filter)) == DeserializationError::Ok;
+    if (!ok) code = -101;
   }
   http.end();
   return ok;
@@ -126,7 +138,7 @@ bool geocode(GeoResult& g) {
   JsonDocument doc;
   String url = String(SCHEME) + "geocoding-api.open-meteo.com/v1/search?name=" +
                urlEncode(fetchArgs.city) + "&count=1&language=en&format=json";
-  if (!getJson(url, filter, doc) || doc["results"][0].isNull()) return false;
+  if (!getJson(url, filter, doc, dbgGeoCode) || doc["results"][0].isNull()) return false;
   snprintf(g.lat, sizeof(g.lat), "%.4f", doc["results"][0]["latitude"].as<double>());
   snprintf(g.lon, sizeof(g.lon), "%.4f", doc["results"][0]["longitude"].as<double>());
   strlcpy(g.name, doc["results"][0]["name"] | "", sizeof(g.name));
@@ -148,7 +160,7 @@ bool fetchOwm(WeatherData::Reading& r, GeoResult& g) {
   String url = String(SCHEME) + "api.openweathermap.org/data/2.5/weather?" +
                (byId ? "id=" : "q=") + urlEncode(fetchArgs.city) +
                "&appid=" + fetchArgs.key + "&units=metric&lang=en";
-  if (!getJson(url, filter, doc) || doc["main"].isNull()) return false;
+  if (!getJson(url, filter, doc, dbgOwmCode) || doc["main"].isNull()) return false;
   r.tempC = doc["main"]["temp"] | 0.0f;
   r.tempMinC = doc["main"]["temp_min"] | 0.0f;
   r.tempMaxC = doc["main"]["temp_max"] | 0.0f;
@@ -187,7 +199,7 @@ bool fetchOpenMeteo(WeatherData::Reading& r) {
                "&longitude=" + lon +
                "&current_weather=true&daily=temperature_2m_max,temperature_2m_min,weathercode"
                "&forecast_days=1&timezone=auto";
-  if (!getJson(url, filter, doc) || doc["current_weather"].isNull()) return false;
+  if (!getJson(url, filter, doc, dbgMeteoCode) || doc["current_weather"].isNull()) return false;
   r.tempC = doc["current_weather"]["temperature"] | 0.0f;
   r.windMs = (doc["current_weather"]["windspeed"] | 0.0f) / 3.6f; // km/h → m/s
   const WmoMap& m = wmo(doc["current_weather"]["weathercode"] | 0);
@@ -208,11 +220,14 @@ bool fetchOpenMeteo(WeatherData::Reading& r) {
 void fetchTaskFn(void*) {
   for (;;) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    dbgAttempts = dbgAttempts + 1;
+    dbgGeoCode = dbgOwmCode = dbgMeteoCode = 0; // 0 = stage not run this cycle
     WeatherData::Reading r;
     GeoResult g = {};
     if (fetchArgs.geocode) geocode(g); // failure falls through: OWM may still answer a name
     geoResult = g;                     // task-side scratch for fetchOpenMeteo
     bool ok = (fetchArgs.key[0] && fetchOwm(r, g)) || fetchOpenMeteo(r);
+    if (ok) dbgSuccesses = dbgSuccesses + 1;
     taskENTER_CRITICAL(&lock);
     if (ok) pending = r;
     geoResult = g;
@@ -296,6 +311,30 @@ bool changed() {
 }
 
 void forceRefresh() { fetchDue = true; }
+
+void debugJson(JsonDocument& out) {
+  out["valid"] = current.valid;
+  out["keyless"] = current.keyless;
+  out["city"] = current.city;
+  out["country"] = current.country;
+  out["condition"] = current.condition;
+  out["iconCode"] = current.iconCode;
+  out["tempC"] = current.tempC;
+  out["humidity"] = current.humidity;
+  out["pressureHpa"] = current.pressureHpa;
+  out["attempts"] = dbgAttempts;
+  out["successes"] = dbgSuccesses;
+  out["geoCode"] = dbgGeoCode;     // 0 not run, -100 connect, -101 parse, else HTTP
+  out["owmCode"] = dbgOwmCode;
+  out["meteoCode"] = dbgMeteoCode;
+  out["inFlight"] = fetchInFlight;
+  out["keyPresent"] = Secrets::has("owm_api_key"); // presence only, never the value
+  out["cityCfg"] = ConfigStore::getString("city", "Durban");
+  out["geoFor"] = ConfigStore::getString("wx_geo_for", "");
+  out["lat"] = ConfigStore::getString("wx_lat", "");
+  out["lon"] = ConfigStore::getString("wx_lon", "");
+  out["msSinceFetch"] = millis() - lastFetchMs;
+}
 
 void onSettingsChanged() {
   // ONLY a city change refetches (#68 Q4): compare against the value we last

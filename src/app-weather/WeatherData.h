@@ -12,6 +12,7 @@
 // to drop to plain HTTP — the researched fallback position, not a rewrite.
 #pragma once
 #include <Arduino.h>
+#include <ArduinoJson.h>
 
 namespace WeatherData {
 
@@ -37,6 +38,11 @@ bool changed();           // one-shot: true once after each promoted reading
 
 void forceRefresh();      // tap, or a fetch-relevant settings save
 void onSettingsChanged(); // detects a city change: new geocode + refetch
+
+// Debug surface (#74 flight readiness): the current Reading plus the last
+// fetch cycle's per-stage HTTP codes (0 = stage not run, -100 = begin/
+// connect failed, -101 = 200-but-parse-failed). Never includes the key.
+void debugJson(JsonDocument& out);
 
 // Display formatting per the unit settings (#68 catalog values), applied to
 // the cached metric reading. SmolTV-Pro's exact display constants.
