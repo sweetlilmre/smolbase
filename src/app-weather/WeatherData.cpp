@@ -90,6 +90,17 @@ volatile int dbgGeoCode = 0, dbgOwmCode = 0, dbgMeteoCode = 0;
 volatile uint32_t dbgAttempts = 0, dbgSuccesses = 0;
 char dbgLastErr[96] = "";
 
+// Heap trajectory (#77): captures free + largest-block at each fetch stage.
+// Labels are string literals; array fills on first ~4 cycles then stops.
+struct HeapSnap { const char* label; uint32_t free; uint32_t largest; };
+static HeapSnap snaps[20];
+static uint8_t snapCount = 0;
+inline void addSnap(const char* label) {
+  if (snapCount < 20)
+    snaps[snapCount++] = {label, esp_get_free_heap_size(),
+                          (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)};
+}
+
 // ---- helpers (task side) ----------------------------------------------------
 
 String urlEncode(const char* s) {
@@ -259,13 +270,15 @@ bool fetchOpenMeteo(WeatherData::Reading& r) {
 void fetchTaskFn(void*) {
   for (;;) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    addSnap("pre");
     dbgAttempts = dbgAttempts + 1;
     dbgGeoCode = dbgOwmCode = dbgMeteoCode = 0; // 0 = stage not run this cycle
     WeatherData::Reading r;
     GeoResult g = {};
-    if (fetchArgs.geocode) geocode(g); // failure falls through: OWM may still answer a name
+    if (fetchArgs.geocode) { geocode(g); addSnap("post-geo"); }
     geoResult = g;                     // task-side scratch for fetchOpenMeteo
     bool ok = (fetchArgs.key[0] && fetchOwm(r, g)) || fetchOpenMeteo(r);
+    addSnap("post-fetch");
     if (ok) dbgSuccesses = dbgSuccesses + 1;
     // A geocode that never completed (network-level failure: begin/connect,
     // not an HTTP verdict) must not burn the one-attempt-per-city latch —
@@ -293,6 +306,7 @@ void begin() {
   // never saw more than ~5 KB used, and every KB parked here is heap the
   // ~49 KB TLS peak (measured: heapMinEver 208 B) cannot use.
   xTaskCreate(fetchTaskFn, "wx_fetch", 10240, nullptr, 1, &fetchTask);
+  addSnap("boot"); // baseline after fonts + sprite allocated, before first fetch
 }
 
 void loop() {
@@ -393,6 +407,17 @@ void debugJson(JsonDocument& out) {
   out["heapFree"] = esp_get_free_heap_size();
   out["heapLargest"] = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
   out["heapMinEver"] = esp_get_minimum_free_heap_size();
+  // Stack watermark for the fetch task (words * 4 = bytes; min seen across all cycles).
+  if (fetchTask)
+    out["fetchStackFreeB"] = uxTaskGetStackHighWaterMark(fetchTask) * 4;
+  // Heap trajectory: one entry per addSnap() call, fills on the first ~4 fetch cycles.
+  JsonArray sa = out["snaps"].to<JsonArray>();
+  for (int i = 0; i < snapCount; ++i) {
+    JsonObject s = sa.add<JsonObject>();
+    s["l"] = snaps[i].label;
+    s["f"] = snaps[i].free;
+    s["b"] = snaps[i].largest;
+  }
 }
 
 void onSettingsChanged() {
