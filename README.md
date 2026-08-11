@@ -43,13 +43,23 @@ and a display stack already working — instead of a blank `setup()`.
 
    The platform pin (pioarduino, arduino-esp32 3.3.x / IDF 5.5) and exact
    library pins live in `platformio.ini`.
-3. **First flash** — the board has **no USB-serial bridge**; the first flash
-   goes over the 6-pad internal serial header with any USB-UART adapter. Full
-   walkthrough: [docs/flashing.md](docs/flashing.md).
+3. **Get firmware on the device** — two paths, pick yours:
 
-   ```
-   pio run -t upload -t uploadfs --upload-port COM5
-   ```
+   - **Device already has smolbase** (pre-flashed or previously set up): skip
+     to step 4 if you still need to provision it onto WiFi, or step 5 if it's
+     already on your network. All subsequent firmware and filesystem updates go
+     over OTA — you never open the case again.
+
+   - **Blank device**: the board has **no USB-serial bridge**; the first and
+     only time you'll use serial is right now. Wire a 3.3 V USB-UART adapter
+     to the 6-pad internal header and run:
+
+     ```
+     pio run -t upload -t uploadfs --upload-port COM5
+     ```
+
+     `COM5` is an example — substitute your adapter's actual port (`/dev/ttyUSB0`
+     on Linux/macOS). Full step-by-step: [docs/flashing.md](docs/flashing.md).
 
 4. **Provision** — the screen shows an AP name (`smolbase-XXXX`); join it and
    the captive portal walks you through picking your WiFi network.
