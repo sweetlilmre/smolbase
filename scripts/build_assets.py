@@ -64,11 +64,11 @@ def render_font(name: str, ttf: Path, spec: dict) -> bytes:
     npx = shutil.which("npx") or shutil.which("npx.cmd")
     if not npx:
         sys.exit("npx not found — node is required for lv_font_conv")
-    # --no-compress: first flight (#74) showed LovyanGFX 1.2.26's BFF RLE
-    # decode double-striking glyphs; raw bits render correctly and cost only
-    # ~15 KB more flash. The research doc named this exact fallback switch.
+    # RLE compression re-enabled: #81 identified and patched decode_rle_bitmap
+    # in the pinned LovyanGFX source (bs->bit_pos != bpp → out != 0). Recovers
+    # ~15 KB flash vs the --no-compress workaround.
     cmd = [npx, "--yes", LV_FONT_CONV, "--font", str(ttf), "--size", str(spec["size"]),
-           "--bpp", "4", "-r", spec["range"], "--format", "bin", "--no-compress",
+           "--bpp", "4", "-r", spec["range"], "--format", "bin",
            "-o", str(out)]
     if not spec.get("kerning", True):
         cmd.append("--no-kerning")
