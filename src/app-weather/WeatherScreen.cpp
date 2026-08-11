@@ -161,7 +161,7 @@ void WeatherScreen::resumeMarquee() {
 }
 
 void WeatherScreen::tick(lgfx::LGFX_Device& gfx) {
-  if (parked || paused) return; // OTA park, or a debug screenshot in flight
+  if (parked) return;
   if (weatherDirty) {
     weatherDirty = false;
     drawWeather(gfx);
@@ -198,24 +198,6 @@ void WeatherScreen::tick(lgfx::LGFX_Device& gfx) {
     // Consecutive copies cover the whole band; the panel clips the rest.
     for (int x = marqX; x < W; x += marqWidth) marq.pushSprite(&gfx, x, MARQ_Y);
   }
-}
-
-// Full repaint into any target (debug screenshots re-render — the panel is
-// write-only). Mutates the same dirty-state the live tick uses; the races
-// with the main loop are benign (worst case: one extra repaint).
-void WeatherScreen::renderTo(lgfx::LovyanGFX& g) {
-  g.setBaseColor(col(COL_BLACK));
-  g.fillScreen(col(COL_BLACK));
-  drawWeather(g);
-  drawClock(g);
-  time_t t = time(nullptr);
-  struct tm tm;
-  localtime_r(&t, &tm);
-  lastSec = tm.tm_sec;
-  drawSeconds(g);
-  drawDate(g);
-  if (marqWidth > 0)
-    for (int x = marqX; x < W; x += marqWidth) marq.pushSprite(&g, x, MARQ_Y);
 }
 
 // ---- element painters --------------------------------------------------------

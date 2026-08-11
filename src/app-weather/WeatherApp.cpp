@@ -9,90 +9,9 @@
 #include "WeatherData.h"
 #include "WeatherScreen.h"
 #include <Arduino.h>
-#include <LittleFS.h>
 #include <PsychicHttp.h>
 
 namespace {
-
-// Route handlers are captureless (PsychicHttp callback style in this repo),
-// so the screen they render reaches them through this pointer.
-WeatherScreen* s_screen = nullptr;
-
-// The panel is write-only — a "screenshot" is a re-render into a sprite,
-// encoded as an indexed BMP into LittleFS, served back. Preferred depth is
-// 8 bpp (57.6 KB); when the heap has no block that size (TLS + marquee
-// fragmentation, seen on-device), fall back to a 4-bpp 16-color render —
-// coarse colors, exact geometry, which is what layout debugging needs.
-// Debug-only: runs on the httpd task; races with the live tick are benign.
-
-// The 4-bpp palette: the dashboard's known colors plus a few icon-ish tones;
-// palette targets quantize every draw color to the nearest entry.
-constexpr uint32_t SHOT_PAL16[16] = {0x000000, 0xffffff, 0xfeba00, 0x99ffff, 0x99ff1f, 0x87cefa,
-                                     0x2196f3, 0xe53935, 0xff5a00, 0xff5900, 0x808080, 0x404040,
-                                     0xffd700, 0xffa500, 0x1c355c, 0x9fc7ff};
-
-esp_err_t sendScreenshot(PsychicResponse* res) {
-  lgfx::LGFX_Sprite shot;
-  int bpp = 8;
-  shot.setColorDepth(8);
-  if (!shot.createSprite(240, 240)) {
-    bpp = 4;
-    shot.setColorDepth(4);
-    if (!shot.createSprite(240, 240))
-      return res->send(503, "text/plain", "not enough heap for a screenshot");
-    shot.createPalette();
-    for (int i = 0; i < 16; ++i)
-      shot.setPaletteColor(i, SHOT_PAL16[i] >> 16, (SHOT_PAL16[i] >> 8) & 0xff,
-                           SHOT_PAL16[i] & 0xff);
-  }
-  // Freeze the live tick: both renders walk the same stateful font wrappers.
-  s_screen->pause(true);
-  vTaskDelay(pdMS_TO_TICKS(50)); // let an in-flight tick finish
-  s_screen->renderTo(shot);
-  s_screen->pause(false);
-
-  File f = LittleFS.open("/shot.bmp", "w");
-  if (!f) {
-    shot.deleteSprite();
-    return res->send(500, "text/plain", "LittleFS open failed");
-  }
-  const int entries = 1 << bpp;
-  const uint32_t rowBytes = 240 * bpp / 8; // 240 and 120: both % 4 == 0
-  const uint32_t dataSize = rowBytes * 240;
-  const uint32_t offset = 14 + 40 + entries * 4;
-  uint8_t hdr[54] = {0};
-  hdr[0] = 'B'; hdr[1] = 'M';
-  uint32_t v = offset + dataSize;
-  memcpy(hdr + 2, &v, 4);            // file size
-  memcpy(hdr + 10, &offset, 4);      // pixel data offset
-  v = 40; memcpy(hdr + 14, &v, 4);   // BITMAPINFOHEADER size
-  int32_t d = 240; memcpy(hdr + 18, &d, 4); memcpy(hdr + 22, &d, 4); // w, h
-  hdr[26] = 1; hdr[28] = (uint8_t)bpp; // planes, bpp
-  memcpy(hdr + 34, &dataSize, 4);
-  v = entries; memcpy(hdr + 46, &v, 4); // palette entries
-  f.write(hdr, sizeof(hdr));
-  for (int i = 0; i < entries; ++i) { // palette, BGRA order
-    uint8_t pal[4];
-    if (bpp == 8) { // RGB332 identity
-      pal[0] = (uint8_t)((i & 0x03) * 255 / 3);
-      pal[1] = (uint8_t)(((i >> 2) & 0x07) * 255 / 7);
-      pal[2] = (uint8_t)(((i >> 5) & 0x07) * 255 / 7);
-    } else {
-      pal[0] = SHOT_PAL16[i] & 0xff;
-      pal[1] = (SHOT_PAL16[i] >> 8) & 0xff;
-      pal[2] = SHOT_PAL16[i] >> 16;
-    }
-    pal[3] = 0;
-    f.write(pal, 4);
-  }
-  const uint8_t* fb = (const uint8_t*)shot.getBuffer();
-  for (int y = 239; y >= 0; --y) f.write(fb + y * rowBytes, rowBytes); // bottom-up
-  f.close();
-  shot.deleteSprite();
-
-  PsychicFileResponse file(res, LittleFS, "/shot.bmp");
-  return file.send();
-}
 
 constexpr SettingChoice DATE_FMTS[] = {
     // Values are strftime strings (#68): the firmware formats straight from
@@ -149,12 +68,9 @@ public:
                       "(no humidity, pressure, or feels-like).");
     WeatherData::begin();
     screen.begin();
-    s_screen = &screen;
     Display::setActive(&screen);
   }
 
-  // Debug surface for the OTA-only device (#74): fetch state as JSON, and a
-  // re-rendered screenshot — the write-only panel can't be read back.
   void registerRoutes(PsychicHttpServer& server) override {
     server.on("/api/debug/weather", HTTP_GET, [](PsychicRequest*, PsychicResponse* res) {
       JsonDocument doc;
@@ -162,9 +78,6 @@ public:
       String out;
       serializeJson(doc, out);
       return res->send(200, "application/json", out.c_str());
-    });
-    server.on("/api/debug/screenshot", HTTP_GET, [](PsychicRequest*, PsychicResponse* res) {
-      return sendScreenshot(res);
     });
   }
 

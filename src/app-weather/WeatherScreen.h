@@ -16,20 +16,10 @@ public:
   // freezes off-screen for those few seconds each refresh interval.
   void suspendMarquee();
   void resumeMarquee();
-  // Screenshot capture: the BFFfont faces share stateful PointerWrappers, so
-  // the httpd-task render must not run concurrently with the panel tick —
-  // interleaved seeks garble glyph reads. Reversible, unlike park().
-  void pause(bool p) { paused = p; }
-
   void onEnter(lgfx::LGFX_Device& gfx) override;
   void tick(lgfx::LGFX_Device& gfx) override;
   void onTap() override;      // force weather refresh (charter)
   void onLongPress() override; // show identity overlay for OVERLAY_MS
-
-  // Full repaint into ANY target — the panel or a debug sprite. This is what
-  // /api/debug/screenshot renders: the panel is write-only, so a screenshot
-  // is a re-render, not a read-back.
-  void renderTo(lgfx::LovyanGFX& g);
 
 private:
   void drawWeather(lgfx::LovyanGFX& gfx); // icon, city, badge, gauges, marquee text
@@ -51,7 +41,6 @@ private:
   int lastMin = -1, lastSec = -1, lastDay = -1;
   bool weatherDirty = true;
   bool parked = false;
-  volatile bool paused = false;
   uint32_t overlayUntilMs = 0; // non-zero while the identity overlay is visible
   bool overlayDirty = false;   // draw requested by onLongPress, consumed by tick()
 };
