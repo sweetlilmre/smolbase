@@ -160,14 +160,6 @@ def main() -> None:
     shutil.copy(lic, LICDIR / "MIT-meteocons.txt")
     lic = fetch(spec["sources"]["twemoji"]["license_url"], "twemoji-LICENSE", lock, lock_out)
     shutil.copy(lic, LICDIR / "CC-BY-twemoji.txt")
-    cacert = fetch(spec["sources"]["ca_bundle"]["cacert_url"], "cacert.pem", lock, lock_out)
-    genscript = fetch(spec["sources"]["ca_bundle"]["gen_url"], "gen_crt_bundle.py", lock, lock_out)
-
-    print("ca bundle:")
-    subprocess.run([sys.executable, str(genscript), "--input", str(cacert)],
-                   cwd=CACHE, check=True)
-    ca_bundle = (CACHE / "x509_crt_bundle").read_bytes()
-    print(f"  {len(ca_bundle)} B from {cacert.name}")
 
     print("fonts:")
     font_bins = {}
@@ -198,11 +190,7 @@ def main() -> None:
     h_lines += ["", f"constexpr size_t WX_ICON_COUNT = {len(codes)};",
                 "extern const uint8_t WX_ICON_CODES[WX_ICON_COUNT]; // OWM icon-prefix codes",
                 "extern const WxIcon WX_ICONS[WX_ICON_COUNT];       // lock-step with codes",
-                "extern const WxIcon WX_GAUGE_TEMP;", "extern const WxIcon WX_GAUGE_HUMI;", "",
-                "// Mozilla root store in ESP bundle format (gen_crt_bundle.py) — feed to",
-                "// NetworkClientSecure::setCACertBundle for HTTPS that verifies 2026 chains.",
-                f"constexpr size_t WX_CA_BUNDLE_LEN = {len(ca_bundle)};",
-                "extern const uint8_t WX_CA_BUNDLE[WX_CA_BUNDLE_LEN];", ""]
+                "extern const WxIcon WX_GAUGE_TEMP;", "extern const WxIcon WX_GAUGE_HUMI;", ""]
 
     c_lines = [banner, '#include "wx_assets.h"', ""]
     for name, blob in font_bins.items():
@@ -223,8 +211,7 @@ def main() -> None:
     for name in ("WX_GAUGE_TEMP", "WX_GAUGE_HUMI"):
         w, h, _, _ = icons[name]
         c_lines.append(f"const WxIcon {name} = {{ {w}, {h}, {name}_PAL, {name}_DATA }};")
-    c_lines += ["", f"alignas(4) const uint8_t WX_CA_BUNDLE[{len(ca_bundle)}] = {{",
-                c_array(ca_bundle), "};", ""]
+    c_lines += [""]
 
     # encoding pinned: without it Windows writes the locale codepage and the
     # banner's punctuation lands in the repo as mojibake.

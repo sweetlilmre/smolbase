@@ -21,8 +21,3 @@ extern const uint8_t WX_ICON_CODES[WX_ICON_COUNT]; // OWM icon-prefix codes
 extern const WxIcon WX_ICONS[WX_ICON_COUNT];       // lock-step with codes
 extern const WxIcon WX_GAUGE_TEMP;
 extern const WxIcon WX_GAUGE_HUMI;
-
-// Mozilla root store in ESP bundle format (gen_crt_bundle.py) — feed to
-// NetworkClientSecure::setCACertBundle for HTTPS that verifies 2026 chains.
-constexpr size_t WX_CA_BUNDLE_LEN = 55378;
-extern const uint8_t WX_CA_BUNDLE[WX_CA_BUNDLE_LEN];

@@ -10,26 +10,24 @@
 #include "../core/ConfigStore.h"
 #include "../core/Net.h"
 #include "../core/Secrets.h"
-#include "assets/wx_assets.h"
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
 #if !SMOLBASE_WEATHER_HTTP
 #include <NetworkClientSecure.h>
+#include <esp_crt_bundle.h>
 #endif
 
 namespace {
 
 #if !SMOLBASE_WEATHER_HTTP
-// HTTPS journey (#74): the 3.3.11 core attaches NO CA by default (handshake
-// dies with connect -1), and its BAKED-IN bundle is too old to verify both
-// providers' 2026 chains node-dependently (X509 verify failures with heap
-// ruled out — 59 KB largest block at a failing handshake). So the asset
-// pipeline embeds the CURRENT Mozilla root store in ESP bundle format
-// (gen_crt_bundle.py, pinned to this platform's IDF) and every client wires
-// it up here. Real, verifying HTTPS — no pins, no setInsecure.
+// The 3.3.11 core attaches no CA by default; attach_ssl_certificate_bundle()
+// engages the stock IDF bundle baked into libmbedtls. The stock bundle in
+// IDF 5.5.5 (July 2026) contains ISRG Root X1 and USERTrust RSA CA —
+// the roots our two providers actually use — verified against the linked
+// x509_crt_bundle.S.obj before removing the custom bundle (#82).
 class BundleClient : public NetworkClientSecure {
 public:
-  BundleClient() { setCACertBundle(WX_CA_BUNDLE, WX_CA_BUNDLE_LEN); }
+  BundleClient() { attach_ssl_certificate_bundle(sslclient.get(), true); _use_ca_bundle = true; }
 };
 #endif
 
