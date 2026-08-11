@@ -171,11 +171,11 @@ void WeatherScreen::tick(lgfx::LGFX_Device& gfx) {
   localtime_r(&t, &tm);
   if (tm.tm_min != lastMin) {
     lastMin = tm.tm_min;
-    drawClock(gfx);
+    if (!overlayUntilMs) drawClock(gfx);
   }
   if (tm.tm_sec != lastSec) {
     lastSec = tm.tm_sec;
-    drawSeconds(gfx);
+    if (!overlayUntilMs) drawSeconds(gfx);
   }
   if (tm.tm_mday != lastDay) {
     lastDay = tm.tm_mday;
