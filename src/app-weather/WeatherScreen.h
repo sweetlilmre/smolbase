@@ -23,7 +23,8 @@ public:
 
   void onEnter(lgfx::LGFX_Device& gfx) override;
   void tick(lgfx::LGFX_Device& gfx) override;
-  void onTap() override; // force weather refresh (charter)
+  void onTap() override;      // force weather refresh (charter)
+  void onLongPress() override; // show identity overlay for OVERLAY_MS
 
   // Full repaint into ANY target — the panel or a debug sprite. This is what
   // /api/debug/screenshot renders: the panel is write-only, so a screenshot
@@ -35,6 +36,7 @@ private:
   void drawClock(lgfx::LovyanGFX& gfx);
   void drawSeconds(lgfx::LovyanGFX& gfx);
   void drawDate(lgfx::LovyanGFX& gfx);
+  void drawIdentityOverlay(lgfx::LovyanGFX& gfx);
   void rebuildMarquee();
 
   uint32_t colHour = 0xffffff, colMin = 0xff5a00, colSec = 0xff5900;
@@ -50,4 +52,6 @@ private:
   bool weatherDirty = true;
   bool parked = false;
   volatile bool paused = false;
+  uint32_t overlayUntilMs = 0; // non-zero while the identity overlay is visible
+  bool overlayDirty = false;   // draw requested by onLongPress, consumed by tick()
 };

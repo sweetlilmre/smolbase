@@ -13,8 +13,10 @@
 // runtime font, so we hold our own and switch with setFont(&face).
 #include "WeatherScreen.h"
 #include "../core/ConfigStore.h"
+#include "../core/Net.h"
 #include "WeatherData.h"
 #include "assets/wx_assets.h"
+#include "smolbase_config.h"
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -44,6 +46,9 @@ constexpr int MARQ_W_MAX = 672;
 constexpr uint32_t COL_AMBER = 0xfeba00, COL_CYAN = 0x99ffff, COL_GREEN = 0x99ff1f;
 constexpr uint32_t COL_WDAY = 0x87cefa, COL_BADGE_BG = 0x2196f3, COL_TEMPBAR = 0xe53935;
 constexpr uint32_t COL_WHITE = 0xffffff, COL_BLACK = 0x000000;
+constexpr uint32_t COL_OVERLAY_BG = 0x001133;
+
+constexpr uint32_t OVERLAY_MS = 5000; // identity overlay display duration
 const char* const WDAY[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
 // LovyanGFX resolves integer color arguments by TYPE: 32-bit ints are RGB888
@@ -119,6 +124,25 @@ void WeatherScreen::onEnter(lgfx::LGFX_Device& gfx) {
 
 void WeatherScreen::onTap() { WeatherData::forceRefresh(); }
 
+void WeatherScreen::onLongPress() {
+  overlayUntilMs = millis() + OVERLAY_MS;
+  overlayDirty = true;
+}
+
+void WeatherScreen::drawIdentityOverlay(lgfx::LovyanGFX& gfx) {
+  // Overlay sits in the clock band — drawClock() clears it on expiry.
+  gfx.fillRect(0, CLOCK_Y, W, CLOCK_H, col(COL_OVERLAY_BG));
+  gfx.setFont(&fDate.font);
+  gfx.setTextDatum(lgfx::middle_center);
+  gfx.setTextColor(col(COL_WHITE), col(COL_OVERLAY_BG));
+  gfx.drawString(Net::deviceName(), W / 2, CLOCK_Y + 14);
+  gfx.setTextColor(col(COL_CYAN), col(COL_OVERLAY_BG));
+  gfx.drawString(Net::ip().toString(), W / 2, CLOCK_Y + 32);
+  gfx.setTextColor(col(COL_WHITE), col(COL_OVERLAY_BG));
+  gfx.drawString(SMOLBASE_FW_VERSION, W / 2, CLOCK_Y + 51);
+  gfx.setTextDatum(lgfx::top_left);
+}
+
 // Both are idempotent, called every loop pass by the app (core 1, same as
 // tick — no race with the scroll). Suspend leaves the last-pushed pixels
 // frozen in the band; resume rebuilds the line from the cached reading.
@@ -157,9 +181,18 @@ void WeatherScreen::tick(lgfx::LGFX_Device& gfx) {
     lastDay = tm.tm_mday;
     drawDate(gfx);
   }
-  // Marquee: ~30 Hz, 1 px/frame ≈ 30 px/s — the original's 16 s feel (#74 tunes).
+  // Identity overlay: draw once on request; suppress marquee for its duration;
+  // force clock repaint when it expires (drawClock clears the CLOCK_Y band).
   uint32_t now = millis();
-  if (marqWidth > 0 && now - lastFrameMs >= 33) {
+  if (overlayDirty) {
+    overlayDirty = false;
+    drawIdentityOverlay(gfx);
+  } else if (overlayUntilMs && now >= overlayUntilMs) {
+    overlayUntilMs = 0;
+    lastMin = lastSec = -1; // trigger drawClock + drawSeconds to erase the overlay
+  }
+  // Marquee: ~30 Hz, 1 px/frame ≈ 30 px/s — paused while identity overlay is up.
+  if (marqWidth > 0 && now - lastFrameMs >= 33 && !overlayUntilMs) {
     lastFrameMs = now;
     if (--marqX <= -marqWidth) marqX += marqWidth;
     // Consecutive copies cover the whole band; the panel clips the rest.
