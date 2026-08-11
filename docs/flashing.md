@@ -96,6 +96,16 @@ leaves the running firmware untouched.
 One update at a time: a second upload racing an in-flight one is refused with
 HTTP 409.
 
+**Boot-loop guard.** A firmware that uploads fine but crashes at boot would
+otherwise boot-loop an OTA-only device with no way back in. So a freshly
+flashed image boots *unconfirmed*: the firmware marks itself good only after
+**30 seconds of healthy uptime**. Any crash, panic, or reset before that and
+the bootloader falls back to the previous firmware on its own — the device
+comes back on the old version, reachable for another upload. Side effect:
+power-cycling within 30 s of an update also reverts it; just upload again.
+(The serial log prints `[ota] image confirmed healthy` when the new image is
+accepted.)
+
 **Dev loop — single-file upload.** Reflashing the whole filesystem for one
 edited page is slow and wipes `settings.json`. `POST /api/fs?path=...` writes
 one file straight into LittleFS instead. Web assets are served gzip-only from

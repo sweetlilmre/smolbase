@@ -14,8 +14,36 @@
 #include <LittleFS.h>
 #include <PsychicHttp.h>
 #include <Update.h>
+#include <esp_ota_ops.h>
+
+// Boot-loop guard (ticket #76): the arduino core's initArduino() normally
+// confirms a PENDING_VERIFY image immediately at boot. Returning true here
+// defers that — tickRollbackGuard() below confirms only after healthy
+// uptime, so a boot-crashing image gets rolled back by the bootloader
+// instead of boot-looping an OTA-only device into a bricked state.
+// C linkage: the weak symbol lives in esp32-hal-misc.c.
+extern "C" bool verifyRollbackLater() { return true; }
 
 namespace Ota {
+
+// Healthy-uptime bar for confirming a fresh image. 30 s covers the boot
+// path (app setup, first paints, WiFi join) with margin, while staying
+// short enough that a same-session follow-up OTA is never blocked on it.
+static constexpr uint32_t CONFIRM_UPTIME_MS = 30000;
+
+void tickRollbackGuard() {
+  static bool done = false;
+  if (done) return;
+  if (millis() < CONFIRM_UPTIME_MS) return;
+  done = true;
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  esp_ota_img_states_t state;
+  if (esp_ota_get_state_partition(running, &state) == ESP_OK &&
+      state == ESP_OTA_IMG_PENDING_VERIFY) {
+    esp_ota_mark_app_valid_cancel_rollback();
+    Serial.println("[ota] image confirmed healthy after 30 s - rollback armed off");
+  }
+}
 
 // One request at a time is guaranteed by the single httpd task (no
 // ENABLE_ASYNC), so plain statics carry per-request state from onUpload to

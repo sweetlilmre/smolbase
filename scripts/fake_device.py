@@ -40,6 +40,13 @@ values = {s[1]: s[4] for s in SETTINGS}
 # catalog is a {label: value} map, URL-sourced here like the real tz.
 CHOICES = {"tz": {"optionsUrl": "/zones.json", "defaultLabel": "Etc/UTC"}}
 values["tz_name"] = "Etc/UTC"
+# Secret Descriptors (ADR 0003): what a consumer app declared. Empty this
+# dict to fake a no-secrets app (the Secrets tab must disappear).
+SECRET_DESCRIPTORS = {
+    "owm_api_key": {"label": "OpenWeatherMap API key",
+                    "hint": "Optional — without a key, weather falls back to "
+                            "Open-Meteo (no humidity, pressure, or feels-like)."},
+}
 secrets = {}
 scan_started = 0.0
 
@@ -107,7 +114,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"status": "scanning", "networks": []})
             return self._send(200, {"status": "done", "networks": NETWORKS})
         if path == "/api/secrets":
-            return self._send(200, {k: True for k in secrets})
+            # Descriptor map with set-flags, plus set-but-undeclared keys as
+            # bare existence — mirrors Secrets::listJson (never values).
+            out = {k: {**d, "set": k in secrets} for k, d in SECRET_DESCRIPTORS.items()}
+            for k in secrets:
+                out.setdefault(k, {"set": True})
+            return self._send(200, out)
         if path == "/recover":
             return self._send(200, b"<h2>(embedded recovery page lives in firmware)</h2>",
                               "text/html")
