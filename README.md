@@ -45,10 +45,12 @@ and a display stack already working — instead of a blank `setup()`.
    library pins live in `platformio.ini`.
 3. **Get firmware on the device** — two paths, pick yours:
 
-   - **Device already has smolbase** (pre-flashed or previously set up): skip
-     to step 4 if you still need to provision it onto WiFi, or step 5 if it's
-     already on your network. All subsequent firmware and filesystem updates go
-     over OTA — you never open the case again.
+   - **Device already has stock firmware or a previous smolbase build**: use
+     your stock or other firmware OTA mechanism to upload `firmware.bin`, then
+     once smolbase is running upload `littlefs.bin` via
+     `http://smolbase-XXXX.local/recover` (or the Update tab in settings if
+     the filesystem is already intact). Skip to step 4 if you still need to
+     provision onto WiFi, or step 5 if it's already on your network.
 
    - **Blank device**: the board has **no USB-serial bridge**; the first and
      only time you'll use serial is right now. Wire a 3.3 V USB-UART adapter
