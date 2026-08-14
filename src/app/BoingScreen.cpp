@@ -53,13 +53,19 @@ constexpr int SPIN_STEPS = 2;
 constexpr float GRAVITY = 0.30f;         // px/frame² at the fixed timestep
 constexpr float BASE_APEX_Y = 90.0f;     // the natural bounce apex (the boot drop height)
 constexpr int FLOOR_CONTACT_Y = FLOOR_Y - BALL_R + 6; // ball center at floor kiss
-// Tap kick (ticket #60): the upward impulse a tap adds, and how fast that
-// extra energy bleeds off. Without the decay a kicked apex would persist
+// Tap kick (ticket #60, reworked #100): the energy a tap adds, and how fast
+// that extra energy bleeds off. Without the decay a kicked apex would persist
 // forever; instead each floor contact keeps at most DAMP of any rebound speed
 // above the natural one, settling back to the regular bounce in a few hops.
-// The rebound never drops below natural, so the bounce always recovers the
-// default apex even when taps sap fall speed (#61).
+// The rebound never drops below natural (#61).
+// The kick has an additive floor (KICK_VY) and a multiplicative part
+// (KICK_GAIN): per-contact damping drains energy at a rate that grows with
+// speed, so a constant-only kick equilibrates just above the natural bounce
+// and rapid tapping feels clamped (#100). The gain lets sustained tapping
+// outrun the damping; the v³ drain still wins eventually (~5x natural), so
+// the frenzy is self-limiting with no explicit cap.
 constexpr float KICK_VY = 4.0f;
+constexpr float KICK_GAIN = 1.15f;
 constexpr float KICK_DAMP = 0.85f;
 
 // The original's startup act: draw the tilted checkered sphere ONCE, as palette
@@ -279,12 +285,19 @@ void BoingScreen::tick(lgfx::LGFX_Device&) {
   Display::present();
 }
 
-// Tap: kick the ball upward (#60) — pure physics, the boost decays back to
-// the natural bounce at the floor. On the basic clock a tap just forces a
-// repaint (the previous demo behavior).
+// Tap: add energy along the current direction of travel (#100) — the boost
+// still decays back to the natural bounce at the floor. The old upward-only
+// kick (vy -= KICK_VY) SUBTRACTED energy from a falling ball, so rapid taps
+// half-cancelled themselves; kicking with the motion always adds energy — a
+// harder fall becomes a higher rebound at the floor contact. On the basic
+// clock a tap just forces a repaint (the previous demo behavior).
 void BoingScreen::onTap() {
-  if (enabled) vy -= KICK_VY;
-  else markDirty();
+  if (enabled) {
+    float s = fabsf(vy) * KICK_GAIN + KICK_VY;
+    vy = (vy < 0) ? -s : s;
+  } else {
+    markDirty();
+  }
 }
 
 // Long press: the physical twin of the settings UI's "Boing ball" toggle
