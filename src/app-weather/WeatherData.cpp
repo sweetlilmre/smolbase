@@ -41,10 +41,15 @@ constexpr const char* OWM_SCHEME = "https://";
 constexpr const char* METEO_SCHEME = "https://";
 #endif
 
-// Geocode cache (raw Config Store keys, deliberately unregistered — machine
-// state, not user settings): wx_geo_for remembers WHICH city value the cached
+// Geocode cache keys (deliberately unregistered Config Store keys — machine
+// state, not user settings). wx_geo_for remembers WHICH city value the cached
 // lat/lon belong to. The failed-attempt latch is RAM-only: a typo isn't
 // re-queried this boot, but a reboot retries — cheap self-healing.
+constexpr const char* K_GEO_FOR  = "wx_geo_for";
+constexpr const char* K_GEO_LAT  = "wx_lat";
+constexpr const char* K_GEO_LON  = "wx_lon";
+constexpr const char* K_GEO_NAME = "wx_geo_name";
+constexpr const char* K_GEO_CC   = "wx_geo_cc";
 String geoTriedFor;
 // The city value as of the last settings pass: onSettingsChanged compares
 // against this — ONLY a city change refetches (#68 Q4); every other save
@@ -52,29 +57,33 @@ String geoTriedFor;
 String lastCity;
 
 // ---- cross-task handoff -----------------------------------------------------
-// The fetch task writes `pending` under the spinlock and flips pendingReady;
-// loop() promotes it into `current`. `fetchArgs` go the other way: loop()
+// The fetch task writes `pending` under `lock` and flips pendingReady;
+// loop() promotes it into `current`. ctx.args go the other way: loop()
 // fills them before notifying, so the task never touches ConfigStore/Secrets
 // (both are mutex-guarded and fine, but keeping ALL policy reads on core 1
 // keeps this file honest about where decisions happen).
-portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
+//
+// FetchContext names the two halves of the protocol:
+//   args:   main→task, written before xTaskNotifyGive (notify is the barrier)
+//   result: task→main, promoted under lock at end of each cycle
+struct FetchContext {
+  struct Args {
+    char city[64];     // raw setting value (name or numeric OWM id)
+    char key[72];      // OWM key, "" = keyless
+    char lat[12], lon[12]; // cached coords, "" = unknown
+    bool geocode;      // this city value still needs a name→lat/lon attempt
+  } args;
+  struct Result {
+    bool fresh = false;
+    bool retryGeocode = false; // attempt never completed: don't keep the latch
+    char lat[12], lon[12], name[32], cc[4];
+  } result;
+};
+FetchContext ctx;
+portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED; // guards ctx.result, pending, pendingReady
 WeatherData::Reading current, pending;
 volatile bool pendingReady = false;
 bool changedFlag = false;
-
-struct FetchArgs {
-  char city[64];     // raw setting value (name or numeric OWM id)
-  char key[72];      // OWM key, "" = keyless
-  char lat[12], lon[12]; // cached coords, "" = unknown
-  bool geocode;      // this city value still needs a name→lat/lon attempt
-};
-FetchArgs fetchArgs;
-struct GeoResult { // task → loop, alongside `pending`
-  bool fresh = false;
-  bool retryGeocode = false; // attempt never completed: don't keep the latch
-  char lat[12], lon[12], name[32], cc[4];
-};
-GeoResult geoResult;
 
 TaskHandle_t fetchTask = nullptr;
 uint32_t lastFetchMs = 0;
@@ -177,7 +186,7 @@ const WmoMap& wmo(int c) {
   return WMO_MAP[0]; // unknown → clear (parity fallback)
 }
 
-bool geocode(GeoResult& g) {
+bool geocode(FetchContext::Result& g) {
   JsonDocument filter;
   filter["results"][0]["latitude"] = true;
   filter["results"][0]["longitude"] = true;
@@ -185,7 +194,7 @@ bool geocode(GeoResult& g) {
   filter["results"][0]["country_code"] = true;
   JsonDocument doc;
   String url = String(METEO_SCHEME) + "geocoding-api.open-meteo.com/v1/search?name=" +
-               urlEncode(fetchArgs.city) + "&count=1&language=en&format=json";
+               urlEncode(ctx.args.city) + "&count=1&language=en&format=json";
   if (!getJson(url, filter, doc, dbgGeoCode) || doc["results"][0].isNull()) return false;
   snprintf(g.lat, sizeof(g.lat), "%.4f", doc["results"][0]["latitude"].as<double>());
   snprintf(g.lon, sizeof(g.lon), "%.4f", doc["results"][0]["longitude"].as<double>());
@@ -195,7 +204,7 @@ bool geocode(GeoResult& g) {
   return true;
 }
 
-bool fetchOwm(WeatherData::Reading& r, GeoResult& g) {
+bool fetchOwm(WeatherData::Reading& r, FetchContext::Result& g) {
   JsonDocument filter;
   filter["main"] = true;
   filter["wind"]["speed"] = true;
@@ -204,10 +213,10 @@ bool fetchOwm(WeatherData::Reading& r, GeoResult& g) {
   filter["coord"] = true;
   filter["name"] = true;
   JsonDocument doc;
-  bool byId = isdigit((unsigned char)fetchArgs.city[0]);
+  bool byId = isdigit((unsigned char)ctx.args.city[0]);
   String url = String(OWM_SCHEME) + "api.openweathermap.org/data/2.5/weather?" +
-               (byId ? "id=" : "q=") + urlEncode(fetchArgs.city) +
-               "&appid=" + fetchArgs.key + "&units=metric&lang=en";
+               (byId ? "id=" : "q=") + urlEncode(ctx.args.city) +
+               "&appid=" + ctx.args.key + "&units=metric&lang=en";
   if (!getJson(url, filter, doc, dbgOwmCode) || doc["main"].isNull()) return false;
   r.tempC = doc["main"]["temp"] | 0.0f;
   r.tempMinC = doc["main"]["temp_min"] | 0.0f;
@@ -218,13 +227,13 @@ bool fetchOwm(WeatherData::Reading& r, GeoResult& g) {
   r.windMs = doc["wind"]["speed"] | 0.0f;
   strlcpy(r.condition, doc["weather"][0]["main"] | "", sizeof(r.condition));
   r.iconCode = (uint8_t)String(doc["weather"][0]["icon"] | "01").substring(0, 2).toInt();
-  strlcpy(r.city, doc["name"] | fetchArgs.city, sizeof(r.city));
+  strlcpy(r.city, doc["name"] | ctx.args.city, sizeof(r.city));
   strlcpy(r.country, doc["sys"]["country"] | "", sizeof(r.country));
   r.keyless = false;
   r.valid = true;
   // Harvest coords: OWM answers for an id-city give the keyless path its
   // lat/lon for the day the key dies (the geocoder can't resolve an id).
-  if (!fetchArgs.lat[0] && !doc["coord"]["lat"].isNull()) {
+  if (!ctx.args.lat[0] && !doc["coord"]["lat"].isNull()) {
     snprintf(g.lat, sizeof(g.lat), "%.4f", doc["coord"]["lat"].as<double>());
     snprintf(g.lon, sizeof(g.lon), "%.4f", doc["coord"]["lon"].as<double>());
     strlcpy(g.name, r.city, sizeof(g.name));
@@ -235,8 +244,8 @@ bool fetchOwm(WeatherData::Reading& r, GeoResult& g) {
 }
 
 bool fetchOpenMeteo(WeatherData::Reading& r) {
-  const char* lat = fetchArgs.lat[0] ? fetchArgs.lat : (geoResult.fresh ? geoResult.lat : "");
-  const char* lon = fetchArgs.lon[0] ? fetchArgs.lon : (geoResult.fresh ? geoResult.lon : "");
+  const char* lat = ctx.args.lat[0] ? ctx.args.lat : (ctx.result.fresh ? ctx.result.lat : "");
+  const char* lon = ctx.args.lon[0] ? ctx.args.lon : (ctx.result.fresh ? ctx.result.lon : "");
   if (!lat[0]) return false; // id-city, keyless, no cached coords: no data
   JsonDocument filter;
   filter["current_weather"] = true;
@@ -258,8 +267,8 @@ bool fetchOpenMeteo(WeatherData::Reading& r) {
   r.feelsC = 0; // free tier has none — the three zeros are the keyless tell
   r.humidity = 0;
   r.pressureHpa = 0;
-  strlcpy(r.city, geoResult.fresh ? geoResult.name : fetchArgs.city, sizeof(r.city));
-  strlcpy(r.country, geoResult.fresh ? geoResult.cc : "", sizeof(r.country));
+  strlcpy(r.city, ctx.result.fresh ? ctx.result.name : ctx.args.city, sizeof(r.city));
+  strlcpy(r.country, ctx.result.fresh ? ctx.result.cc : "", sizeof(r.country));
   r.keyless = true;
   r.valid = true;
   return true;
@@ -272,20 +281,20 @@ void fetchTaskFn(void*) {
     dbgAttempts = dbgAttempts + 1;
     dbgGeoCode = dbgOwmCode = dbgMeteoCode = 0; // 0 = stage not run this cycle
     WeatherData::Reading r;
-    GeoResult g = {};
-    if (fetchArgs.geocode) { geocode(g); addSnap("post-geo"); }
-    geoResult = g;                     // task-side scratch for fetchOpenMeteo
-    bool ok = (fetchArgs.key[0] && fetchOwm(r, g)) || fetchOpenMeteo(r);
+    FetchContext::Result g = {};
+    if (ctx.args.geocode) { geocode(g); addSnap("post-geo"); }
+    ctx.result = g;                    // task-side scratch for fetchOpenMeteo
+    bool ok = (ctx.args.key[0] && fetchOwm(r, g)) || fetchOpenMeteo(r);
     addSnap("post-fetch");
     if (ok) dbgSuccesses = dbgSuccesses + 1;
     // A geocode that never completed (network-level failure: begin/connect,
     // not an HTTP verdict) must not burn the one-attempt-per-city latch —
     // the boot race showed a pre-WiFi cycle latching Durban forever.
-    bool geoRetryable = fetchArgs.geocode && dbgGeoCode <= 0 && dbgGeoCode != -101;
+    bool geoRetryable = ctx.args.geocode && dbgGeoCode <= 0 && dbgGeoCode != -101;
     taskENTER_CRITICAL(&lock);
     if (ok) pending = r;
-    geoResult = g;
-    geoResult.retryGeocode = geoRetryable;
+    ctx.result = g;
+    ctx.result.retryGeocode = geoRetryable;
     pendingReady = true; // even on failure: loop() must clear fetchInFlight
     taskEXIT_CRITICAL(&lock);
   }
@@ -315,20 +324,20 @@ void loop() {
       current = pending;
       pending = Reading{};
     }
-    GeoResult g = geoResult;
-    geoResult.fresh = false;
+    FetchContext::Result g = ctx.result;
+    ctx.result.fresh = false;
     taskEXIT_CRITICAL(&lock);
     fetchInFlight = false;
     if (ok) changedFlag = true;
     if (g.retryGeocode) geoTriedFor = ""; // incomplete attempt: allow another
     if (g.fresh) { // persist the geocode/harvest for reboots and keyless days
-      ConfigStore::setString("wx_lat", g.lat);
-      ConfigStore::setString("wx_lon", g.lon);
-      ConfigStore::setString("wx_geo_name", g.name);
-      ConfigStore::setString("wx_geo_cc", g.cc);
+      ConfigStore::setString(K_GEO_LAT,  g.lat);
+      ConfigStore::setString(K_GEO_LON,  g.lon);
+      ConfigStore::setString(K_GEO_NAME, g.name);
+      ConfigStore::setString(K_GEO_CC,   g.cc);
       // Stamp the city the fetch RAN FOR — reading the live setting here
       // would mis-tag the cache when the city changes mid-fetch.
-      ConfigStore::setString("wx_geo_for", fetchArgs.city);
+      ConfigStore::setString(K_GEO_FOR, ctx.args.city);
       ConfigStore::save();
     }
   }
@@ -343,18 +352,18 @@ void loop() {
   // Arm the task: all policy reads happen here, on core 1.
   String city = ConfigStore::getString("city", "Durban");
   if (!city.length()) return;
-  String cachedFor = ConfigStore::getString("wx_geo_for", "");
-  bool haveCoords = cachedFor == city && ConfigStore::getString("wx_lat", "").length();
+  String cachedFor = ConfigStore::getString(K_GEO_FOR, "");
+  bool haveCoords = cachedFor == city && ConfigStore::getString(K_GEO_LAT, "").length();
   bool isName = !isdigit((unsigned char)city[0]);
   // One geocode attempt per distinct city value (RAM latch; reboot retries).
-  fetchArgs.geocode = isName && !haveCoords && geoTriedFor != city;
-  if (fetchArgs.geocode) geoTriedFor = city;
-  strlcpy(fetchArgs.city, city.c_str(), sizeof(fetchArgs.city));
-  strlcpy(fetchArgs.key, Secrets::get("owm_api_key").c_str(), sizeof(fetchArgs.key));
-  strlcpy(fetchArgs.lat, haveCoords ? ConfigStore::getString("wx_lat", "").c_str() : "",
-          sizeof(fetchArgs.lat));
-  strlcpy(fetchArgs.lon, haveCoords ? ConfigStore::getString("wx_lon", "").c_str() : "",
-          sizeof(fetchArgs.lon));
+  ctx.args.geocode = isName && !haveCoords && geoTriedFor != city;
+  if (ctx.args.geocode) geoTriedFor = city;
+  strlcpy(ctx.args.city, city.c_str(), sizeof(ctx.args.city));
+  strlcpy(ctx.args.key, Secrets::get("owm_api_key").c_str(), sizeof(ctx.args.key));
+  strlcpy(ctx.args.lat, haveCoords ? ConfigStore::getString(K_GEO_LAT, "").c_str() : "",
+          sizeof(ctx.args.lat));
+  strlcpy(ctx.args.lon, haveCoords ? ConfigStore::getString(K_GEO_LON, "").c_str() : "",
+          sizeof(ctx.args.lon));
   fetchDue = false;
   fetchInFlight = true;
   lastFetchMs = millis();
@@ -393,9 +402,9 @@ void debugJson(JsonDocument& out) {
   out["inFlight"] = fetchInFlight;
   out["keyPresent"] = Secrets::has("owm_api_key"); // presence only, never the value
   out["cityCfg"] = ConfigStore::getString("city", "Durban");
-  out["geoFor"] = ConfigStore::getString("wx_geo_for", "");
-  out["lat"] = ConfigStore::getString("wx_lat", "");
-  out["lon"] = ConfigStore::getString("wx_lon", "");
+  out["geoFor"] = ConfigStore::getString(K_GEO_FOR, "");
+  out["lat"] = ConfigStore::getString(K_GEO_LAT, "");
+  out["lon"] = ConfigStore::getString(K_GEO_LON, "");
   out["msSinceFetch"] = millis() - lastFetchMs;
   out["lastErr"] = (const char*)dbgLastErr;
   // The heap trio that diagnosed the TLS OOM (#74) — cheap, keep: min-ever
