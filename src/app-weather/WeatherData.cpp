@@ -10,36 +10,10 @@
 #include "../core/ConfigStore.h"
 #include "../core/Net.h"
 #include "../core/Secrets.h"
+#include "WxHttp.h"
 #include <ArduinoJson.h>
-#include <HTTPClient.h>
-#if !SMOLBASE_WEATHER_HTTP
-#include <NetworkClientSecure.h>
-#include <esp_crt_bundle.h>
-#endif
 
 namespace {
-
-#if !SMOLBASE_WEATHER_HTTP
-// The 3.3.11 core attaches no CA by default; attach_ssl_certificate_bundle()
-// engages the stock IDF bundle baked into libmbedtls. The stock bundle in
-// IDF 5.5.5 (July 2026) contains ISRG Root X1 and USERTrust RSA CA —
-// the roots our two providers actually use — verified against the linked
-// x509_crt_bundle.S.obj before removing the custom bundle (#82).
-class BundleClient : public NetworkClientSecure {
-public:
-  BundleClient() { attach_ssl_certificate_bundle(sslclient.get(), true); _use_ca_bundle = true; }
-};
-#endif
-
-// Both providers over HTTPS (charter). SMOLBASE_WEATHER_HTTP=1 drops
-// everything to plain HTTP — the researched last-resort switch.
-#if SMOLBASE_WEATHER_HTTP
-constexpr const char* OWM_SCHEME = "http://";
-constexpr const char* METEO_SCHEME = "http://";
-#else
-constexpr const char* OWM_SCHEME = "https://";
-constexpr const char* METEO_SCHEME = "https://";
-#endif
 
 // Geocode cache keys (deliberately unregistered Config Store keys — machine
 // state, not user settings). wx_geo_for remembers WHICH city value the cached
@@ -69,11 +43,9 @@ String lastCity;
 //
 // FetchContext names the two halves of the protocol:
 //   args: main→task, written before xTaskNotifyGive (the notify is the barrier)
-//   geo:  geocode/harvested coords. Mid-cycle the task uses it as UNLOCKED
-//         scratch (fetchOpenMeteo reads what geocode/fetchOwm wrote); only the
-//         end-of-cycle handoff to loop() happens under mux. That's sound
-//         because the notify → pendingReady handshake means task and main
-//         never touch it concurrently.
+//   geo:  geocode/harvested coords, task→main, written ONLY under mux at the
+//         end-of-cycle promotion. (Mid-cycle the task threads its own local
+//         Geo through the providers by parameter — #96.)
 struct FetchContext {
   struct Args {
     char city[64];     // raw setting value (name or numeric OWM id)
@@ -86,8 +58,7 @@ struct FetchContext {
     bool retryGeocode = false; // attempt never completed: don't keep the latch
     char lat[12], lon[12], name[32], cc[4];
   } geo;
-  // Guards the end-of-cycle handoff only: pending, pendingReady, and the geo
-  // promotion. NOT geo's mid-cycle scratch use — see above.
+  // Guards the end-of-cycle handoff: pending, pendingReady, and geo.
   portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 };
 FetchContext ctx;
@@ -136,48 +107,15 @@ String urlEncode(const char* s) {
   return out;
 }
 
-// One serial GET → buffered body → filtered parse → disconnect. Never two
-// connections at once (the TLS peak barely fits as it is). `code` records
-// the stage outcome for the debug surface.
+// Transport + diagnostics shim: WxHttp owns the GET (#96); this records the
+// stage code and, on a failed connect, the transport's words — both for
+// /api/debug/weather.
 bool getJson(const String& url, const JsonDocument& filter, JsonDocument& out,
              volatile int& code) {
-  NetworkClient plain;
-#if !SMOLBASE_WEATHER_HTTP
-  BundleClient tls; // embedded current Mozilla bundle (see shim above)
-  bool secure = url.startsWith("https");
-  NetworkClient& client = secure ? tls : plain;
-#else
-  bool secure = false;
-  NetworkClient& client = plain;
-#endif
-  HTTPClient http;
-  http.setTimeout(10000);
-  http.setConnectTimeout(10000);
-  if (!http.begin(client, url)) {
-    code = -100;
-    return false;
-  }
-  code = http.GET();
-  bool ok = false;
-  if (code == HTTP_CODE_OK) {
-    // getString(), not getStream(): plain-HTTP responses arrive chunked, and
-    // the raw stream's chunk-size line ("2000\r\n") parses as a complete JSON
-    // number — a silent wrong-answer. Bodies here are ≤2 KB; buffering is
-    // cheaper than a chunked-decoding stream wrapper.
-    String body = http.getString();
-    ok = deserializeJson(out, body, DeserializationOption::Filter(filter)) ==
-         DeserializationError::Ok && !out.isNull();
-    if (!ok) code = -101;
-  } else if (code < 0) {
-    int n = snprintf(dbgLastErr, sizeof(dbgLastErr), "%s | ",
-                     HTTPClient::errorToString(code).c_str());
-#if !SMOLBASE_WEATHER_HTTP
-    if (secure && n > 0 && n < (int)sizeof(dbgLastErr))
-      tls.lastError(dbgLastErr + n, sizeof(dbgLastErr) - n); // mbedTLS's words
-#endif
-  }
-  http.end();
-  return ok;
+  WxHttp::Result res = WxHttp::getJson(url, filter, out);
+  code = res.code;
+  if (res.code < 0 && res.err[0]) strlcpy(dbgLastErr, res.err, sizeof(dbgLastErr));
+  return res.ok;
 }
 
 // WMO weathercode → the 9 OWM icon-prefix artworks + local condition text
@@ -199,15 +137,15 @@ const WmoMap& wmo(int c) {
   return WMO_MAP[0]; // unknown → clear (parity fallback)
 }
 
-bool geocode(FetchContext::Geo& g) {
+bool geocode(const FetchContext::Args& args, FetchContext::Geo& g) {
   JsonDocument filter;
   filter["results"][0]["latitude"] = true;
   filter["results"][0]["longitude"] = true;
   filter["results"][0]["name"] = true;
   filter["results"][0]["country_code"] = true;
   JsonDocument doc;
-  String url = String(METEO_SCHEME) + "geocoding-api.open-meteo.com/v1/search?name=" +
-               urlEncode(ctx.args.city) + "&count=1&language=en&format=json";
+  String url = String(WxHttp::SCHEME) + "geocoding-api.open-meteo.com/v1/search?name=" +
+               urlEncode(args.city) + "&count=1&language=en&format=json";
   if (!getJson(url, filter, doc, dbgGeoCode) || doc["results"][0].isNull()) return false;
   snprintf(g.lat, sizeof(g.lat), "%.4f", doc["results"][0]["latitude"].as<double>());
   snprintf(g.lon, sizeof(g.lon), "%.4f", doc["results"][0]["longitude"].as<double>());
@@ -217,7 +155,7 @@ bool geocode(FetchContext::Geo& g) {
   return true;
 }
 
-bool fetchOwm(WeatherData::Reading& r, FetchContext::Geo& g) {
+bool fetchOwm(const FetchContext::Args& args, WeatherData::Reading& r, FetchContext::Geo& g) {
   JsonDocument filter;
   filter["main"] = true;
   filter["wind"]["speed"] = true;
@@ -226,10 +164,10 @@ bool fetchOwm(WeatherData::Reading& r, FetchContext::Geo& g) {
   filter["coord"] = true;
   filter["name"] = true;
   JsonDocument doc;
-  bool byId = isdigit((unsigned char)ctx.args.city[0]);
-  String url = String(OWM_SCHEME) + "api.openweathermap.org/data/2.5/weather?" +
-               (byId ? "id=" : "q=") + urlEncode(ctx.args.city) +
-               "&appid=" + ctx.args.key + "&units=metric&lang=en";
+  bool byId = isdigit((unsigned char)args.city[0]);
+  String url = String(WxHttp::SCHEME) + "api.openweathermap.org/data/2.5/weather?" +
+               (byId ? "id=" : "q=") + urlEncode(args.city) +
+               "&appid=" + args.key + "&units=metric&lang=en";
   if (!getJson(url, filter, doc, dbgOwmCode) || doc["main"].isNull()) return false;
   r.tempC = doc["main"]["temp"] | 0.0f;
   r.tempMinC = doc["main"]["temp_min"] | 0.0f;
@@ -240,13 +178,13 @@ bool fetchOwm(WeatherData::Reading& r, FetchContext::Geo& g) {
   r.windMs = doc["wind"]["speed"] | 0.0f;
   strlcpy(r.condition, doc["weather"][0]["main"] | "", sizeof(r.condition));
   r.iconCode = (uint8_t)String(doc["weather"][0]["icon"] | "01").substring(0, 2).toInt();
-  strlcpy(r.city, doc["name"] | ctx.args.city, sizeof(r.city));
+  strlcpy(r.city, doc["name"] | args.city, sizeof(r.city));
   strlcpy(r.country, doc["sys"]["country"] | "", sizeof(r.country));
   r.keyless = false;
   r.valid = true;
   // Harvest coords: OWM answers for an id-city give the keyless path its
   // lat/lon for the day the key dies (the geocoder can't resolve an id).
-  if (!ctx.args.lat[0] && !doc["coord"]["lat"].isNull()) {
+  if (!args.lat[0] && !doc["coord"]["lat"].isNull()) {
     snprintf(g.lat, sizeof(g.lat), "%.4f", doc["coord"]["lat"].as<double>());
     snprintf(g.lon, sizeof(g.lon), "%.4f", doc["coord"]["lon"].as<double>());
     strlcpy(g.name, r.city, sizeof(g.name));
@@ -256,16 +194,17 @@ bool fetchOwm(WeatherData::Reading& r, FetchContext::Geo& g) {
   return true;
 }
 
-bool fetchOpenMeteo(WeatherData::Reading& r) {
-  const char* lat = ctx.args.lat[0] ? ctx.args.lat : (ctx.geo.fresh ? ctx.geo.lat : "");
-  const char* lon = ctx.args.lon[0] ? ctx.args.lon : (ctx.geo.fresh ? ctx.geo.lon : "");
+bool fetchOpenMeteo(const FetchContext::Args& args, const FetchContext::Geo& geo,
+                    WeatherData::Reading& r) {
+  const char* lat = args.lat[0] ? args.lat : (geo.fresh ? geo.lat : "");
+  const char* lon = args.lon[0] ? args.lon : (geo.fresh ? geo.lon : "");
   if (!lat[0]) return false; // id-city, keyless, no cached coords: no data
   JsonDocument filter;
   filter["current_weather"] = true;
   filter["daily"]["temperature_2m_max"][0] = true;
   filter["daily"]["temperature_2m_min"][0] = true;
   JsonDocument doc;
-  String url = String(METEO_SCHEME) + "api.open-meteo.com/v1/forecast?latitude=" + lat +
+  String url = String(WxHttp::SCHEME) + "api.open-meteo.com/v1/forecast?latitude=" + lat +
                "&longitude=" + lon +
                "&current_weather=true&daily=temperature_2m_max,temperature_2m_min,weathercode"
                "&forecast_days=1&timezone=auto";
@@ -280,8 +219,8 @@ bool fetchOpenMeteo(WeatherData::Reading& r) {
   r.feelsC = 0; // free tier has none — the three zeros are the keyless tell
   r.humidity = 0;
   r.pressureHpa = 0;
-  strlcpy(r.city, ctx.geo.fresh ? ctx.geo.name : ctx.args.city, sizeof(r.city));
-  strlcpy(r.country, ctx.geo.fresh ? ctx.geo.cc : "", sizeof(r.country));
+  strlcpy(r.city, geo.fresh ? geo.name : args.city, sizeof(r.city));
+  strlcpy(r.country, geo.fresh ? geo.cc : "", sizeof(r.country));
   r.keyless = true;
   r.valid = true;
   return true;
@@ -295,9 +234,8 @@ void fetchTaskFn(void*) {
     dbgGeoCode = dbgOwmCode = dbgMeteoCode = 0; // 0 = stage not run this cycle
     WeatherData::Reading r;
     FetchContext::Geo g = {};
-    if (ctx.args.geocode) { geocode(g); addSnap("post-geo"); }
-    ctx.geo = g; // unlocked task-side scratch for fetchOpenMeteo (see FetchContext)
-    bool ok = (ctx.args.key[0] && fetchOwm(r, g)) || fetchOpenMeteo(r);
+    if (ctx.args.geocode) { geocode(ctx.args, g); addSnap("post-geo"); }
+    bool ok = (ctx.args.key[0] && fetchOwm(ctx.args, r, g)) || fetchOpenMeteo(ctx.args, g, r);
     addSnap("post-fetch");
     if (ok) dbgSuccesses = dbgSuccesses + 1;
     // A geocode that never completed (network-level failure: begin/connect,
