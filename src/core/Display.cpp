@@ -66,7 +66,7 @@ public:
 
 SmolPanel panel;
 
-#if SMOLBASE_FRAMEBUFFER == SMOLBASE_FB_PALETTE_8
+#if SMOLBASE_FRAMEBUFFER != SMOLBASE_FB_NONE
 uint8_t fbData[240 * 240]; // static, .bss — heap stays contiguous for TLS
 lgfx::LGFX_Sprite fbSprite(&panel);
 #endif
@@ -90,9 +90,10 @@ void begin() {
   panel.init();
   panel.setBrightness(200);
   panel.fillScreen(TFT_BLACK);
-#if SMOLBASE_FRAMEBUFFER == SMOLBASE_FB_PALETTE_8
+#if SMOLBASE_FRAMEBUFFER != SMOLBASE_FB_NONE
   fbSprite.setColorDepth(8);
   fbSprite.setBuffer(fbData, 240, 240, 8);
+#if SMOLBASE_FRAMEBUFFER == SMOLBASE_FB_PALETTE_8
   // Palette storage is a one-time 1 KB boot allocation inside LovyanGFX (there is no
   // static-palette API); the 57.6 KB pixel buffer above stays static. Default palette:
   // index i decodes as RGB332 (RRRGGGBB), so color332(r,g,b) picks a usable index and
@@ -104,7 +105,10 @@ void begin() {
     uint8_t b = (i & 0x03) * 255 / 3;
     fbSprite.setPaletteColor(i, r, g, b);
   }
-  fbSprite.fillScreen(0); // index 0 = black
+#endif
+  // RGB332 mode: no palette — a true-color 8-bpp sprite; every draw call's
+  // color converts through LovyanGFX's normal RGB332 quantization (#102).
+  fbSprite.fillScreen(0); // black in both modes (palette index 0 / rgb332 0)
 #endif
 }
 
@@ -112,6 +116,15 @@ void begin() {
 lgfx::LGFX_Sprite& frame() { return fbSprite; }
 
 void present() { fbSprite.pushSprite(0, 0); }
+
+#if SMOLBASE_FRAMEBUFFER == SMOLBASE_FB_RGB332
+void present(int y, int h) {
+  if (y < 0) { h += y; y = 0; }
+  if (y + h > 240) h = 240 - y;
+  if (h <= 0) return;
+  panel.pushImage(0, y, 240, h, (const lgfx::rgb332_t*)(fbData + y * 240));
+}
+#endif
 #endif
 
 void setActive(Screen* s) {

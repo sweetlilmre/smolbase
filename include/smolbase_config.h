@@ -19,12 +19,20 @@
 // ---- Display ----
 // 60 MHz is not an achievable classic-ESP32 SPI divider; 40 MHz is the proven safe rate.
 #define SMOLBASE_SPI_HZ 40000000
-// Framebuffer mode: 0 = none (direct draw), 1 = 8-bpp palette (57.6 KB static).
+// Framebuffer mode: 0 = none (direct draw), 1 = 8-bpp palette, 2 = 8-bpp
+// true-color RGB332 (#102). Both 8-bpp modes share the same 57.6 KB static
+// buffer. PALETTE_8 treats color arguments as RAW palette indices — that
+// enables palette-cycling animation (BoingScreen) but makes every COMPUTED
+// color write garbage: anti-aliased glyph blends and pushImage conversions
+// produce RGB values, not indices. RGB332 is a true-color sprite: all writes
+// convert correctly (AA text quantizes to real colors, RGB565 icons convert),
+// with no palette tricks available. Pick per env with -DSMOLBASE_FRAMEBUFFER.
 // There is deliberately no RGB565 mode: 115.2 KB doesn't fit static DRAM, and the
 // heap fallback ate most of the WiFi-era headroom on this no-PSRAM chip. Consumers
 // needing full-color composition should use a partial-frame 16-bpp sprite instead.
 #define SMOLBASE_FB_NONE 0
 #define SMOLBASE_FB_PALETTE_8 1
+#define SMOLBASE_FB_RGB332 2
 #ifndef SMOLBASE_FRAMEBUFFER
 #define SMOLBASE_FRAMEBUFFER SMOLBASE_FB_PALETTE_8
 #endif
