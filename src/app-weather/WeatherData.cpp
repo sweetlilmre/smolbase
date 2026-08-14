@@ -10,6 +10,7 @@
 #include "../core/ConfigStore.h"
 #include "../core/Net.h"
 #include "../core/Secrets.h"
+#include "WeatherKeys.h"
 #include "WxHttp.h"
 #include <ArduinoJson.h>
 
@@ -24,10 +25,7 @@ constexpr const char* K_GEO_LAT  = "wx_lat";
 constexpr const char* K_GEO_LON  = "wx_lon";
 constexpr const char* K_GEO_NAME = "wx_geo_name";
 constexpr const char* K_GEO_CC   = "wx_geo_cc";
-// Registered keys this module reads (schema lives in WeatherApp::setup;
-// the strings must match it and the Secret Descriptor there).
-constexpr const char* K_CITY    = "city";
-constexpr const char* K_OWM_KEY = "owm_api_key";
+// Registered keys and their defaults come from WeatherKeys.h (#98).
 String geoTriedFor;
 // The city value as of the last settings pass: onSettingsChanged compares
 // against this — ONLY a city change refetches (#68 Q4); every other save
@@ -259,7 +257,7 @@ void begin(std::function<void()> fetchBegin, std::function<void()> fetchEnd) {
   onFetchBegin = fetchBegin;
   onFetchEnd = fetchEnd;
   geoTriedFor = "";
-  lastCity = ConfigStore::getString(K_CITY, "Durban");
+  lastCity = ConfigStore::getString(WxKeys::CITY, WxKeys::DEF_CITY);
   // 10 KB stack: full handshakes completed on 12 KB, the high-water probe
   // never saw more than ~5 KB used, and every KB parked here is heap the
   // ~49 KB TLS peak (measured: heapMinEver 208 B) cannot use.
@@ -299,14 +297,15 @@ void loop() {
   }
 
   // Schedule: honored wx_interval (#68 — fixing SmolTV-Pro's ignored w_i).
-  uint32_t intervalMs = (uint32_t)ConfigStore::getInt("wx_interval", 20) * 60000UL;
+  uint32_t intervalMs =
+      (uint32_t)ConfigStore::getInt(WxKeys::INTERVAL, WxKeys::DEF_INTERVAL_MIN) * 60000UL;
   if (!fetchDue && millis() - lastFetchMs >= intervalMs) fetchDue = true;
   // Never arm without a network: the boot cycle otherwise fires pre-WiFi,
   // fails, and (worse) used to burn the geocode latch on a dead link.
   if (!fetchDue || fetchInFlight || !fetchTask || !Net::isUp()) return;
 
   // Arm the task: all policy reads happen here, on core 1.
-  String city = ConfigStore::getString(K_CITY, "Durban");
+  String city = ConfigStore::getString(WxKeys::CITY, WxKeys::DEF_CITY);
   if (!city.length()) return;
   String cachedFor = ConfigStore::getString(K_GEO_FOR, "");
   bool haveCoords = cachedFor == city && ConfigStore::getString(K_GEO_LAT, "").length();
@@ -315,7 +314,7 @@ void loop() {
   ctx.args.geocode = isName && !haveCoords && geoTriedFor != city;
   if (ctx.args.geocode) geoTriedFor = city;
   strlcpy(ctx.args.city, city.c_str(), sizeof(ctx.args.city));
-  strlcpy(ctx.args.key, Secrets::get(K_OWM_KEY).c_str(), sizeof(ctx.args.key));
+  strlcpy(ctx.args.key, Secrets::get(WxKeys::OWM_KEY).c_str(), sizeof(ctx.args.key));
   strlcpy(ctx.args.lat, haveCoords ? ConfigStore::getString(K_GEO_LAT, "").c_str() : "",
           sizeof(ctx.args.lat));
   strlcpy(ctx.args.lon, haveCoords ? ConfigStore::getString(K_GEO_LON, "").c_str() : "",
@@ -354,8 +353,8 @@ void debugJson(JsonDocument& out) {
   out["owmCode"] = dbgOwmCode;
   out["meteoCode"] = dbgMeteoCode;
   out["inFlight"] = fetchInFlight;
-  out["keyPresent"] = Secrets::has(K_OWM_KEY); // presence only, never the value
-  out["cityCfg"] = ConfigStore::getString(K_CITY, "Durban");
+  out["keyPresent"] = Secrets::has(WxKeys::OWM_KEY); // presence only, never the value
+  out["cityCfg"] = ConfigStore::getString(WxKeys::CITY, WxKeys::DEF_CITY);
   out["geoFor"] = ConfigStore::getString(K_GEO_FOR, "");
   out["lat"] = ConfigStore::getString(K_GEO_LAT, "");
   out["lon"] = ConfigStore::getString(K_GEO_LON, "");
@@ -384,7 +383,7 @@ void onSettingsChanged() {
   // saw, not the geocode cache — so switching back to a cached city still
   // refetches, a re-saved failed geocode gets its fresh attempt, and unit/
   // colour saves never touch the network.
-  String city = ConfigStore::getString(K_CITY, "Durban");
+  String city = ConfigStore::getString(WxKeys::CITY, WxKeys::DEF_CITY);
   if (city != lastCity) {
     lastCity = city;
     geoTriedFor = "";

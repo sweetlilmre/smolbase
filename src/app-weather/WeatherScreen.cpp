@@ -15,6 +15,7 @@
 #include "../core/ConfigStore.h"
 #include "../core/Net.h"
 #include "WeatherData.h"
+#include "WeatherKeys.h"
 #include "assets/wx_assets.h"
 #include "smolbase_config.h"
 #include <cstdio>
@@ -121,16 +122,22 @@ void WeatherScreen::begin() {
 }
 
 void WeatherScreen::loadSettings() {
-  colHour = hexRgb(ConfigStore::getString("col_hour"), 0xffffff);
-  colMin = hexRgb(ConfigStore::getString("col_min"), 0xff5a00);
-  colSec = hexRgb(ConfigStore::getString("col_sec"), 0xff5900);
-  h24 = ConfigStore::getBool("h24");
-  dateFmt = ConfigStore::getString("date_fmt");
-  if (!dateFmt.length()) dateFmt = "%d/%m/%Y";
-  nickname = ConfigStore::getString("nickname");
-  units.temp = ConfigStore::getString("unit_temp", "C");
-  units.wind = ConfigStore::getString("unit_wind", "ms");
-  units.press = ConfigStore::getString("unit_press", "hpa");
+  // Numeric color fallbacks are DERIVED from the WeatherKeys.h registration
+  // strings (#98): hexRgb on a well-formed constant can't fail, so the two
+  // representations can't drift.
+  colHour = hexRgb(ConfigStore::getString(WxKeys::COL_HOUR, WxKeys::DEF_COL_HOUR),
+                   hexRgb(WxKeys::DEF_COL_HOUR, 0));
+  colMin = hexRgb(ConfigStore::getString(WxKeys::COL_MIN, WxKeys::DEF_COL_MIN),
+                  hexRgb(WxKeys::DEF_COL_MIN, 0));
+  colSec = hexRgb(ConfigStore::getString(WxKeys::COL_SEC, WxKeys::DEF_COL_SEC),
+                  hexRgb(WxKeys::DEF_COL_SEC, 0));
+  h24 = ConfigStore::getBool(WxKeys::H24);
+  dateFmt = ConfigStore::getString(WxKeys::DATE_FMT);
+  if (!dateFmt.length()) dateFmt = WxKeys::DEF_DATE_FMT;
+  nickname = ConfigStore::getString(WxKeys::NICKNAME);
+  units.temp = ConfigStore::getString(WxKeys::UNIT_TEMP, WxKeys::DEF_UNIT_TEMP);
+  units.wind = ConfigStore::getString(WxKeys::UNIT_WIND, WxKeys::DEF_UNIT_WIND);
+  units.press = ConfigStore::getString(WxKeys::UNIT_PRESS, WxKeys::DEF_UNIT_PRESS);
   weatherDirty = true; // colours/units/format re-render from cached data (#68)
   lastMin = lastSec = lastDay = -1;
 }
@@ -214,7 +221,7 @@ void WeatherScreen::drawWeather(lgfx::LovyanGFX& gfx) {
   gfx.fillRect(0, 0, W, MARQ_Y, col(COL_BLACK));
 
   String city = nickname.length() ? nickname : String(r.city);
-  if (!city.length()) city = ConfigStore::getString("city", "Durban");
+  if (!city.length()) city = ConfigStore::getString(WxKeys::CITY, WxKeys::DEF_CITY);
 
   if (r.valid) drawIcon(gfx, conditionIcon(r.iconCode), ICON_X, ICON_Y);
 

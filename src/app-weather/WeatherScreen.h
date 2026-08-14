@@ -72,9 +72,11 @@ private:
   void drawIdentityOverlay(lgfx::LovyanGFX& gfx);
 
   WeatherData::Reading cachedReading;
-  uint32_t colHour = 0xffffff, colMin = 0xff5a00, colSec = 0xff5900;
+  // Set by loadSettings() — which begin() calls before any render — so no
+  // member defaults: those live at the WeatherKeys.h-cited reads, once (#98).
+  uint32_t colHour = 0, colMin = 0, colSec = 0;
   bool h24 = true;
-  String dateFmt = "%d/%m/%Y";
+  String dateFmt;
   String nickname;
   Units units;
 

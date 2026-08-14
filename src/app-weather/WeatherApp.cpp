@@ -7,6 +7,7 @@
 #include "../core/Display.h"
 #include "../core/Secrets.h"
 #include "WeatherData.h"
+#include "WeatherKeys.h"
 #include "WeatherScreen.h"
 #include <Arduino.h>
 #include <PsychicHttp.h>
@@ -43,29 +44,34 @@ public:
   void setup() override {
     ConfigStore::setAppNote(
         "Weather clock settings — the OpenWeatherMap API key lives in the Secrets tab.");
-    // The #68 schema. col_hour/col_min deliberately reuse the stock app's
-    // keys so colours carry across apps on one device.
-    ConfigStore::registerColor(SettingSection::App, "col_hour", "Clock hour color", "#FFFFFF");
-    ConfigStore::registerColor(SettingSection::App, "col_min", "Clock minute color", "#FF5A00");
-    ConfigStore::registerColor(SettingSection::App, "col_sec", "Seconds color", "#FF5900");
-    ConfigStore::registerBool(SettingSection::App, "h24", "24-hour clock", true);
-    ConfigStore::registerChoice(SettingSection::App, "date_fmt", "Date format", "DD/MM/YYYY",
-                                "%d/%m/%Y", DATE_FMTS, 5);
-    ConfigStore::registerString(SettingSection::App, "city", "City (name or OWM id)", "Durban");
-    ConfigStore::registerString(SettingSection::App, "nickname", "Display name override", "");
-    ConfigStore::registerChoice(SettingSection::App, "unit_temp", "Temperature unit",
+    // The #68 schema; keys and machine defaults come from WeatherKeys.h (#98).
+    // col_hour/col_min deliberately reuse the stock app's keys so colours
+    // carry across apps on one device.
+    ConfigStore::registerColor(SettingSection::App, WxKeys::COL_HOUR, "Clock hour color",
+                               WxKeys::DEF_COL_HOUR);
+    ConfigStore::registerColor(SettingSection::App, WxKeys::COL_MIN, "Clock minute color",
+                               WxKeys::DEF_COL_MIN);
+    ConfigStore::registerColor(SettingSection::App, WxKeys::COL_SEC, "Seconds color",
+                               WxKeys::DEF_COL_SEC);
+    ConfigStore::registerBool(SettingSection::App, WxKeys::H24, "24-hour clock", WxKeys::DEF_H24);
+    ConfigStore::registerChoice(SettingSection::App, WxKeys::DATE_FMT, "Date format", "DD/MM/YYYY",
+                                WxKeys::DEF_DATE_FMT, DATE_FMTS, 5);
+    ConfigStore::registerString(SettingSection::App, WxKeys::CITY, "City (name or OWM id)",
+                                WxKeys::DEF_CITY);
+    ConfigStore::registerString(SettingSection::App, WxKeys::NICKNAME, "Display name override", "");
+    ConfigStore::registerChoice(SettingSection::App, WxKeys::UNIT_TEMP, "Temperature unit",
                                 "\xC2\xB0"
                                 "C",
-                                "C", TEMP_UNITS, 2);
-    ConfigStore::registerChoice(SettingSection::App, "unit_wind", "Wind unit", "m/s", "ms",
-                                WIND_UNITS, 3);
-    ConfigStore::registerChoice(SettingSection::App, "unit_press", "Pressure unit", "hPa", "hpa",
-                                PRESS_UNITS, 4);
-    ConfigStore::registerInt(SettingSection::App, "wx_interval", "Weather refresh (min)", 20, 5,
-                             120);
+                                WxKeys::DEF_UNIT_TEMP, TEMP_UNITS, 2);
+    ConfigStore::registerChoice(SettingSection::App, WxKeys::UNIT_WIND, "Wind unit", "m/s",
+                                WxKeys::DEF_UNIT_WIND, WIND_UNITS, 3);
+    ConfigStore::registerChoice(SettingSection::App, WxKeys::UNIT_PRESS, "Pressure unit", "hPa",
+                                WxKeys::DEF_UNIT_PRESS, PRESS_UNITS, 4);
+    ConfigStore::registerInt(SettingSection::App, WxKeys::INTERVAL, "Weather refresh (min)",
+                             WxKeys::DEF_INTERVAL_MIN, 5, 120);
     // The one Secret Descriptor this app consumes (ADR 0003): declaring it
     // here is all it takes for the Settings UI to grow a Secrets section.
-    Secrets::describe("owm_api_key", "OpenWeatherMap API key",
+    Secrets::describe(WxKeys::OWM_KEY, "OpenWeatherMap API key",
                       "Optional — without a key, weather falls back to Open-Meteo "
                       "(no humidity, pressure, or feels-like).");
     // RAM choreography (#74/#94): WeatherData owns the fetch window and
