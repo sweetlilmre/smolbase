@@ -5,14 +5,39 @@
 #include "WeatherData.h"
 #include <LovyanGFX.hpp>
 
+// Unit prefs (#68 catalog values) as one bundle. Filled by loadSettings()
+// — which begin() calls before any render — so no member defaults here:
+// the defaults live at the getString calls, in one place.
+struct WxUnits {
+  String temp, wind, press;
+};
+
+// The scrolling info line (#95): an 8-bpp sprite holding one copy of the
+// text, tiled across its band at a scrolling offset. Sole owner of the
+// sprite + width + offset trio, enforcing the invariant the previous loose
+// members couldn't: width is non-zero iff the buffer is live AND holds a
+// current line. rebuild() while suspended is therefore a safe no-op — the
+// path that used to draw into a deleted sprite when a settings save landed
+// mid-fetch. Methods live in WeatherScreen.cpp (they use its band layout,
+// palette, and once-only-allocation rationale).
+class Marquee {
+public:
+  void create();  // allocate the sprite ONCE at begin(), pristine heap
+  void suspend(); // free the sprite for the fetch's TLS peak (#74)
+  void resume(const WeatherData::Reading& r, const WxUnits& u, const lgfx::IFont* f);
+  void rebuild(const WeatherData::Reading& r, const WxUnits& u, const lgfx::IFont* f);
+  void render(lgfx::LovyanGFX& gfx, uint32_t now); // ~30 Hz; sole writer of the offset
+
+private:
+  lgfx::LGFX_Sprite spr;
+  int width = 0; // non-zero iff spr has a buffer holding a current line
+  int x = 0;
+  uint32_t lastFrameMs = 0;
+};
+
 class WeatherScreen : public Screen {
 public:
-  // Unit prefs (#68 catalog values) as one bundle. Filled by loadSettings()
-  // — which begin() calls before any render — so no member defaults here:
-  // the defaults live at the getString calls, in one place.
-  struct Units {
-    String temp, wind, press;
-  };
+  using Units = WxUnits;
 
   void begin();   // load fonts; call once from setup
   void loadSettings();
@@ -41,7 +66,6 @@ private:
   void drawSeconds(lgfx::LovyanGFX& gfx, int sec);
   void drawDate(lgfx::LovyanGFX& gfx, const struct tm& tm);
   void drawIdentityOverlay(lgfx::LovyanGFX& gfx);
-  void rebuildMarquee();
 
   WeatherData::Reading cachedReading;
   uint32_t colHour = 0xffffff, colMin = 0xff5a00, colSec = 0xff5900;
@@ -50,10 +74,7 @@ private:
   String nickname;
   Units units;
 
-  lgfx::LGFX_Sprite marq;  // 8-bpp line sprite, fixed size, allocated once
-  int marqWidth = 0;       // pixel width of one marquee copy
-  int marqX = 0;
-  uint32_t lastFrameMs = 0;
+  Marquee marquee;
   int lastMin = -1, lastSec = -1, lastDay = -1;
   bool weatherDirty = true;
   bool parked = false;

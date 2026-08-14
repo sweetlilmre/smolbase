@@ -116,8 +116,7 @@ void WeatherScreen::begin() {
   fDate.load(WX_DATE15);
   fBadge.load(WX_BADGE16);
   fText.load(WX_TEXT15);
-  marq.setColorDepth(8);
-  marq.createSprite(MARQ_W_MAX, MARQ_H); // once, pristine heap — see MARQ_W_MAX
+  marquee.create(); // once, pristine heap — see MARQ_W_MAX
   loadSettings();
 }
 
@@ -164,22 +163,12 @@ void WeatherScreen::drawIdentityOverlay(lgfx::LovyanGFX& gfx) {
   gfx.setTextDatum(lgfx::top_left);
 }
 
-// Both are idempotent, called every loop pass by the app (core 1, same as
-// tick — no race with the scroll). Suspend leaves the last-pushed pixels
-// frozen in the band; resume rebuilds the line from the cached reading.
-void WeatherScreen::suspendMarquee() {
-  if (marq.getBuffer()) {
-    marq.deleteSprite();
-    marqWidth = 0;
-  }
-}
+// Both are idempotent, fired by WeatherData's fetch-window hooks (core 1,
+// same as tick — no race with the scroll). Suspend leaves the last-pushed
+// pixels frozen in the band; resume rebuilds the line from the cached reading.
+void WeatherScreen::suspendMarquee() { marquee.suspend(); }
 
-void WeatherScreen::resumeMarquee() {
-  if (!marq.getBuffer()) {
-    marq.setColorDepth(8);
-    if (marq.createSprite(MARQ_W_MAX, MARQ_H)) rebuildMarquee();
-  }
-}
+void WeatherScreen::resumeMarquee() { marquee.resume(cachedReading, units, &fText.font); }
 
 void WeatherScreen::tick(lgfx::LGFX_Device& gfx) {
   if (parked) return;
@@ -212,13 +201,8 @@ void WeatherScreen::tick(lgfx::LGFX_Device& gfx) {
     overlayUntilMs = 0;
     lastMin = lastSec = -1; // trigger drawClock + drawSeconds to erase the overlay
   }
-  // Marquee: ~30 Hz, 1 px/frame ≈ 30 px/s — paused while identity overlay is up.
-  if (marqWidth > 0 && now - lastFrameMs >= 33 && !overlayUntilMs) {
-    lastFrameMs = now;
-    if (--marqX <= -marqWidth) marqX += marqWidth;
-    // Consecutive copies cover the whole band; the panel clips the rest.
-    for (int x = marqX; x < W; x += marqWidth) marq.pushSprite(&gfx, x, MARQ_Y);
-  }
+  // Marquee — paused while the identity overlay is up.
+  if (!overlayUntilMs) marquee.render(gfx, now);
 }
 
 // ---- element painters --------------------------------------------------------
@@ -262,7 +246,7 @@ void WeatherScreen::drawWeather(lgfx::LovyanGFX& gfx) {
   gfx.setTextDatum(lgfx::top_left);
 
   gfx.fillRect(0, MARQ_Y, W, MARQ_H, col(COL_BLACK)); // stale marquee pixels
-  rebuildMarquee();
+  marquee.rebuild(r, units, &fText.font);
 
   // Gauge row: temp left, humidity right.
   gfx.fillRect(0, GAUGE_Y, W, GAUGE_H, col(COL_BLACK));
@@ -284,10 +268,35 @@ void WeatherScreen::drawWeather(lgfx::LovyanGFX& gfx) {
   gfx.drawString(r.valid ? String(r.humidity) + "%" : "--", 206, GAUGE_Y + 11);
 }
 
-void WeatherScreen::rebuildMarquee() {
-  const WeatherData::Reading& r = cachedReading;
+// ---- Marquee (declared in WeatherScreen.h; see class comment there) ----------
+// Defined here because the implementation leans on this file's band layout,
+// palette, and formatting helpers.
+
+void Marquee::create() {
+  spr.setColorDepth(8);
+  spr.createSprite(MARQ_W_MAX, MARQ_H);
+}
+
+void Marquee::suspend() {
+  if (spr.getBuffer()) {
+    spr.deleteSprite();
+    width = 0; // invariant: no buffer, no width — render() goes quiet
+  }
+}
+
+void Marquee::resume(const WeatherData::Reading& r, const WxUnits& u, const lgfx::IFont* f) {
+  if (!spr.getBuffer()) {
+    spr.setColorDepth(8);
+    if (spr.createSprite(MARQ_W_MAX, MARQ_H)) rebuild(r, u, f);
+  }
+}
+
+void Marquee::rebuild(const WeatherData::Reading& r, const WxUnits& u, const lgfx::IFont* f) {
+  // Suspended mid-fetch (a settings save can land here): stay quiet; the
+  // fetch-window end hook resumes and rebuilds. This guard IS the invariant.
+  if (!spr.getBuffer()) return;
   if (!r.valid) { // no fetch yet: a scroll of zeros would read as data
-    marqWidth = 0; // tick() skips the push; drawWeather cleared the band
+    width = 0;    // render() skips the push; drawWeather cleared the band
     return;
   }
   struct Seg {
@@ -295,32 +304,41 @@ void WeatherScreen::rebuildMarquee() {
     uint32_t color;
   };
   const Seg segs[] = {
-      {"Lowest ", COL_WHITE},       {fmtTemp(r.tempMinC, units), COL_CYAN},
-      {", Highest ", COL_WHITE},    {fmtTemp(r.tempMaxC, units), COL_AMBER},
-      {", Feels like ", COL_WHITE}, {fmtTemp(r.feelsC, units), COL_AMBER},
-      {", Wind speed ", COL_WHITE}, {fmtWind(r.windMs, units), COL_GREEN},
-      {", ATM ", COL_WHITE},        {fmtPress(r.pressureHpa, units), COL_AMBER},
+      {"Lowest ", COL_WHITE},       {fmtTemp(r.tempMinC, u), COL_CYAN},
+      {", Highest ", COL_WHITE},    {fmtTemp(r.tempMaxC, u), COL_AMBER},
+      {", Feels like ", COL_WHITE}, {fmtTemp(r.feelsC, u), COL_AMBER},
+      {", Wind speed ", COL_WHITE}, {fmtWind(r.windMs, u), COL_GREEN},
+      {", ATM ", COL_WHITE},        {fmtPress(r.pressureHpa, u), COL_AMBER},
       {"      ", COL_WHITE},
   };
-  // The fixed-size sprite (allocated once in begin()) holds ONE copy of the
-  // line; tick() tiles it across the band. A line wider than the sprite
+  // The fixed-size sprite (allocated once at create()) holds ONE copy of the
+  // line; render() tiles it across the band. A line wider than the sprite
   // clips — at 15 px the full line fits MARQ_W_MAX with margin.
-  marq.setFont(&fText.font);
+  spr.setFont(f);
   // The tile stride must equal the sprite width exactly: a shorter stride
   // makes each push's black tail erase the start of the NEXT copy, which the
   // following frame repaints — a flicker on the line's first words (seen
   // on-device, round 3). Text shorter than the sprite just reads as a gap
   // between repeats; text longer clips (never happens at 15 px).
-  marqWidth = MARQ_W_MAX;
-  marqX = 0;
-  marq.fillSprite(col(COL_BLACK));
-  marq.setTextDatum(lgfx::top_left);
-  int x = 0;
+  width = MARQ_W_MAX;
+  x = 0;
+  spr.fillSprite(col(COL_BLACK));
+  spr.setTextDatum(lgfx::top_left);
+  int tx = 0;
   for (const Seg& s : segs) {
-    marq.setTextColor(col(s.color), col(COL_BLACK));
-    marq.drawString(s.text, x, 2);
-    x += marq.textWidth(s.text);
+    spr.setTextColor(col(s.color), col(COL_BLACK));
+    spr.drawString(s.text, tx, 2);
+    tx += spr.textWidth(s.text);
   }
+}
+
+void Marquee::render(lgfx::LovyanGFX& gfx, uint32_t now) {
+  // ~30 Hz, 1 px/frame ≈ 30 px/s.
+  if (width <= 0 || now - lastFrameMs < 33) return;
+  lastFrameMs = now;
+  if (--x <= -width) x += width;
+  // Consecutive copies cover the whole band; the panel clips the rest.
+  for (int px = x; px < W; px += width) spr.pushSprite(&gfx, px, MARQ_Y);
 }
 
 void WeatherScreen::drawClock(lgfx::LovyanGFX& gfx, const struct tm& tm) {
