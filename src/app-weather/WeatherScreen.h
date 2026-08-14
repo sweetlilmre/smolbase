@@ -41,8 +41,12 @@ public:
 
   void begin();   // load fonts; call once from setup
   void loadSettings();
-  void markWeatherDirty() { weatherDirty = true; }
-  void setReading(const WeatherData::Reading& r) { cachedReading = r; }
+  // The one entry point for new data (#97): cache the reading and schedule
+  // the repaint — the two were only ever meaningful together.
+  void showReading(const WeatherData::Reading& r) {
+    cachedReading = r;
+    weatherDirty = true;
+  }
   // OtaStarting: stop touching flash/panel. WeatherApp holds a sibling parked
   // flag for its loop() — Display ticks this screen independently, so the two
   // flags are deliberate duplication, set together by onSystemEvent.

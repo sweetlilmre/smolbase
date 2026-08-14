@@ -90,10 +90,7 @@ public:
   void loop() override {
     if (parked) return;
     WeatherData::loop(); // fetch-window hooks fire from inside (see setup)
-    if (WeatherData::changed()) {
-      screen.setReading(WeatherData::reading());
-      screen.markWeatherDirty();
-    }
+    if (const WeatherData::Reading* r = WeatherData::takeChanged()) screen.showReading(*r);
   }
 
   void onSystemEvent(SysEvent e) override {

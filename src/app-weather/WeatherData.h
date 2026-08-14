@@ -6,7 +6,7 @@
 // Threading (ADR 0001): fetches run on a consumer-spawned FreeRTOS task —
 // TLS handshakes take seconds, far past the loop budget. The main loop stays
 // the only consumer surface: loop() schedules fetches and promotes finished
-// readings under a spinlock; reading()/changed() are main-loop-only.
+// readings under a spinlock; takeChanged() is main-loop-only.
 //
 // Transport: both providers over HTTPS via the stock IDF CA bundle (#82).
 // Define SMOLBASE_WEATHER_HTTP=1 to drop everything to plain HTTP — the
@@ -43,8 +43,10 @@ struct Reading {
 void begin(std::function<void()> onFetchBegin, std::function<void()> onFetchEnd);
 void loop(); // every main-loop pass: schedule fetches, promote results
 
-const Reading& reading(); // main-loop only
-bool changed();           // one-shot: true once after each promoted reading
+// One-shot: the newly promoted Reading, or nullptr when nothing new since
+// the last call. The ONLY way to observe a reading (main-loop only), so a
+// stale read outside the "new data" branch is unrepresentable (#97).
+const Reading* takeChanged();
 
 void forceRefresh();      // tap, or a fetch-relevant settings save
 void onSettingsChanged(); // detects a city change: new geocode + refetch

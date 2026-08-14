@@ -330,12 +330,10 @@ void loop() {
   xTaskNotifyGive(fetchTask);
 }
 
-const Reading& reading() { return current; }
-
-bool changed() {
-  bool c = changedFlag;
+const Reading* takeChanged() {
+  if (!changedFlag) return nullptr;
   changedFlag = false;
-  return c;
+  return &current;
 }
 
 void forceRefresh() { fetchDue = true; }
