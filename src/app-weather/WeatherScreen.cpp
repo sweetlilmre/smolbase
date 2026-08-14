@@ -224,7 +224,7 @@ void WeatherScreen::tick(lgfx::LGFX_Device& gfx) {
 // ---- element painters --------------------------------------------------------
 
 void WeatherScreen::drawWeather(lgfx::LovyanGFX& gfx) {
-  const WeatherData::Reading& r = WeatherData::reading();
+  const WeatherData::Reading& r = cachedReading;
 
   // Icon + city + badge share the top band; clear it wholesale.
   gfx.fillRect(0, 0, W, MARQ_Y, col(COL_BLACK));
@@ -285,7 +285,7 @@ void WeatherScreen::drawWeather(lgfx::LovyanGFX& gfx) {
 }
 
 void WeatherScreen::rebuildMarquee() {
-  const WeatherData::Reading& r = WeatherData::reading();
+  const WeatherData::Reading& r = cachedReading;
   if (!r.valid) { // no fetch yet: a scroll of zeros would read as data
     marqWidth = 0; // tick() skips the push; drawWeather cleared the band
     return;

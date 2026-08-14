@@ -2,6 +2,7 @@
 // centered symmetric composition — bound to the WeatherData layer.
 #pragma once
 #include "../core/App.h"
+#include "WeatherData.h"
 #include <LovyanGFX.hpp>
 
 class WeatherScreen : public Screen {
@@ -9,6 +10,7 @@ public:
   void begin();   // load fonts; call once from setup
   void loadSettings();
   void markWeatherDirty() { weatherDirty = true; }
+  void setReading(const WeatherData::Reading& r) { cachedReading = r; }
   void park() { parked = true; } // OtaStarting: stop touching flash/panel
   // RAM choreography (#74): the marquee sprite is the app's one big heap
   // block (13.4 KB), and the TLS handshake needs every byte — the app frees
@@ -29,6 +31,7 @@ private:
   void drawIdentityOverlay(lgfx::LovyanGFX& gfx);
   void rebuildMarquee();
 
+  WeatherData::Reading cachedReading;
   uint32_t colHour = 0xffffff, colMin = 0xff5a00, colSec = 0xff5900;
   bool h24 = true;
   String dateFmt = "%d/%m/%Y";

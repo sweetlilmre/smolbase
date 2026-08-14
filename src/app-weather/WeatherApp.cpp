@@ -89,7 +89,10 @@ public:
     if (WeatherData::fetchQueued()) screen.suspendMarquee();
     WeatherData::loop();
     if (!WeatherData::fetchBusy()) screen.resumeMarquee();
-    if (WeatherData::changed()) screen.markWeatherDirty();
+    if (WeatherData::changed()) {
+      screen.setReading(WeatherData::reading());
+      screen.markWeatherDirty();
+    }
   }
 
   void onSystemEvent(SysEvent e) override {
