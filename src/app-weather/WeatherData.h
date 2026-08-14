@@ -14,6 +14,7 @@
 #pragma once
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <functional>
 
 namespace WeatherData {
 
@@ -31,15 +32,16 @@ struct Reading {
   char country[4] = "";
 };
 
-void begin(); // spawn the fetch task; call from App::setup (after registration)
-void loop();  // every main-loop pass: schedule fetches, promote results
-
-// Fetch lifecycle for RAM choreography (#74): the TLS handshake peaks at
-// ~49 KB on this heap, so the app frees what it can for the duration.
-// fetchQueued() is true on the pass that will arm the task; fetchBusy()
-// stays true until the cycle's result is promoted.
-bool fetchQueued();
-bool fetchBusy();
+// begin() spawns the fetch task; call from App::setup (after registration).
+// The hooks bracket every fetch cycle for RAM choreography (#74): the TLS
+// handshake peaks at ~49 KB on this heap, so onFetchBegin fires on the
+// loop() pass that arms the task — free what you can — and onFetchEnd on
+// the pass that promotes the cycle's result (success or failure alike).
+// WeatherData owns the fetch window; callers never re-derive scheduling
+// state — the old fetchQueued()/fetchBusy() predicates missed the
+// interval-driven fetch entirely (#94).
+void begin(std::function<void()> onFetchBegin, std::function<void()> onFetchEnd);
+void loop(); // every main-loop pass: schedule fetches, promote results
 
 const Reading& reading(); // main-loop only
 bool changed();           // one-shot: true once after each promoted reading

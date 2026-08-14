@@ -99,6 +99,9 @@ TaskHandle_t fetchTask = nullptr;
 uint32_t lastFetchMs = 0;
 bool fetchDue = true; // fetch immediately on entry
 bool fetchInFlight = false;
+// Fetch-window hooks (#94): set once by begin(), fired by loop() — begin
+// right before arming the task, end when the cycle's result is promoted.
+std::function<void()> onFetchBegin, onFetchEnd;
 
 // Fetch diagnostics for /api/debug/weather: last cycle's per-stage HTTP
 // codes (0 = not run, -100 = begin/connect fail, -101 = parse fail), plus
@@ -314,7 +317,9 @@ void fetchTaskFn(void*) {
 
 namespace WeatherData {
 
-void begin() {
+void begin(std::function<void()> fetchBegin, std::function<void()> fetchEnd) {
+  onFetchBegin = fetchBegin;
+  onFetchEnd = fetchEnd;
   geoTriedFor = "";
   lastCity = ConfigStore::getString(K_CITY, "Durban");
   // 10 KB stack: full handshakes completed on 12 KB, the high-water probe
@@ -350,6 +355,9 @@ void loop() {
       ConfigStore::setString(K_GEO_FOR, ctx.args.city);
       ConfigStore::save();
     }
+    // Cycle over (success or failure): the RAM freed for the TLS peak can
+    // come back. Fires after the geo persistence so the save also ran lean.
+    if (onFetchEnd) onFetchEnd();
   }
 
   // Schedule: honored wx_interval (#68 — fixing SmolTV-Pro's ignored w_i).
@@ -374,15 +382,15 @@ void loop() {
           sizeof(ctx.args.lat));
   strlcpy(ctx.args.lon, haveCoords ? ConfigStore::getString(K_GEO_LON, "").c_str() : "",
           sizeof(ctx.args.lon));
+  // Window opens NOW — same pass, before the notify — so the caller can free
+  // RAM ahead of the TLS peak. This covers the interval-driven promotion of
+  // fetchDue above, which the old caller-side fetchQueued() check missed (#94).
+  if (onFetchBegin) onFetchBegin();
   fetchDue = false;
   fetchInFlight = true;
   lastFetchMs = millis();
   xTaskNotifyGive(fetchTask);
 }
-
-bool fetchQueued() { return fetchDue && !fetchInFlight && fetchTask && Net::isUp(); }
-
-bool fetchBusy() { return fetchInFlight || fetchQueued(); }
 
 const Reading& reading() { return current; }
 
