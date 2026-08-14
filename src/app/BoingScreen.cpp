@@ -58,14 +58,14 @@ constexpr int FLOOR_CONTACT_Y = FLOOR_Y - BALL_R + 6; // ball center at floor ki
 // forever; instead each floor contact keeps at most DAMP of any rebound speed
 // above the natural one, settling back to the regular bounce in a few hops.
 // The rebound never drops below natural (#61).
-// The kick has an additive floor (KICK_VY) and a multiplicative part
-// (KICK_GAIN): per-contact damping drains energy at a rate that grows with
-// speed, so a constant-only kick equilibrates just above the natural bounce
-// and rapid tapping feels clamped (#100). The gain lets sustained tapping
-// outrun the damping; the v³ drain still wins eventually (~5x natural), so
-// the frenzy is self-limiting with no explicit cap.
+// The kick is a flat speed add along the current direction of travel (#100):
+// direction-following is what fixed the old clamped feel (an upward-only
+// kick subtracted energy from a falling ball, so rapid taps half-cancelled),
+// and the linear add keeps the buildup gradual — multiplicative gains (1.15,
+// then 1.08) were tried on-device and escalated too fast. Damping drains a
+// fixed fraction per contact and contacts get more frequent with speed, so
+// the buildup is self-limiting with no explicit cap.
 constexpr float KICK_VY = 4.0f;
-constexpr float KICK_GAIN = 1.15f;
 constexpr float KICK_DAMP = 0.85f;
 
 // The original's startup act: draw the tilted checkered sphere ONCE, as palette
@@ -293,7 +293,7 @@ void BoingScreen::tick(lgfx::LGFX_Device&) {
 // clock a tap just forces a repaint (the previous demo behavior).
 void BoingScreen::onTap() {
   if (enabled) {
-    float s = fabsf(vy) * KICK_GAIN + KICK_VY;
+    float s = fabsf(vy) + KICK_VY;
     vy = (vy < 0) ? -s : s;
   } else {
     markDirty();
