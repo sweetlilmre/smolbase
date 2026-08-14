@@ -13,7 +13,6 @@
 // researched last-resort switch (see the scheme fork in WeatherData.cpp).
 #pragma once
 #include <Arduino.h>
-#include <ArduinoJson.h>
 #include <functional>
 
 namespace WeatherData {
@@ -51,9 +50,7 @@ const Reading* takeChanged();
 void forceRefresh();      // tap, or a fetch-relevant settings save
 void onSettingsChanged(); // detects a city change: new geocode + refetch
 
-// Debug surface (#74 flight readiness): the current Reading plus the last
-// fetch cycle's per-stage HTTP codes (0 = stage not run, -100 = begin/
-// connect failed, -101 = 200-but-parse-failed). Never includes the key.
-void debugJson(JsonDocument& out);
+// The debug surface lives in WeatherDebug.h (#99) — the one consumer
+// allowed off the main loop, and the reason it is not declared here.
 
 } // namespace WeatherData

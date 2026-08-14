@@ -7,6 +7,7 @@
 #include "../core/Display.h"
 #include "../core/Secrets.h"
 #include "WeatherData.h"
+#include "WeatherDebug.h"
 #include "WeatherKeys.h"
 #include "WeatherScreen.h"
 #include <Arduino.h>
@@ -86,7 +87,7 @@ public:
   void registerRoutes(PsychicHttpServer& server) override {
     server.on("/api/debug/weather", HTTP_GET, [](PsychicRequest*, PsychicResponse* res) {
       JsonDocument doc;
-      WeatherData::debugJson(doc);
+      WeatherDebug::json(doc); // core-0-safe: snapshots under the fetch mux (#99)
       String out;
       serializeJson(doc, out);
       return res->send(200, "application/json", out.c_str());

@@ -10,6 +10,7 @@
 #include "../core/ConfigStore.h"
 #include "../core/Net.h"
 #include "../core/Secrets.h"
+#include "WeatherDebug.h"
 #include "WeatherKeys.h"
 #include "WxHttp.h"
 #include <ArduinoJson.h>
@@ -112,7 +113,12 @@ bool getJson(const String& url, const JsonDocument& filter, JsonDocument& out,
              volatile int& code) {
   WxHttp::Result res = WxHttp::getJson(url, filter, out);
   code = res.code;
-  if (res.code < 0 && res.err[0]) strlcpy(dbgLastErr, res.err, sizeof(dbgLastErr));
+  if (res.code < 0 && res.err[0]) {
+    // Under mux (#99): the debug route reads dbgLastErr from core 0.
+    taskENTER_CRITICAL(&ctx.mux);
+    strlcpy(dbgLastErr, res.err, sizeof(dbgLastErr));
+    taskEXIT_CRITICAL(&ctx.mux);
+  }
   return res.ok;
 }
 
@@ -337,29 +343,68 @@ const Reading* takeChanged() {
 
 void forceRefresh() { fetchDue = true; }
 
-void debugJson(JsonDocument& out) {
-  out["valid"] = current.valid;
-  out["keyless"] = current.keyless;
-  out["city"] = current.city;
-  out["country"] = current.country;
-  out["condition"] = current.condition;
-  out["iconCode"] = current.iconCode;
-  out["tempC"] = current.tempC;
-  out["humidity"] = current.humidity;
-  out["pressureHpa"] = current.pressureHpa;
-  out["attempts"] = dbgAttempts;
-  out["successes"] = dbgSuccesses;
-  out["geoCode"] = dbgGeoCode;     // 0 not run, -100 connect, -101 parse, else HTTP
-  out["owmCode"] = dbgOwmCode;
-  out["meteoCode"] = dbgMeteoCode;
-  out["inFlight"] = fetchInFlight;
+void onSettingsChanged() {
+  // ONLY a city change refetches (#68 Q4): compare against the value we last
+  // saw, not the geocode cache — so switching back to a cached city still
+  // refetches, a re-saved failed geocode gets its fresh attempt, and unit/
+  // colour saves never touch the network.
+  String city = ConfigStore::getString(WxKeys::CITY, WxKeys::DEF_CITY);
+  if (city != lastCity) {
+    lastCity = city;
+    geoTriedFor = "";
+    fetchDue = true;
+  }
+}
+
+} // namespace WeatherData
+
+// ---- debug surface (#99) ------------------------------------------------------
+// Declared in WeatherDebug.h; defined here beside the anonymous-namespace
+// state it reads — a separate TU would force that state into a shared header.
+// This is the ONE consumer allowed off the main loop (httpd task, core 0):
+// the fields the fetch task and main loop write are copied under the fetch
+// mux, then serialized outside it. ConfigStore/Secrets are internally
+// mutex-guarded, the heap probes are atomic, and `snaps` is append-only with
+// a count byte — all safe to read without the mux.
+void WeatherDebug::json(JsonDocument& out) {
+  WeatherData::Reading r;
+  char lastErr[sizeof(dbgLastErr)];
+  uint32_t attempts, successes;
+  int geoCode, owmCode, meteoCode;
+  bool inFlight;
+  taskENTER_CRITICAL(&ctx.mux);
+  r = current;
+  strlcpy(lastErr, dbgLastErr, sizeof(lastErr));
+  attempts = dbgAttempts;
+  successes = dbgSuccesses;
+  geoCode = dbgGeoCode;
+  owmCode = dbgOwmCode;
+  meteoCode = dbgMeteoCode;
+  inFlight = fetchInFlight;
+  taskEXIT_CRITICAL(&ctx.mux);
+
+  out["valid"] = r.valid;
+  out["keyless"] = r.keyless;
+  out["city"] = r.city;
+  out["country"] = r.country;
+  out["condition"] = r.condition;
+  out["iconCode"] = r.iconCode;
+  out["tempC"] = r.tempC;
+  out["humidity"] = r.humidity;
+  out["pressureHpa"] = r.pressureHpa;
+  out["attempts"] = attempts;
+  out["successes"] = successes;
+  out["geoCode"] = geoCode; // 0 not run, -100 connect, -101 parse, else HTTP
+  out["owmCode"] = owmCode;
+  out["meteoCode"] = meteoCode;
+  out["inFlight"] = inFlight;
   out["keyPresent"] = Secrets::has(WxKeys::OWM_KEY); // presence only, never the value
   out["cityCfg"] = ConfigStore::getString(WxKeys::CITY, WxKeys::DEF_CITY);
   out["geoFor"] = ConfigStore::getString(K_GEO_FOR, "");
   out["lat"] = ConfigStore::getString(K_GEO_LAT, "");
   out["lon"] = ConfigStore::getString(K_GEO_LON, "");
   out["msSinceFetch"] = millis() - lastFetchMs;
-  out["lastErr"] = (const char*)dbgLastErr;
+  out["lastErr"] = (const char*)lastErr;
   // The heap trio that diagnosed the TLS OOM (#74) — cheap, keep: min-ever
   // near zero means a handshake is scraping bottom again (docs/app-weather-memory.md).
   out["heapFree"] = esp_get_free_heap_size();
@@ -377,18 +422,3 @@ void debugJson(JsonDocument& out) {
     s["b"] = snaps[i].largest;
   }
 }
-
-void onSettingsChanged() {
-  // ONLY a city change refetches (#68 Q4): compare against the value we last
-  // saw, not the geocode cache — so switching back to a cached city still
-  // refetches, a re-saved failed geocode gets its fresh attempt, and unit/
-  // colour saves never touch the network.
-  String city = ConfigStore::getString(WxKeys::CITY, WxKeys::DEF_CITY);
-  if (city != lastCity) {
-    lastCity = city;
-    geoTriedFor = "";
-    fetchDue = true;
-  }
-}
-
-} // namespace WeatherData
