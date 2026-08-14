@@ -33,6 +33,7 @@ private:
   bool h24 = true;
   String dateFmt = "%d/%m/%Y";
   String nickname;
+  String unitTemp = "C", unitWind = "ms", unitPress = "hpa";
 
   lgfx::LGFX_Sprite marq;  // 8-bpp line sprite, fixed size, allocated once
   int marqWidth = 0;       // pixel width of one marquee copy

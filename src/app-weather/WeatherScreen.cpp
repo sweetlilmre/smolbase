@@ -87,6 +87,24 @@ const WxIcon& conditionIcon(uint8_t code) {
   return WX_ICONS[0]; // unknown → clear (SmolTV-Pro's fallback)
 }
 
+// Display formatting (SmolTV-Pro's exact output constants). Unit pref is passed
+// in from the cached member — no ConfigStore read at render time.
+String fmtTemp(float c, const String& u) {
+  if (u == "F") return String((int)lroundf(c * 1.8f + 32)) + "\xC2\xB0" "F";
+  return String((int)lroundf(c)) + "\xC2\xB0" "C";
+}
+String fmtWind(float ms, const String& u) {
+  if (u == "kmh") return String(ms * 3.6f, 2) + " km/h";
+  if (u == "mph") return String(ms * 2.2367f, 2) + " mile/h"; // parity constant
+  return String(ms, 2) + " m/s";
+}
+String fmtPress(int hpa, const String& u) {
+  if (u == "kpa") return String(hpa / 10) + " kPa";
+  if (u == "mmhg") return String((int)lroundf(hpa * 0.75f)) + " mmHg"; // parity constant
+  if (u == "inhg") return String((int)lroundf(hpa * 0.0295300425f)) + " inHg";
+  return String(hpa) + " hPa";
+}
+
 } // namespace
 
 void WeatherScreen::begin() {
@@ -111,6 +129,9 @@ void WeatherScreen::loadSettings() {
   dateFmt = ConfigStore::getString("date_fmt");
   if (!dateFmt.length()) dateFmt = "%d/%m/%Y";
   nickname = ConfigStore::getString("nickname");
+  unitTemp = ConfigStore::getString("unit_temp", "C");
+  unitWind = ConfigStore::getString("unit_wind", "ms");
+  unitPress = ConfigStore::getString("unit_press", "hpa");
   weatherDirty = true; // colours/units/format re-render from cached data (#68)
   lastMin = lastSec = lastDay = -1;
 }
@@ -259,7 +280,7 @@ void WeatherScreen::drawWeather(lgfx::LovyanGFX& gfx) {
   bar(152, r.humidity / 100.0f, COL_BADGE_BG);
   gfx.setFont(&fText.font);
   gfx.setTextColor(col(COL_WHITE), col(COL_BLACK));
-  gfx.drawString(r.valid ? WeatherData::fmtTemp(r.tempC) : "--", 88, GAUGE_Y + 11);
+  gfx.drawString(r.valid ? fmtTemp(r.tempC, unitTemp) : "--", 88, GAUGE_Y + 11);
   gfx.drawString(r.valid ? String(r.humidity) + "%" : "--", 206, GAUGE_Y + 11);
 }
 
@@ -274,11 +295,11 @@ void WeatherScreen::rebuildMarquee() {
     uint32_t color;
   };
   const Seg segs[] = {
-      {"Lowest ", COL_WHITE},       {WeatherData::fmtTemp(r.tempMinC), COL_CYAN},
-      {", Highest ", COL_WHITE},    {WeatherData::fmtTemp(r.tempMaxC), COL_AMBER},
-      {", Feels like ", COL_WHITE}, {WeatherData::fmtTemp(r.feelsC), COL_AMBER},
-      {", Wind speed ", COL_WHITE}, {WeatherData::fmtWind(r.windMs), COL_GREEN},
-      {", ATM ", COL_WHITE},        {WeatherData::fmtPress(r.pressureHpa), COL_AMBER},
+      {"Lowest ", COL_WHITE},       {fmtTemp(r.tempMinC, unitTemp), COL_CYAN},
+      {", Highest ", COL_WHITE},    {fmtTemp(r.tempMaxC, unitTemp), COL_AMBER},
+      {", Feels like ", COL_WHITE}, {fmtTemp(r.feelsC, unitTemp), COL_AMBER},
+      {", Wind speed ", COL_WHITE}, {fmtWind(r.windMs, unitWind), COL_GREEN},
+      {", ATM ", COL_WHITE},        {fmtPress(r.pressureHpa, unitPress), COL_AMBER},
       {"      ", COL_WHITE},
   };
   // The fixed-size sprite (allocated once in begin()) holds ONE copy of the

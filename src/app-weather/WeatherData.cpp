@@ -291,8 +291,6 @@ void fetchTaskFn(void*) {
   }
 }
 
-String unit(const char* key, const char* def) { return ConfigStore::getString(key, def); }
-
 } // namespace
 
 namespace WeatherData {
@@ -429,28 +427,6 @@ void onSettingsChanged() {
     geoTriedFor = "";
     fetchDue = true;
   }
-}
-
-// ---- display formatting (SmolTV-Pro's exact output constants) ---------------
-
-String fmtTemp(float c) {
-  if (unit("unit_temp", "C") == "F") return String((int)lroundf(c * 1.8f + 32)) + "\xC2\xB0" "F";
-  return String((int)lroundf(c)) + "\xC2\xB0" "C";
-}
-
-String fmtWind(float ms) {
-  String u = unit("unit_wind", "ms");
-  if (u == "kmh") return String(ms * 3.6f, 2) + " km/h";
-  if (u == "mph") return String(ms * 2.2367f, 2) + " mile/h"; // parity constant
-  return String(ms, 2) + " m/s";
-}
-
-String fmtPress(int hpa) { // "1013 hPa" / "101 kPa" / "760 mmHg" / "30 inHg"
-  String u = unit("unit_press", "hpa");
-  if (u == "kpa") return String(hpa / 10) + " kPa";
-  if (u == "mmhg") return String((int)lroundf(hpa * 0.75f)) + " mmHg"; // parity constant
-  if (u == "inhg") return String((int)lroundf(hpa * 0.0295300425f)) + " inHg";
-  return String(hpa) + " hPa";
 }
 
 } // namespace WeatherData
