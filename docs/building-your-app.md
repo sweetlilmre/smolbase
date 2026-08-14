@@ -299,21 +299,38 @@ Pick a mode in `include/smolbase_config.h` (or `-D SMOLBASE_FRAMEBUFFER=...`):
 
 | Mode | Cost | When |
 | --- | --- | --- |
-| `SMOLBASE_FB_NONE` | zero RAM | direct drawing only |
-| `SMOLBASE_FB_PALETTE_8` (default) | 57.6 KB static (.bss) | full-frame composition, 256 colors |
+| `SMOLBASE_FB_NONE` | zero RAM | direct drawing, or an app-owned scratch sprite (see ADR 0004) |
+| `SMOLBASE_FB_PALETTE_8` (default) | 57.6 KB static (.bss) | full-frame composition, 256 colors, palette animation |
+| `SMOLBASE_FB_RGB332` | 57.6 KB static (.bss) | full-frame composition in true 8-bpp color |
+
+Choose by what you draw: `PALETTE_8` treats color arguments as **raw palette
+indices**, which is what enables palette-cycling animation — but every
+*computed* color write is garbage in that mode: anti-aliased font blends and
+`pushImage` color conversion produce RGB values, not indices. If your screen
+uses AA fonts or true-color images, use `RGB332` (all draws convert
+correctly, quantized to 3/3/2 bits) — or skip the core buffer entirely, as
+the weather app does (next paragraph).
 
 There is deliberately no full-frame RGB565 mode: at 115.2 KB it cannot be
 statically allocated on this chip (it overflows DRAM), and heap-allocating it
 eats most of the WiFi-era headroom on a no-PSRAM board. If you need full-color
 composition, create a partial-frame 16-bpp `lgfx::LGFX_Sprite` of your own —
-sized to the region you actually redraw — and push it where needed.
+sized to the region you actually redraw — and push it where needed. The
+weather app is the worked example of that pattern: a static 240×64 RGB565
+band scratch, band painters composing at band-relative y and pushing clipped
+to their rows — see [ADR 0004](adr/0004-weather-band-scratch-rendering.md)
+for the full decision record, including why full-frame composition failed for
+it (anti-aliased typography is expensive to re-rasterize and the ~24 ms push
+is most of a 30 Hz budget).
 
-In `PALETTE_8` mode you get an opt-in composition sprite: draw into
+In both 8-bpp modes you get an opt-in composition sprite: draw into
 `Display::frame()`, then `Display::present()` pushes it to the panel in one
-DMA-backed transfer. It is a composition tool, never a requirement — screens
-keep drawing direct via `tick(LGFX_Device&)` if they prefer. (The shipped
-worked example uses the framebuffer; built with `SMOLBASE_FB_NONE` it falls
-back to a direct-draw identity screen — both paths compile.)
+DMA-backed transfer; in `RGB332` mode there is also `present(y, h)` to push
+one full-width band (~2 ms for 20 rows vs ~24 ms full-frame). It is a
+composition tool, never a requirement — screens keep drawing direct via
+`tick(LGFX_Device&)` if they prefer. (The shipped worked example uses the
+framebuffer; built with `SMOLBASE_FB_NONE` it falls back to a direct-draw
+identity screen — both paths compile.)
 
 In `PALETTE_8` mode the default palette maps index *i* as **RGB332** (bits
 `RRRGGGBB`), so `lgfx::color332(r, g, b)` yields a sensible index for any
@@ -345,10 +362,14 @@ What that means for your animated screen:
   tick consumes the ~25 ms soft budget *by design*. The budget's spirit (don't
   starve touch sampling and the event queue) is preserved by the timestep: the
   passes between frames take microseconds.
-- **Don't bother with partial redraws.** `present()` pushes the full frame
-  regardless, so dirty-rect bookkeeping saves internal-RAM writes worth well
-  under half a millisecond against a 24 ms push. Clear, redraw everything,
-  present.
+- **Partial redraws: it depends on your compose cost.** If your frame renders
+  in ~2 ms like the Boing scene (pre-rendered sprites, fills, lines), don't
+  bother — dirty-rect bookkeeping saves under half a millisecond against the
+  24 ms push; clear, redraw everything, present. But if your frame is
+  anti-aliased typography (15–25 ms to re-rasterize), full-frame composition
+  cannot hold 30 Hz at all: compose per-band on change and push only those
+  rows (`present(y, h)` in RGB332 mode, or an app-owned scratch). The weather
+  app learned this on-device — ADR 0004 records the arc.
 - **Palette animation is free.** `setPaletteColor()` is a 3-byte write applied
   at the next `present()` — the Boing ball's whole rotation is 14 of them per
   frame (the authentic 1984 technique: the ball never rotates as pixels; see
