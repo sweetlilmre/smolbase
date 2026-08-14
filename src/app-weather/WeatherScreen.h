@@ -18,7 +18,10 @@ public:
   void loadSettings();
   void markWeatherDirty() { weatherDirty = true; }
   void setReading(const WeatherData::Reading& r) { cachedReading = r; }
-  void park() { parked = true; } // OtaStarting: stop touching flash/panel
+  // OtaStarting: stop touching flash/panel. WeatherApp holds a sibling parked
+  // flag for its loop() — Display ticks this screen independently, so the two
+  // flags are deliberate duplication, set together by onSystemEvent.
+  void park() { parked = true; }
   // RAM choreography (#74): the marquee sprite is the app's one big heap
   // block (13.4 KB), and the TLS handshake needs every byte — the app frees
   // it for the duration of a fetch and restores it after. The marquee
@@ -31,10 +34,12 @@ public:
   void onLongPress() override; // show identity overlay for OVERLAY_MS
 
 private:
+  // Painters are functions of (gfx, time value) — tick() is the only reader
+  // of the wall clock; the last* members below are change-detection caches.
   void drawWeather(lgfx::LovyanGFX& gfx); // icon, city, badge, gauges, marquee text
-  void drawClock(lgfx::LovyanGFX& gfx);
-  void drawSeconds(lgfx::LovyanGFX& gfx);
-  void drawDate(lgfx::LovyanGFX& gfx);
+  void drawClock(lgfx::LovyanGFX& gfx, const struct tm& tm);
+  void drawSeconds(lgfx::LovyanGFX& gfx, int sec);
+  void drawDate(lgfx::LovyanGFX& gfx, const struct tm& tm);
   void drawIdentityOverlay(lgfx::LovyanGFX& gfx);
   void rebuildMarquee();
 

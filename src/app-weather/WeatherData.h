@@ -1,17 +1,16 @@
-// Weather data layer (#70): providers, fallback, geocoder, units — the API
-// the dashboard Screen consumes. Functional parity with SmolTV-Pro's logic
-// (map #63), reimplemented on smolbase idioms.
+// Weather data layer (#70): providers, fallback, geocoder — the API the
+// dashboard Screen consumes (display formatting lives with the Screen, #88).
+// Functional parity with SmolTV-Pro's logic (map #63), reimplemented on
+// smolbase idioms.
 //
 // Threading (ADR 0001): fetches run on a consumer-spawned FreeRTOS task —
 // TLS handshakes take seconds, far past the loop budget. The main loop stays
 // the only consumer surface: loop() schedules fetches and promotes finished
 // readings under a spinlock; reading()/changed() are main-loop-only.
 //
-// Transport: plain HTTP by default — the researched fallback position,
-// adopted after HTTPS was exercised on-device and the pinned core's CA
-// bundle failed X509 verification against both providers node-dependently
-// (see the verdict comment in WeatherData.cpp). Define SMOLBASE_WEATHER_TLS=1
-// to opt the keyed OWM request back into HTTPS via the built-in bundle.
+// Transport: both providers over HTTPS via the stock IDF CA bundle (#82).
+// Define SMOLBASE_WEATHER_HTTP=1 to drop everything to plain HTTP — the
+// researched last-resort switch (see the scheme fork in WeatherData.cpp).
 #pragma once
 #include <Arduino.h>
 #include <ArduinoJson.h>

@@ -34,7 +34,9 @@ class WeatherApp : public App {
   // OtaStarting parks the app (docs/building-your-app.md): drawing stops —
   // mandatory here, our art lives in .rodata and flash reads during an OTA
   // write can panic (#53) — and loop() stops scheduling fetches, so no new
-  // TLS heap churn competes with the OTA path.
+  // TLS heap churn competes with the OTA path. WeatherScreen keeps its OWN
+  // parked flag: Display ticks the screen independently of App::loop(), so
+  // one flag can't guard both paths.
   bool parked = false;
 
 public:

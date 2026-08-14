@@ -192,15 +192,15 @@ void WeatherScreen::tick(lgfx::LGFX_Device& gfx) {
   localtime_r(&t, &tm);
   if (tm.tm_min != lastMin) {
     lastMin = tm.tm_min;
-    if (!overlayUntilMs) drawClock(gfx);
+    if (!overlayUntilMs) drawClock(gfx, tm);
   }
   if (tm.tm_sec != lastSec) {
     lastSec = tm.tm_sec;
-    if (!overlayUntilMs) drawSeconds(gfx);
+    if (!overlayUntilMs) drawSeconds(gfx, tm.tm_sec);
   }
   if (tm.tm_mday != lastDay) {
     lastDay = tm.tm_mday;
-    drawDate(gfx);
+    drawDate(gfx, tm);
   }
   // Identity overlay: draw once on request; suppress marquee for its duration;
   // force clock repaint when it expires (drawClock clears the CLOCK_Y band).
@@ -323,10 +323,7 @@ void WeatherScreen::rebuildMarquee() {
   }
 }
 
-void WeatherScreen::drawClock(lgfx::LovyanGFX& gfx) {
-  time_t t = time(nullptr);
-  struct tm tm;
-  localtime_r(&t, &tm);
+void WeatherScreen::drawClock(lgfx::LovyanGFX& gfx, const struct tm& tm) {
   int hour = tm.tm_hour;
   if (!h24) {
     hour = hour % 12;
@@ -345,13 +342,14 @@ void WeatherScreen::drawClock(lgfx::LovyanGFX& gfx) {
   gfx.drawString(hs, x0, CLOCK_Y);
   gfx.setTextColor(col(colMin), col(COL_BLACK));
   gfx.drawString(ms, x0 + wh, CLOCK_Y);
-  lastSec = -1; // the seconds label sits inside this band; repaint next tick
+  // The seconds label sits inside this band; -1 differs from every real
+  // second, so the change check in tick() repaints it next pass.
+  lastSec = -1;
 }
 
-void WeatherScreen::drawSeconds(lgfx::LovyanGFX& gfx) {
-  if (lastSec < 0) return;
+void WeatherScreen::drawSeconds(lgfx::LovyanGFX& gfx, int sec) {
   char s[3];
-  snprintf(s, sizeof(s), "%02d", lastSec);
+  snprintf(s, sizeof(s), "%02d", sec);
   gfx.setFont(&fSec.font);
   gfx.setTextDatum(lgfx::top_left);
   gfx.setTextColor(col(colSec), col(COL_BLACK));
@@ -359,10 +357,7 @@ void WeatherScreen::drawSeconds(lgfx::LovyanGFX& gfx) {
   gfx.drawString(s, SEC_X, SEC_Y);
 }
 
-void WeatherScreen::drawDate(lgfx::LovyanGFX& gfx) {
-  time_t t = time(nullptr);
-  struct tm tm;
-  localtime_r(&t, &tm);
+void WeatherScreen::drawDate(lgfx::LovyanGFX& gfx, const struct tm& tm) {
   char buf[24];
   strftime(buf, sizeof(buf), dateFmt.c_str(), &tm);
   const char* wd = WDAY[tm.tm_wday];
