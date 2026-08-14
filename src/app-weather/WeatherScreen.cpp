@@ -23,15 +23,15 @@ namespace {
 
 constexpr int W = 240;
 // Element bands (absolute panel y). On-device tune, round 2 (#74): marquee
-// dropped below-badge overlap with the clock, so the clock moved to y=98 (its
-// Teko-96 digits ink 60 px tall) and the marquee got a 20 px band for the
-// 15 px face; gauge row grew for the larger icons and labels.
+// dropped below-badge overlap with the clock; gauge row grew for the larger
+// icons and labels. #104 grew the marquee to an 18 px face in a 24 px band
+// and nudged the clock down to y=102 (Teko-96 ink is 60 px) to keep the gap.
 constexpr int ICON_X = 8, ICON_Y = 8;
 constexpr int CITY_Y = 14;
 constexpr int BADGE_Y = 44, BADGE_H = 24;
 constexpr int TOP_H = 72; // icon + city + badge band: rows 0..72
-constexpr int MARQ_Y = 72, MARQ_H = 20;
-constexpr int CLOCK_Y = 98, CLOCK_H = 64; // digit ink is 60 px; 4 px slack
+constexpr int MARQ_Y = 72, MARQ_H = 24;   // 24 px band for the 18 px face (#104)
+constexpr int CLOCK_Y = 102, CLOCK_H = 64; // digit ink is 60 px; 4 px slack
 constexpr int SEC_X = 196, SEC_REL_Y = 22; // seconds live inside the clock band
 constexpr int DATE_Y = 180, DATE_H = 18;
 constexpr int GAUGE_Y = 200, GAUGE_H = 34; // up from the bottom bezel (round 3)
@@ -84,7 +84,7 @@ struct Face {
     return font.loadFont(&data);
   }
 };
-Face fClock, fSec, fCity, fDate, fBadge, fText;
+Face fClock, fSec, fCity, fBadge, fText, fMarq;
 
 void drawIcon(const WxIcon& ic, int x, int y) {
   scratch.pushImage(x, y, ic.w, ic.h, (const void*)ic.data, 0u, lgfx::palette_4bit,
@@ -123,9 +123,9 @@ void WeatherScreen::begin() {
   fClock.load(WX_CLOCK96);
   fSec.load(WX_SEC40);
   fCity.load(WX_CITY22);
-  fDate.load(WX_DATE15);
   fBadge.load(WX_BADGE16);
-  fText.load(WX_TEXT15);
+  fText.load(WX_TEXT16);
+  fMarq.load(WX_MARQ18);
   scratch.setColorDepth(16);
   scratch.setBuffer(scratchData, W, SCRATCH_H, 16); // static — no heap sprite
   loadSettings();
@@ -297,7 +297,7 @@ void WeatherScreen::drawMarquee(lgfx::LovyanGFX& gfx, int scrollPx) {
       {", ATM ", COL_WHITE},        {fmtPress(r.pressureHpa, units), COL_AMBER},
       {"      ", COL_WHITE},
   };
-  scratch.setFont(&fText.font);
+  scratch.setFont(&fMarq.font);
   scratch.setTextDatum(lgfx::top_left);
   int lineW = 0;
   for (const Seg& s : segs) lineW += scratch.textWidth(s.text);
@@ -322,7 +322,7 @@ void WeatherScreen::drawMarquee(lgfx::LovyanGFX& gfx, int scrollPx) {
 void WeatherScreen::drawClockBand(lgfx::LovyanGFX& gfx, const struct tm& tm) {
   if (overlayUntilMs) {
     scratch.fillScreen(col(COL_OVERLAY_BG));
-    scratch.setFont(&fDate.font);
+    scratch.setFont(&fText.font);
     scratch.setTextDatum(lgfx::middle_center);
     scratch.setTextColor(col(COL_WHITE), col(COL_OVERLAY_BG));
     scratch.drawString(Net::deviceName(), W / 2, 14);
@@ -366,7 +366,7 @@ void WeatherScreen::drawDate(lgfx::LovyanGFX& gfx, const struct tm& tm) {
   const char* wd = WDAY[tm.tm_wday];
 
   scratch.fillRect(0, 0, W, DATE_H, col(COL_BLACK));
-  scratch.setFont(&fDate.font);
+  scratch.setFont(&fText.font);
   int dw = scratch.textWidth(buf), ww = scratch.textWidth(wd);
   int x0 = (W - dw - ww - 6) / 2;
   scratch.setTextDatum(lgfx::top_left);

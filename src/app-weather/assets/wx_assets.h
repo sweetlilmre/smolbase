@@ -12,9 +12,9 @@ struct WxIcon { uint8_t w, h; const uint16_t* palette; const uint8_t* data; };
 extern const uint8_t WX_CLOCK96[]; // lv_font_conv bin, 2548 B
 extern const uint8_t WX_SEC40[]; // lv_font_conv bin, 932 B
 extern const uint8_t WX_CITY22[]; // lv_font_conv bin, 13612 B
-extern const uint8_t WX_DATE15[]; // lv_font_conv bin, 3572 B
 extern const uint8_t WX_BADGE16[]; // lv_font_conv bin, 4468 B
-extern const uint8_t WX_TEXT15[]; // lv_font_conv bin, 3608 B
+extern const uint8_t WX_TEXT16[]; // lv_font_conv bin, 4224 B
+extern const uint8_t WX_MARQ18[]; // lv_font_conv bin, 4820 B
 
 constexpr size_t WX_ICON_COUNT = 9;
 extern const uint8_t WX_ICON_CODES[WX_ICON_COUNT]; // OWM icon-prefix codes

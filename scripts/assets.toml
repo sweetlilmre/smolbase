@@ -60,13 +60,6 @@ size = 22
 range = "0x20-0x7E,0xA0-0xFF"   # Latin-1: city names carry accents
 kerning = true
 
-[fonts.WX_DATE15]
-family = "montserrat"
-weight = 500
-size = 15
-range = "0x20-0x7E"
-kerning = true
-
 [fonts.WX_BADGE16]
 family = "montserrat"
 weight = 700
@@ -74,10 +67,22 @@ size = 16
 range = "0x20-0x7E"
 kerning = true
 
-[fonts.WX_TEXT15]
+[fonts.WX_TEXT16]
+# The one utility face (#104): gauge labels, date line, identity overlay.
+# The former WX_DATE15 was this face minus the degree sign — pure
+# duplication, collapsed; then grown 15 → 16 px on-device.
 family = "montserrat"
 weight = 500
-size = 15
+size = 16
+range = "0x20-0x7E,0xB0"   # gauge labels carry the degree sign
+kerning = true
+
+[fonts.WX_MARQ18]
+# The marquee's own face (#104): grown from the shared 15 px without
+# dragging the gauge labels along.
+family = "montserrat"
+weight = 500
+size = 18
 range = "0x20-0x7E,0xB0"   # marquee needs the degree sign
 kerning = true
 
