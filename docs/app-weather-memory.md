@@ -1,9 +1,44 @@
 # Weather app memory situation
 
-Status: working but tight, as flown on `fw 0.3.0-weather` (map #63, flight
-log on ticket #74). This documents what the RAM budget actually looks like
-on-device, how the TLS handshake fits into it, and what is still unexplained.
-The follow-up investigation is [ticket #77](https://github.com/sweetlilmre/smolbase/issues/77).
+Status: **comfortable** since the band-scratch rendering rework
+([ADR 0004](adr/0004-weather-band-scratch-rendering.md), tickets #102/#103,
+2026-08-14). Everything below the "Current numbers" section is the historical
+flight record from the tight era (`fw 0.3.0-weather`, map #63, flight log on
+ticket #74, follow-up #77) — kept because its measurements and method are
+what the rework was built on.
+
+## Current numbers (ADR 0004 era, measured on-device 2026-08-14)
+
+| Measurement | Value | Tight-era value |
+| --- | --- | --- |
+| Free heap, steady state | **~96 KB** | ~49–57 KB |
+| Largest free block, steady state | **~90 KB** | ~29–40 KB |
+| All-time heap minimum during a TLS handshake | **~37 KB** | 208 B → ~2–5 KB |
+| Boot heap (before WiFi) | ~123 KB | ~95 KB |
+
+What changed (see the ADR for the full arc):
+
+- The 13.4 KB heap **marquee sprite is gone** — the marquee draws into the
+  band scratch. The suspend/resume fetch choreography (#74/#94) is retired;
+  WeatherData's fetch-window hooks remain in the interface, unused.
+- The core's 57.6 KB static framebuffer is **compiled out** of this env
+  (`SMOLBASE_FRAMEBUFFER=0`); the app owns a 30.7 KB static 240×64 RGB565
+  band scratch instead — net ~27 KB of static RAM returned.
+- With a ~37 KB TLS floor and a ~90 KB largest block, the boot-time
+  `X509`/OOM fetch transients are structurally gone, and the ≥55 KB-free /
+  ≥34 KB-largest-block handshake gate below is cleared roughly 2× over.
+- Now-dead levers from the list at the bottom: the 4 bpp marquee sprite
+  (no sprite exists) and the screenshot-vs-fetch collision (endpoint removed
+  in #82's era). The stack-shrink, font-subsetting, and
+  `CONFIG_MBEDTLS_DYNAMIC_BUFFER` levers remain valid if ever needed.
+
+---
+
+# Historical flight record (tight era, fw 0.3.0-weather)
+
+This documents what the RAM budget actually looked like
+on-device, how the TLS handshake fits into it, and what was then unexplained.
+The follow-up investigation was [ticket #77](https://github.com/sweetlilmre/smolbase/issues/77).
 
 ## The headline numbers (measured on-device)
 

@@ -1,12 +1,9 @@
 // Variant C layout (ticket #67 resolution — coordinates live there and in the
-// prototype on the prototype/dashboard-layout branch). Drawing goes DIRECT to
-// the panel — no full framebuffer: every element owns a black rectangle it
-// clears and repaints on its own cadence (dirty-flag pattern, ticket #6), and
-// AA text blends toward the drawn background per the asset research. The
-// marquee is the exception: an 8-bpp sprite holding the full line, tiled at
-// a scrolling offset each frame (LovyanGFX clips to the panel, so only the
-// visible band is transmitted) — and surrendered to the TLS handshake for
-// the duration of each fetch (see suspendMarquee).
+// prototype on the prototype/dashboard-layout branch). Rendering per ADR 0004:
+// band painters compose into the static RGB565 scratch below (band-relative
+// y), then push to the panel at the band's absolute y, clipped to the band's
+// height. Full 16-bpp color — no RGB332 quantization — and pushes are already
+// in the panel's wire format.
 //
 // Fonts are lv_font_conv bin blobs (scripts/build_assets.py) parsed once into
 // static BFFfont instances — LovyanGFX's loadFont() slot holds only one
@@ -25,23 +22,19 @@
 namespace {
 
 constexpr int W = 240;
-// Element bands (each element clears its own). On-device tune, round 2 (#74):
-// marquee dropped below-badge overlap with the clock, so the clock moved to
-// y=98 (its Teko-96 digits ink 60 px tall) and the marquee got a 20 px band
-// for the 15 px face; gauge row grew for the larger icons and labels.
+// Element bands (absolute panel y). On-device tune, round 2 (#74): marquee
+// dropped below-badge overlap with the clock, so the clock moved to y=98 (its
+// Teko-96 digits ink 60 px tall) and the marquee got a 20 px band for the
+// 15 px face; gauge row grew for the larger icons and labels.
 constexpr int ICON_X = 8, ICON_Y = 8;
 constexpr int CITY_Y = 14;
 constexpr int BADGE_Y = 44, BADGE_H = 24;
+constexpr int TOP_H = 72; // icon + city + badge band: rows 0..72
 constexpr int MARQ_Y = 72, MARQ_H = 20;
 constexpr int CLOCK_Y = 98, CLOCK_H = 64; // digit ink is 60 px; 4 px slack
-constexpr int SEC_X = 196, SEC_Y = 120;
+constexpr int SEC_X = 196, SEC_REL_Y = 22; // seconds live inside the clock band
 constexpr int DATE_Y = 180, DATE_H = 18;
 constexpr int GAUGE_Y = 200, GAUGE_H = 34; // up from the bottom bezel (round 3)
-// The marquee sprite is allocated ONCE at begin(), full size, while the heap
-// is unfragmented: a mid-session (re)alloc carves up the largest free block
-// and TLS handshakes (2x ~16.7 KB record buffers) start failing — measured
-// on-device. 8 bpp (RGB332) halves the cost; the line colors survive fine.
-constexpr int MARQ_W_MAX = 672;
 
 // 24-bit RGB888 palette constants (see col() below for how LovyanGFX reads them).
 constexpr uint32_t COL_AMBER = 0xfeba00, COL_CYAN = 0x99ffff, COL_GREEN = 0x99ff1f;
@@ -49,14 +42,30 @@ constexpr uint32_t COL_WDAY = 0x87cefa, COL_BADGE_BG = 0x2196f3, COL_TEMPBAR = 0
 constexpr uint32_t COL_WHITE = 0xffffff, COL_BLACK = 0x000000;
 constexpr uint32_t COL_OVERLAY_BG = 0x001133;
 
+constexpr uint32_t FRAME_MS = 33;     // marquee timestep: 1 px per 33 ms ≈ 30 px/s
 constexpr uint32_t OVERLAY_MS = 5000; // identity overlay display duration
 const char* const WDAY[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
 // LovyanGFX resolves integer color arguments by TYPE: 32-bit ints are RGB888
-// on every target — the 16-bpp panel and the 8-bpp screenshot sprite alike
-// (uint16_t would mean RGB565, uint8_t RGB332). This identity wrapper exists
-// to make that contract visible at each call site.
+// on every target — the 16-bpp scratch and panel alike. This identity wrapper
+// exists to make that contract visible at each call site.
 constexpr uint32_t col(uint32_t rgb888) { return rgb888; }
+
+// The band scratch (ADR 0004): one clock band tall — the tallest indivisible
+// band (Teko-96 ink is 60 px). Static .bss for the same TLS-contiguity reason
+// the core framebuffer was; 240 × 64 × 2 B = 30.7 KB, vs the 57.6 KB core
+// buffer this env no longer compiles in.
+constexpr int SCRATCH_H = CLOCK_H;
+uint8_t scratchData[W * SCRATCH_H * 2];
+lgfx::LGFX_Sprite scratch;
+
+// Push the scratch's top `h` rows to the panel at band y. The panel clip
+// makes pushSprite transfer only those rows.
+void pushBand(lgfx::LovyanGFX& gfx, int y, int h) {
+  gfx.setClipRect(0, y, W, h);
+  scratch.pushSprite(&gfx, 0, y);
+  gfx.clearClipRect();
+}
 
 // #RRGGBB → 0xRRGGBB (settings store the picker string; bad input = default).
 uint32_t hexRgb(const String& s, uint32_t def) {
@@ -77,9 +86,9 @@ struct Face {
 };
 Face fClock, fSec, fCity, fDate, fBadge, fText;
 
-void drawIcon(lgfx::LovyanGFX& gfx, const WxIcon& ic, int x, int y) {
-  gfx.pushImage(x, y, ic.w, ic.h, (const void*)ic.data, 0u, lgfx::palette_4bit,
-                (const lgfx::rgb565_t*)ic.palette);
+void drawIcon(const WxIcon& ic, int x, int y) {
+  scratch.pushImage(x, y, ic.w, ic.h, (const void*)ic.data, 0u, lgfx::palette_4bit,
+                    (const lgfx::rgb565_t*)ic.palette);
 }
 
 const WxIcon& conditionIcon(uint8_t code) {
@@ -117,7 +126,8 @@ void WeatherScreen::begin() {
   fDate.load(WX_DATE15);
   fBadge.load(WX_BADGE16);
   fText.load(WX_TEXT15);
-  marquee.create(); // once, pristine heap — see MARQ_W_MAX
+  scratch.setColorDepth(16);
+  scratch.setBuffer(scratchData, W, SCRATCH_H, 16); // static — no heap sprite
   loadSettings();
 }
 
@@ -139,14 +149,15 @@ void WeatherScreen::loadSettings() {
   units.wind = ConfigStore::getString(WxKeys::UNIT_WIND, WxKeys::DEF_UNIT_WIND);
   units.press = ConfigStore::getString(WxKeys::UNIT_PRESS, WxKeys::DEF_UNIT_PRESS);
   weatherDirty = true; // colours/units/format re-render from cached data (#68)
-  lastMin = lastSec = lastDay = -1;
+  lastSec = lastDay = -1;
 }
 
 void WeatherScreen::onEnter(lgfx::LGFX_Device& gfx) {
   gfx.setBaseColor(col(COL_BLACK));
   gfx.fillScreen(col(COL_BLACK));
   weatherDirty = true;
-  lastMin = lastSec = lastDay = -1;
+  lastSec = lastDay = -1;
+  lastScrollMs = millis();
 }
 
 void WeatherScreen::onTap() { WeatherData::forceRefresh(); }
@@ -156,154 +167,122 @@ void WeatherScreen::onLongPress() {
   overlayDirty = true;
 }
 
-void WeatherScreen::drawIdentityOverlay(lgfx::LovyanGFX& gfx) {
-  // Overlay sits in the clock band — drawClock() clears it on expiry.
-  gfx.fillRect(0, CLOCK_Y, W, CLOCK_H, col(COL_OVERLAY_BG));
-  gfx.setFont(&fDate.font);
-  gfx.setTextDatum(lgfx::middle_center);
-  gfx.setTextColor(col(COL_WHITE), col(COL_OVERLAY_BG));
-  gfx.drawString(Net::deviceName(), W / 2, CLOCK_Y + 14);
-  gfx.setTextColor(col(COL_CYAN), col(COL_OVERLAY_BG));
-  gfx.drawString(Net::ip().toString(), W / 2, CLOCK_Y + 32);
-  gfx.setTextColor(col(COL_WHITE), col(COL_OVERLAY_BG));
-  gfx.drawString(SMOLBASE_FW_VERSION, W / 2, CLOCK_Y + 51);
-  gfx.setTextDatum(lgfx::top_left);
-}
-
-// Both are idempotent, fired by WeatherData's fetch-window hooks (core 1,
-// same as tick — no race with the scroll). Suspend leaves the last-pushed
-// pixels frozen in the band; resume rebuilds the line from the cached reading.
-void WeatherScreen::suspendMarquee() { marquee.suspend(); }
-
-void WeatherScreen::resumeMarquee() { marquee.resume(cachedReading, units, &fText.font); }
-
 void WeatherScreen::tick(lgfx::LGFX_Device& gfx) {
   if (parked) return;
+  uint32_t now = millis();
+
   if (weatherDirty) {
     weatherDirty = false;
     drawWeather(gfx);
   }
+
+  // Overlay request and expiry both just force the clock band's redraw —
+  // it owns those rows and repaints whole (ADR 0004), so nothing to erase.
+  if (overlayDirty) {
+    overlayDirty = false;
+    lastSec = -1;
+  } else if (overlayUntilMs && now >= overlayUntilMs) {
+    overlayUntilMs = 0;
+    lastSec = -1;
+  }
+
   time_t t = time(nullptr);
   struct tm tm;
   localtime_r(&t, &tm);
-  if (tm.tm_min != lastMin) {
-    lastMin = tm.tm_min;
-    if (!overlayUntilMs) drawClock(gfx, tm);
-  }
   if (tm.tm_sec != lastSec) {
     lastSec = tm.tm_sec;
-    if (!overlayUntilMs) drawSeconds(gfx, tm.tm_sec);
+    drawClockBand(gfx, tm);
   }
   if (tm.tm_mday != lastDay) {
     lastDay = tm.tm_mday;
     drawDate(gfx, tm);
   }
-  // Identity overlay: draw once on request; suppress marquee for its duration;
-  // force clock repaint when it expires (drawClock clears the CLOCK_Y band).
-  uint32_t now = millis();
-  if (overlayDirty) {
-    overlayDirty = false;
-    drawIdentityOverlay(gfx);
-  } else if (overlayUntilMs && now >= overlayUntilMs) {
-    overlayUntilMs = 0;
-    lastMin = lastSec = -1; // trigger drawClock + drawSeconds to erase the overlay
+
+  // Marquee: time-based scroll, 1 px per 33 ms ≈ 30 px/s — the average holds
+  // even if a pass runs long. Paused while the identity overlay is up.
+  if (overlayUntilMs) {
+    lastScrollMs = now; // no catch-up jump when the overlay expires
+  } else if (now - lastScrollMs >= FRAME_MS) {
+    int px = (int)((now - lastScrollMs) / FRAME_MS);
+    lastScrollMs += (uint32_t)px * FRAME_MS;
+    if (px > W) px = W; // stall (OTA pause etc.): don't spin the wrap loop
+    drawMarquee(gfx, px);
   }
-  // Marquee — paused while the identity overlay is up.
-  if (!overlayUntilMs) marquee.render(gfx, now);
 }
 
-// ---- element painters --------------------------------------------------------
+// ---- band painters -------------------------------------------------------------
 
 void WeatherScreen::drawWeather(lgfx::LovyanGFX& gfx) {
   const WeatherData::Reading& r = cachedReading;
 
-  // Icon + city + badge share the top band; clear it wholesale.
-  gfx.fillRect(0, 0, W, MARQ_Y, col(COL_BLACK));
-
   String city = nickname.length() ? nickname : String(r.city);
   if (!city.length()) city = ConfigStore::getString(WxKeys::CITY, WxKeys::DEF_CITY);
 
-  if (r.valid) drawIcon(gfx, conditionIcon(r.iconCode), ICON_X, ICON_Y);
+  // Top band, 72 rows > the 64-row scratch: compose twice, content shifted up
+  // by the pass offset, and push each slice clipped (ADR 0004). Rasterizing
+  // the band twice happens only per fetch/settings change — free.
+  for (int yOff = 0; yOff < TOP_H; yOff += SCRATCH_H) {
+    scratch.fillScreen(col(COL_BLACK));
 
-  // City centered, country code inline in amber.
-  gfx.setTextDatum(lgfx::top_left);
-  gfx.setFont(&fCity.font);
-  int cw = gfx.textWidth(city);
-  gfx.setFont(&fBadge.font);
-  int ccw = r.country[0] ? gfx.textWidth(r.country) + 6 : 0;
-  int x0 = (W - cw - ccw) / 2;
-  gfx.setFont(&fCity.font);
-  gfx.setTextColor(col(COL_WHITE), col(COL_BLACK));
-  gfx.drawString(city, x0, CITY_Y);
-  if (ccw) {
-    gfx.setFont(&fBadge.font);
-    gfx.setTextColor(col(COL_AMBER), col(COL_BLACK));
-    gfx.drawString(r.country, x0 + cw + 6, CITY_Y + 7);
+    if (r.valid) drawIcon(conditionIcon(r.iconCode), ICON_X, ICON_Y - yOff);
+
+    // City centered, country code inline in amber.
+    scratch.setTextDatum(lgfx::top_left);
+    scratch.setFont(&fCity.font);
+    int cw = scratch.textWidth(city);
+    scratch.setFont(&fBadge.font);
+    int ccw = r.country[0] ? scratch.textWidth(r.country) + 6 : 0;
+    int x0 = (W - cw - ccw) / 2;
+    scratch.setFont(&fCity.font);
+    scratch.setTextColor(col(COL_WHITE), col(COL_BLACK));
+    scratch.drawString(city, x0, CITY_Y - yOff);
+    if (ccw) {
+      scratch.setFont(&fBadge.font);
+      scratch.setTextColor(col(COL_AMBER), col(COL_BLACK));
+      scratch.drawString(r.country, x0 + cw + 6, CITY_Y + 7 - yOff);
+    }
+
+    // Condition badge, centered; width grows for long OWM mains ("Thunderstorm").
+    const char* cond = r.valid ? r.condition : "--";
+    scratch.setFont(&fBadge.font);
+    int bw = scratch.textWidth(cond) + 14;
+    if (bw < 72) bw = 72;
+    scratch.fillRoundRect((W - bw) / 2, BADGE_Y - yOff, bw, BADGE_H, 4, col(COL_BADGE_BG));
+    scratch.setTextDatum(lgfx::middle_center);
+    scratch.setTextColor(col(COL_WHITE), col(COL_BADGE_BG));
+    scratch.drawString(cond, W / 2, BADGE_Y + BADGE_H / 2 - yOff);
+    scratch.setTextDatum(lgfx::top_left);
+
+    int h = TOP_H - yOff < SCRATCH_H ? TOP_H - yOff : SCRATCH_H;
+    pushBand(gfx, yOff, h);
   }
 
-  // Condition badge, centered; width grows for long OWM mains ("Thunderstorm").
-  const char* cond = r.valid ? r.condition : "--";
-  gfx.setFont(&fBadge.font);
-  int bw = gfx.textWidth(cond) + 14;
-  if (bw < 72) bw = 72;
-  gfx.fillRoundRect((W - bw) / 2, BADGE_Y, bw, BADGE_H, 4, col(COL_BADGE_BG));
-  gfx.setTextDatum(lgfx::middle_center);
-  gfx.setTextColor(col(COL_WHITE), col(COL_BADGE_BG));
-  gfx.drawString(cond, W / 2, BADGE_Y + BADGE_H / 2);
-  gfx.setTextDatum(lgfx::top_left);
-
-  gfx.fillRect(0, MARQ_Y, W, MARQ_H, col(COL_BLACK)); // stale marquee pixels
-  marquee.rebuild(r, units, &fText.font);
-
-  // Gauge row: temp left, humidity right.
-  gfx.fillRect(0, GAUGE_Y, W, GAUGE_H, col(COL_BLACK));
-  // x layout (round 3): temp icon in from the bezel; slimmer bars so the
-  // temp label clears the humidity icon and the % label clears the right edge.
-  drawIcon(gfx, WX_GAUGE_TEMP, 10, GAUGE_Y + 2);
-  drawIcon(gfx, WX_GAUGE_HUMI, 130, GAUGE_Y + 5);
+  // Gauge band: temp left, humidity right (band-relative y). x layout (round
+  // 3): temp icon in from the bezel; slimmer bars so the temp label clears
+  // the humidity icon and the % label clears the right edge.
+  scratch.fillScreen(col(COL_BLACK));
+  drawIcon(WX_GAUGE_TEMP, 10, 2);
+  drawIcon(WX_GAUGE_HUMI, 130, 5);
   auto bar = [&](int x, float frac, uint32_t c) {
-    gfx.drawRect(x, GAUGE_Y + 9, 50, 14, col(COL_WHITE));
+    scratch.drawRect(x, 9, 50, 14, col(COL_WHITE));
     if (frac < 0) frac = 0;
     if (frac > 1) frac = 1;
-    gfx.fillRect(x + 2, GAUGE_Y + 11, (int)(46 * frac), 10, col(c));
+    scratch.fillRect(x + 2, 11, (int)(46 * frac), 10, col(c));
   };
   bar(32, (r.tempC + 50.0f) / 100.0f, COL_TEMPBAR); // SmolTV-Pro's -50..50 range
   bar(152, r.humidity / 100.0f, COL_BADGE_BG);
-  gfx.setFont(&fText.font);
-  gfx.setTextColor(col(COL_WHITE), col(COL_BLACK));
-  gfx.drawString(r.valid ? fmtTemp(r.tempC, units) : "--", 88, GAUGE_Y + 11);
-  gfx.drawString(r.valid ? String(r.humidity) + "%" : "--", 206, GAUGE_Y + 11);
+  scratch.setFont(&fText.font);
+  scratch.setTextColor(col(COL_WHITE), col(COL_BLACK));
+  scratch.drawString(r.valid ? fmtTemp(r.tempC, units) : "--", 88, 11);
+  scratch.drawString(r.valid ? String(r.humidity) + "%" : "--", 206, 11);
+  pushBand(gfx, GAUGE_Y, GAUGE_H);
 }
 
-// ---- Marquee (declared in WeatherScreen.h; see class comment there) ----------
-// Defined here because the implementation leans on this file's band layout,
-// palette, and formatting helpers.
-
-void Marquee::create() {
-  spr.setColorDepth(8);
-  spr.createSprite(MARQ_W_MAX, MARQ_H);
-}
-
-void Marquee::suspend() {
-  if (spr.getBuffer()) {
-    spr.deleteSprite();
-    width = 0; // invariant: no buffer, no width — render() goes quiet
-  }
-}
-
-void Marquee::resume(const WeatherData::Reading& r, const WxUnits& u, const lgfx::IFont* f) {
-  if (!spr.getBuffer()) {
-    spr.setColorDepth(8);
-    if (spr.createSprite(MARQ_W_MAX, MARQ_H)) rebuild(r, u, f);
-  }
-}
-
-void Marquee::rebuild(const WeatherData::Reading& r, const WxUnits& u, const lgfx::IFont* f) {
-  // Suspended mid-fetch (a settings save can land here): stay quiet; the
-  // fetch-window end hook resumes and rebuilds. This guard IS the invariant.
-  if (!spr.getBuffer()) return;
+void WeatherScreen::drawMarquee(lgfx::LovyanGFX& gfx, int scrollPx) {
+  scratch.fillRect(0, 0, W, MARQ_H, col(COL_BLACK));
+  const WeatherData::Reading& r = cachedReading;
   if (!r.valid) { // no fetch yet: a scroll of zeros would read as data
-    width = 0;    // render() skips the push; drawWeather cleared the band
+    pushBand(gfx, MARQ_Y, MARQ_H);
     return;
   }
   struct Seg {
@@ -311,75 +290,74 @@ void Marquee::rebuild(const WeatherData::Reading& r, const WxUnits& u, const lgf
     uint32_t color;
   };
   const Seg segs[] = {
-      {"Lowest ", COL_WHITE},       {fmtTemp(r.tempMinC, u), COL_CYAN},
-      {", Highest ", COL_WHITE},    {fmtTemp(r.tempMaxC, u), COL_AMBER},
-      {", Feels like ", COL_WHITE}, {fmtTemp(r.feelsC, u), COL_AMBER},
-      {", Wind speed ", COL_WHITE}, {fmtWind(r.windMs, u), COL_GREEN},
-      {", ATM ", COL_WHITE},        {fmtPress(r.pressureHpa, u), COL_AMBER},
+      {"Lowest ", COL_WHITE},       {fmtTemp(r.tempMinC, units), COL_CYAN},
+      {", Highest ", COL_WHITE},    {fmtTemp(r.tempMaxC, units), COL_AMBER},
+      {", Feels like ", COL_WHITE}, {fmtTemp(r.feelsC, units), COL_AMBER},
+      {", Wind speed ", COL_WHITE}, {fmtWind(r.windMs, units), COL_GREEN},
+      {", ATM ", COL_WHITE},        {fmtPress(r.pressureHpa, units), COL_AMBER},
       {"      ", COL_WHITE},
   };
-  // The fixed-size sprite (allocated once at create()) holds ONE copy of the
-  // line; render() tiles it across the band. A line wider than the sprite
-  // clips — at 15 px the full line fits MARQ_W_MAX with margin.
-  spr.setFont(f);
-  // The tile stride must equal the sprite width exactly: a shorter stride
-  // makes each push's black tail erase the start of the NEXT copy, which the
-  // following frame repaints — a flicker on the line's first words (seen
-  // on-device, round 3). Text shorter than the sprite just reads as a gap
-  // between repeats; text longer clips (never happens at 15 px).
-  width = MARQ_W_MAX;
-  x = 0;
-  spr.fillSprite(col(COL_BLACK));
-  spr.setTextDatum(lgfx::top_left);
-  int tx = 0;
-  for (const Seg& s : segs) {
-    spr.setTextColor(col(s.color), col(COL_BLACK));
-    spr.drawString(s.text, tx, 2);
-    tx += spr.textWidth(s.text);
+  scratch.setFont(&fText.font);
+  scratch.setTextDatum(lgfx::top_left);
+  int lineW = 0;
+  for (const Seg& s : segs) lineW += scratch.textWidth(s.text);
+  if (lineW <= 0) return;
+  marqX -= scrollPx;
+  while (marqX <= -lineW) marqX += lineW;
+  // Consecutive copies cover the band; the scratch clips glyphs at the edges.
+  for (int x = marqX; x < W; x += lineW) {
+    int tx = x;
+    for (const Seg& s : segs) {
+      scratch.setTextColor(col(s.color), col(COL_BLACK));
+      scratch.drawString(s.text, tx, 2);
+      tx += scratch.textWidth(s.text);
+    }
   }
+  pushBand(gfx, MARQ_Y, MARQ_H);
 }
 
-void Marquee::render(lgfx::LovyanGFX& gfx, uint32_t now) {
-  // ~30 Hz, 1 px/frame ≈ 30 px/s.
-  if (width <= 0 || now - lastFrameMs < 33) return;
-  lastFrameMs = now;
-  if (--x <= -width) x += width;
-  // Consecutive copies cover the whole band; the panel clips the rest.
-  for (int px = x; px < W; px += width) spr.pushSprite(&gfx, px, MARQ_Y);
-}
+// The whole band — hh:mm + seconds, or the identity overlay — redraws every
+// second (ADR 0004): a few ms of rasterization at 1 Hz buys away the seconds
+// special case and all overlay erase logic.
+void WeatherScreen::drawClockBand(lgfx::LovyanGFX& gfx, const struct tm& tm) {
+  if (overlayUntilMs) {
+    scratch.fillScreen(col(COL_OVERLAY_BG));
+    scratch.setFont(&fDate.font);
+    scratch.setTextDatum(lgfx::middle_center);
+    scratch.setTextColor(col(COL_WHITE), col(COL_OVERLAY_BG));
+    scratch.drawString(Net::deviceName(), W / 2, 14);
+    scratch.setTextColor(col(COL_CYAN), col(COL_OVERLAY_BG));
+    scratch.drawString(Net::ip().toString(), W / 2, 32);
+    scratch.setTextColor(col(COL_WHITE), col(COL_OVERLAY_BG));
+    scratch.drawString(SMOLBASE_FW_VERSION, W / 2, 51);
+    scratch.setTextDatum(lgfx::top_left);
+    pushBand(gfx, CLOCK_Y, CLOCK_H);
+    return;
+  }
 
-void WeatherScreen::drawClock(lgfx::LovyanGFX& gfx, const struct tm& tm) {
   int hour = tm.tm_hour;
   if (!h24) {
     hour = hour % 12;
     if (hour == 0) hour = 12; // 12 h mode: no AM/PM, no leading zero (parity)
   }
-  char hs[6], ms[3];
+  char hs[6], ms[3], ss[3];
   snprintf(hs, sizeof(hs), h24 ? "%02d:" : "%d:", hour);
   snprintf(ms, sizeof(ms), "%02d", tm.tm_min);
+  snprintf(ss, sizeof(ss), "%02d", tm.tm_sec);
 
-  gfx.fillRect(0, CLOCK_Y, W, CLOCK_H, col(COL_BLACK));
-  gfx.setFont(&fClock.font);
-  int wh = gfx.textWidth(hs), wm = gfx.textWidth(ms);
+  scratch.fillScreen(col(COL_BLACK));
+  scratch.setFont(&fClock.font);
+  int wh = scratch.textWidth(hs), wm = scratch.textWidth(ms);
   int x0 = (W - wh - wm) / 2;
-  gfx.setTextDatum(lgfx::top_left);
-  gfx.setTextColor(col(colHour), col(COL_BLACK)); // colon inherits hour color (#67)
-  gfx.drawString(hs, x0, CLOCK_Y);
-  gfx.setTextColor(col(colMin), col(COL_BLACK));
-  gfx.drawString(ms, x0 + wh, CLOCK_Y);
-  // The seconds label sits inside this band; -1 differs from every real
-  // second, so the change check in tick() repaints it next pass.
-  lastSec = -1;
-}
-
-void WeatherScreen::drawSeconds(lgfx::LovyanGFX& gfx, int sec) {
-  char s[3];
-  snprintf(s, sizeof(s), "%02d", sec);
-  gfx.setFont(&fSec.font);
-  gfx.setTextDatum(lgfx::top_left);
-  gfx.setTextColor(col(colSec), col(COL_BLACK));
-  gfx.fillRect(SEC_X, SEC_Y, W - SEC_X, 30, col(COL_BLACK));
-  gfx.drawString(s, SEC_X, SEC_Y);
+  scratch.setTextDatum(lgfx::top_left);
+  scratch.setTextColor(col(colHour), col(COL_BLACK)); // colon inherits hour color (#67)
+  scratch.drawString(hs, x0, 0);
+  scratch.setTextColor(col(colMin), col(COL_BLACK));
+  scratch.drawString(ms, x0 + wh, 0);
+  scratch.setFont(&fSec.font);
+  scratch.setTextColor(col(colSec), col(COL_BLACK));
+  scratch.drawString(ss, SEC_X, SEC_REL_Y);
+  pushBand(gfx, CLOCK_Y, CLOCK_H);
 }
 
 void WeatherScreen::drawDate(lgfx::LovyanGFX& gfx, const struct tm& tm) {
@@ -387,13 +365,14 @@ void WeatherScreen::drawDate(lgfx::LovyanGFX& gfx, const struct tm& tm) {
   strftime(buf, sizeof(buf), dateFmt.c_str(), &tm);
   const char* wd = WDAY[tm.tm_wday];
 
-  gfx.fillRect(0, DATE_Y, W, DATE_H, col(COL_BLACK));
-  gfx.setFont(&fDate.font);
-  int dw = gfx.textWidth(buf), ww = gfx.textWidth(wd);
+  scratch.fillRect(0, 0, W, DATE_H, col(COL_BLACK));
+  scratch.setFont(&fDate.font);
+  int dw = scratch.textWidth(buf), ww = scratch.textWidth(wd);
   int x0 = (W - dw - ww - 6) / 2;
-  gfx.setTextDatum(lgfx::top_left);
-  gfx.setTextColor(col(COL_WHITE), col(COL_BLACK));
-  gfx.drawString(buf, x0, DATE_Y);
-  gfx.setTextColor(col(COL_WDAY), col(COL_BLACK));
-  gfx.drawString(wd, x0 + dw + 6, DATE_Y);
+  scratch.setTextDatum(lgfx::top_left);
+  scratch.setTextColor(col(COL_WHITE), col(COL_BLACK));
+  scratch.drawString(buf, x0, 0);
+  scratch.setTextColor(col(COL_WDAY), col(COL_BLACK));
+  scratch.drawString(wd, x0 + dw + 6, 0);
+  pushBand(gfx, DATE_Y, DATE_H);
 }

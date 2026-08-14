@@ -75,11 +75,11 @@ public:
     Secrets::describe(WxKeys::OWM_KEY, "OpenWeatherMap API key",
                       "Optional — without a key, weather falls back to Open-Meteo "
                       "(no humidity, pressure, or feels-like).");
-    // RAM choreography (#74/#94): WeatherData owns the fetch window and
-    // announces it — free the marquee sprite ahead of the ~49 KB TLS peak,
-    // restore it once the cycle's result lands.
-    WeatherData::begin([this] { screen.suspendMarquee(); },
-                       [this] { screen.resumeMarquee(); });
+    // Fetch-window hooks (#94) pass empty since #102: the screen composes into
+    // the core's STATIC framebuffer and the heap marquee sprite is gone —
+    // nothing left to surrender to the ~49 KB TLS peak. The seam stays; it
+    // documents the fetch window for any future consumer.
+    WeatherData::begin({}, {});
     screen.begin();
     Display::setActive(&screen);
   }
