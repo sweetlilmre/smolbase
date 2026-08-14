@@ -7,6 +7,13 @@
 
 class WeatherScreen : public Screen {
 public:
+  // Unit prefs (#68 catalog values) as one bundle. Filled by loadSettings()
+  // — which begin() calls before any render — so no member defaults here:
+  // the defaults live at the getString calls, in one place.
+  struct Units {
+    String temp, wind, press;
+  };
+
   void begin();   // load fonts; call once from setup
   void loadSettings();
   void markWeatherDirty() { weatherDirty = true; }
@@ -36,7 +43,7 @@ private:
   bool h24 = true;
   String dateFmt = "%d/%m/%Y";
   String nickname;
-  String unitTemp = "C", unitWind = "ms", unitPress = "hpa";
+  Units units;
 
   lgfx::LGFX_Sprite marq;  // 8-bpp line sprite, fixed size, allocated once
   int marqWidth = 0;       // pixel width of one marquee copy

@@ -50,6 +50,10 @@ constexpr const char* K_GEO_LAT  = "wx_lat";
 constexpr const char* K_GEO_LON  = "wx_lon";
 constexpr const char* K_GEO_NAME = "wx_geo_name";
 constexpr const char* K_GEO_CC   = "wx_geo_cc";
+// Registered keys this module reads (schema lives in WeatherApp::setup;
+// the strings must match it and the Secret Descriptor there).
+constexpr const char* K_CITY    = "city";
+constexpr const char* K_OWM_KEY = "owm_api_key";
 String geoTriedFor;
 // The city value as of the last settings pass: onSettingsChanged compares
 // against this — ONLY a city change refetches (#68 Q4); every other save
@@ -57,15 +61,19 @@ String geoTriedFor;
 String lastCity;
 
 // ---- cross-task handoff -----------------------------------------------------
-// The fetch task writes `pending` under `lock` and flips pendingReady;
+// The fetch task writes `pending` under `ctx.mux` and flips pendingReady;
 // loop() promotes it into `current`. ctx.args go the other way: loop()
 // fills them before notifying, so the task never touches ConfigStore/Secrets
 // (both are mutex-guarded and fine, but keeping ALL policy reads on core 1
 // keeps this file honest about where decisions happen).
 //
 // FetchContext names the two halves of the protocol:
-//   args:   main→task, written before xTaskNotifyGive (notify is the barrier)
-//   result: task→main, promoted under lock at end of each cycle
+//   args: main→task, written before xTaskNotifyGive (the notify is the barrier)
+//   geo:  geocode/harvested coords. Mid-cycle the task uses it as UNLOCKED
+//         scratch (fetchOpenMeteo reads what geocode/fetchOwm wrote); only the
+//         end-of-cycle handoff to loop() happens under mux. That's sound
+//         because the notify → pendingReady handshake means task and main
+//         never touch it concurrently.
 struct FetchContext {
   struct Args {
     char city[64];     // raw setting value (name or numeric OWM id)
@@ -73,14 +81,16 @@ struct FetchContext {
     char lat[12], lon[12]; // cached coords, "" = unknown
     bool geocode;      // this city value still needs a name→lat/lon attempt
   } args;
-  struct Result {
+  struct Geo {
     bool fresh = false;
     bool retryGeocode = false; // attempt never completed: don't keep the latch
     char lat[12], lon[12], name[32], cc[4];
-  } result;
+  } geo;
+  // Guards the end-of-cycle handoff only: pending, pendingReady, and the geo
+  // promotion. NOT geo's mid-cycle scratch use — see above.
+  portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 };
 FetchContext ctx;
-portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED; // guards ctx.result, pending, pendingReady
 WeatherData::Reading current, pending;
 volatile bool pendingReady = false;
 bool changedFlag = false;
@@ -186,7 +196,7 @@ const WmoMap& wmo(int c) {
   return WMO_MAP[0]; // unknown → clear (parity fallback)
 }
 
-bool geocode(FetchContext::Result& g) {
+bool geocode(FetchContext::Geo& g) {
   JsonDocument filter;
   filter["results"][0]["latitude"] = true;
   filter["results"][0]["longitude"] = true;
@@ -204,7 +214,7 @@ bool geocode(FetchContext::Result& g) {
   return true;
 }
 
-bool fetchOwm(WeatherData::Reading& r, FetchContext::Result& g) {
+bool fetchOwm(WeatherData::Reading& r, FetchContext::Geo& g) {
   JsonDocument filter;
   filter["main"] = true;
   filter["wind"]["speed"] = true;
@@ -244,8 +254,8 @@ bool fetchOwm(WeatherData::Reading& r, FetchContext::Result& g) {
 }
 
 bool fetchOpenMeteo(WeatherData::Reading& r) {
-  const char* lat = ctx.args.lat[0] ? ctx.args.lat : (ctx.result.fresh ? ctx.result.lat : "");
-  const char* lon = ctx.args.lon[0] ? ctx.args.lon : (ctx.result.fresh ? ctx.result.lon : "");
+  const char* lat = ctx.args.lat[0] ? ctx.args.lat : (ctx.geo.fresh ? ctx.geo.lat : "");
+  const char* lon = ctx.args.lon[0] ? ctx.args.lon : (ctx.geo.fresh ? ctx.geo.lon : "");
   if (!lat[0]) return false; // id-city, keyless, no cached coords: no data
   JsonDocument filter;
   filter["current_weather"] = true;
@@ -267,8 +277,8 @@ bool fetchOpenMeteo(WeatherData::Reading& r) {
   r.feelsC = 0; // free tier has none — the three zeros are the keyless tell
   r.humidity = 0;
   r.pressureHpa = 0;
-  strlcpy(r.city, ctx.result.fresh ? ctx.result.name : ctx.args.city, sizeof(r.city));
-  strlcpy(r.country, ctx.result.fresh ? ctx.result.cc : "", sizeof(r.country));
+  strlcpy(r.city, ctx.geo.fresh ? ctx.geo.name : ctx.args.city, sizeof(r.city));
+  strlcpy(r.country, ctx.geo.fresh ? ctx.geo.cc : "", sizeof(r.country));
   r.keyless = true;
   r.valid = true;
   return true;
@@ -281,9 +291,9 @@ void fetchTaskFn(void*) {
     dbgAttempts = dbgAttempts + 1;
     dbgGeoCode = dbgOwmCode = dbgMeteoCode = 0; // 0 = stage not run this cycle
     WeatherData::Reading r;
-    FetchContext::Result g = {};
+    FetchContext::Geo g = {};
     if (ctx.args.geocode) { geocode(g); addSnap("post-geo"); }
-    ctx.result = g;                    // task-side scratch for fetchOpenMeteo
+    ctx.geo = g; // unlocked task-side scratch for fetchOpenMeteo (see FetchContext)
     bool ok = (ctx.args.key[0] && fetchOwm(r, g)) || fetchOpenMeteo(r);
     addSnap("post-fetch");
     if (ok) dbgSuccesses = dbgSuccesses + 1;
@@ -291,12 +301,12 @@ void fetchTaskFn(void*) {
     // not an HTTP verdict) must not burn the one-attempt-per-city latch —
     // the boot race showed a pre-WiFi cycle latching Durban forever.
     bool geoRetryable = ctx.args.geocode && dbgGeoCode <= 0 && dbgGeoCode != -101;
-    taskENTER_CRITICAL(&lock);
+    taskENTER_CRITICAL(&ctx.mux);
     if (ok) pending = r;
-    ctx.result = g;
-    ctx.result.retryGeocode = geoRetryable;
+    ctx.geo = g;
+    ctx.geo.retryGeocode = geoRetryable;
     pendingReady = true; // even on failure: loop() must clear fetchInFlight
-    taskEXIT_CRITICAL(&lock);
+    taskEXIT_CRITICAL(&ctx.mux);
   }
 }
 
@@ -306,7 +316,7 @@ namespace WeatherData {
 
 void begin() {
   geoTriedFor = "";
-  lastCity = ConfigStore::getString("city", "Durban");
+  lastCity = ConfigStore::getString(K_CITY, "Durban");
   // 10 KB stack: full handshakes completed on 12 KB, the high-water probe
   // never saw more than ~5 KB used, and every KB parked here is heap the
   // ~49 KB TLS peak (measured: heapMinEver 208 B) cannot use.
@@ -317,16 +327,16 @@ void begin() {
 void loop() {
   // Promote a finished fetch.
   if (pendingReady) {
-    taskENTER_CRITICAL(&lock);
+    taskENTER_CRITICAL(&ctx.mux);
     pendingReady = false;
     bool ok = pending.valid;
     if (ok) {
       current = pending;
       pending = Reading{};
     }
-    FetchContext::Result g = ctx.result;
-    ctx.result.fresh = false;
-    taskEXIT_CRITICAL(&lock);
+    FetchContext::Geo g = ctx.geo;
+    ctx.geo.fresh = false;
+    taskEXIT_CRITICAL(&ctx.mux);
     fetchInFlight = false;
     if (ok) changedFlag = true;
     if (g.retryGeocode) geoTriedFor = ""; // incomplete attempt: allow another
@@ -350,7 +360,7 @@ void loop() {
   if (!fetchDue || fetchInFlight || !fetchTask || !Net::isUp()) return;
 
   // Arm the task: all policy reads happen here, on core 1.
-  String city = ConfigStore::getString("city", "Durban");
+  String city = ConfigStore::getString(K_CITY, "Durban");
   if (!city.length()) return;
   String cachedFor = ConfigStore::getString(K_GEO_FOR, "");
   bool haveCoords = cachedFor == city && ConfigStore::getString(K_GEO_LAT, "").length();
@@ -359,7 +369,7 @@ void loop() {
   ctx.args.geocode = isName && !haveCoords && geoTriedFor != city;
   if (ctx.args.geocode) geoTriedFor = city;
   strlcpy(ctx.args.city, city.c_str(), sizeof(ctx.args.city));
-  strlcpy(ctx.args.key, Secrets::get("owm_api_key").c_str(), sizeof(ctx.args.key));
+  strlcpy(ctx.args.key, Secrets::get(K_OWM_KEY).c_str(), sizeof(ctx.args.key));
   strlcpy(ctx.args.lat, haveCoords ? ConfigStore::getString(K_GEO_LAT, "").c_str() : "",
           sizeof(ctx.args.lat));
   strlcpy(ctx.args.lon, haveCoords ? ConfigStore::getString(K_GEO_LON, "").c_str() : "",
@@ -400,8 +410,8 @@ void debugJson(JsonDocument& out) {
   out["owmCode"] = dbgOwmCode;
   out["meteoCode"] = dbgMeteoCode;
   out["inFlight"] = fetchInFlight;
-  out["keyPresent"] = Secrets::has("owm_api_key"); // presence only, never the value
-  out["cityCfg"] = ConfigStore::getString("city", "Durban");
+  out["keyPresent"] = Secrets::has(K_OWM_KEY); // presence only, never the value
+  out["cityCfg"] = ConfigStore::getString(K_CITY, "Durban");
   out["geoFor"] = ConfigStore::getString(K_GEO_FOR, "");
   out["lat"] = ConfigStore::getString(K_GEO_LAT, "");
   out["lon"] = ConfigStore::getString(K_GEO_LON, "");
@@ -430,7 +440,7 @@ void onSettingsChanged() {
   // saw, not the geocode cache — so switching back to a cached city still
   // refetches, a re-saved failed geocode gets its fresh attempt, and unit/
   // colour saves never touch the network.
-  String city = ConfigStore::getString("city", "Durban");
+  String city = ConfigStore::getString(K_CITY, "Durban");
   if (city != lastCity) {
     lastCity = city;
     geoTriedFor = "";
