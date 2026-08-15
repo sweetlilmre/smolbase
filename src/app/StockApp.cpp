@@ -1,5 +1,5 @@
 // YOUR APP GOES HERE. This file is the worked example consumers gut and
-// replace: thin glue wiring a screen (BoingScreen on framebuffer builds,
+// replace: thin glue wiring a screen (DemoScreen on framebuffer builds,
 // StockScreen otherwise — each in its own file, gut them piecewise) to the
 // system through every extension hook the template offers.
 #include "../core/App.h"
@@ -7,7 +7,7 @@
 #include "../core/Display.h"
 
 #if SMOLBASE_FRAMEBUFFER == SMOLBASE_FB_PALETTE_8
-#include "BoingScreen.h"
+#include "DemoScreen.h"
 #else
 #include "StockScreen.h"
 #endif
@@ -16,7 +16,7 @@ namespace {
 
 class StockApp : public App {
 #if SMOLBASE_FRAMEBUFFER == SMOLBASE_FB_PALETTE_8
-  BoingScreen screen;
+  DemoScreen screen;
 #else
   StockScreen screen;
 #endif
@@ -40,8 +40,10 @@ public:
     ConfigStore::registerColor(SettingSection::App, "col_host", "Hostname color", "#ffffff");
     ConfigStore::registerColor(SettingSection::App, "col_ip", "IP address color", "#ffffff");
 #if SMOLBASE_FRAMEBUFFER == SMOLBASE_FB_PALETTE_8
-    ConfigStore::registerBool(SettingSection::App, "boing", "Boing ball", true);
-    screen.begin();
+    // The demo screen registers its own "Screen effect" choice: the roster of
+    // effects lives in one table in DemoScreen.cpp, and the settings catalog is
+    // built from it rather than spelled out a second time here.
+    screen.registerSettings();
 #endif
     Display::setActive(&screen);
   }

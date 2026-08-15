@@ -1,7 +1,9 @@
 <!doctype html>
 <!-- Landing page AND the StockApp demo config: any app-section color setting
-     renders as a live color picker, any app-section bool as a Behaviour
-     toggle — change one and the panel repaints via SettingsChanged. This is
+     renders as a live color picker, any app-section bool or inline choice as a
+     Behaviour row — change one and the panel repaints via SettingsChanged
+     (picking a screen effect here is the web twin of a long press on the
+     device's touch pad, and lands on the panel the same way). This is
      the "html" corner of the app/config/html extension-surface triangle (see
      docs/building-your-app.md), and the custom-skin half of the two-skins
      exhibit (stance A', ticket #34): the settings page's App tab renders the
@@ -44,21 +46,21 @@ fetch("/api/status").then(r => r.json()).then(s => {
     `${s.name}.local · ${s.ip} · ${Math.round(s.heapFree / 1024)} kB heap free`;
 }).catch(() => document.getElementById("status").textContent = "api unreachable");
 
-// Render a picker for every app-section color setting and a Behaviour toggle
-// for every app-section bool — driven by the schema's type (ticket #58), not
-// by sniffing values. Generic on purpose: register another color or bool in
-// StockApp::setup() and it appears here with zero HTML changes.
+// Render a picker for every app-section color setting, and a Behaviour row for
+// every app-section bool and choice — driven by the schema's type (ticket #58),
+// not by sniffing values. Generic on purpose: register another color, bool or
+// choice in StockApp::setup() and it appears here with zero HTML changes.
 fetch("/api/settings").then(r => r.json()).then(j => {
   const msg = document.getElementById("cfgmsg");
-  const saveOne = (s, value) => postSettings({ [s.key]: value })
+  const saveOne = (s, patch) => postSettings(patch)
     .then(() => {
       setMsg(msg, "Changes apply on the panel immediately.");
       toast(s.label + " saved");
     }).catch(e => setMsg(msg, "Save failed — " + e.message, true));
-  const addRow = (boxId, s, inp, readValue) => {
+  const addRow = (boxId, s, inp, readPatch) => {
     const row = document.createElement("label");
     row.textContent = s.label;
-    inp.addEventListener("change", () => saveOne(s, readValue()));
+    inp.addEventListener("change", () => saveOne(s, readPatch()));
     row.appendChild(inp);
     document.getElementById(boxId).appendChild(row);
   };
@@ -66,21 +68,43 @@ fetch("/api/settings").then(r => r.json()).then(j => {
   const app = (j.settings || []).filter(s => s.section === "app");
   const colors = app.filter(s => s.type === "color");
   const bools = app.filter(s => s.type === "bool");
+  // Inline catalogs only: a URL-sourced catalog is the browser's job to fetch
+  // and belongs on the settings page, not on this one-shot landing skin.
+  const picks = app.filter(s => s.type === "choice" && s.options);
   colors.forEach(s => {
     const inp = document.createElement("input");
     inp.type = "color";
     inp.value = s.value;
-    addRow("pickers", s, inp, () => inp.value);
+    addRow("pickers", s, inp, () => ({ [s.key]: inp.value }));
   });
   bools.forEach(s => {
     const inp = document.createElement("input");
     inp.type = "checkbox";
     inp.checked = !!s.value;
-    addRow("toggles", s, inp, () => inp.checked);
+    addRow("toggles", s, inp, () => ({ [s.key]: inp.checked }));
   });
+  // A choice is a label the user picks and a value the firmware consumes; both
+  // halves POST together as {key: value, key_name: label} (ADR 0002).
+  picks.forEach(s => {
+    const sel = document.createElement("select");
+    const opts = s.options || {};
+    Object.keys(opts).forEach(label => {
+      const o = document.createElement("option");
+      o.value = opts[label];
+      o.textContent = label;
+      o.dataset.label = label;
+      if (label === s.valueLabel) o.selected = true;
+      sel.appendChild(o);
+    });
+    addRow("toggles", s, sel, () => ({
+      [s.key]: sel.value,
+      [s.key + "_name"]: sel.selectedOptions[0].dataset.label,
+    }));
+  });
+  const behaviour = bools.length + picks.length;
   document.getElementById("colors").hidden = !colors.length;
-  document.getElementById("behaviour").hidden = !bools.length;
-  document.getElementById("cfg").hidden = !colors.length && !bools.length;
+  document.getElementById("behaviour").hidden = !behaviour;
+  document.getElementById("cfg").hidden = !colors.length && !behaviour;
 }).catch(() => {});
 </script>
 </body>

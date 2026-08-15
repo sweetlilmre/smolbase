@@ -90,7 +90,7 @@ Pins and tunables live in one header: `include/smolbase_config.h`.
 ## Repo tour
 
 ```
-src/app/        YOUR code — ships with the Boing clock as a worked example
+src/app/        YOUR code — ships with the demo clock as a worked example
 src/core/       plumbing (network, web, config, display, touch, OTA) — read, don't edit
 include/        smolbase_config.h: pins, framebuffer mode, timeouts, budgets
 html/           web assets (portal, settings UI, zones.json) — packed as gzip to LittleFS

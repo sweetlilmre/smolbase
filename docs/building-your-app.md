@@ -6,13 +6,15 @@ the vocabulary (App, Screen, Extension Surface, …) is defined in
 [../CONTEXT.md](../CONTEXT.md).
 
 The template ships with a complete worked example that touches every hook: the
-**Boing clock**, an Amiga-Boing-Ball pastiche animated through the framebuffer
-at 30 FPS with the device's identity (IP, hostname, NTP time) overlaid. One
-file per class so you can gut it piecewise: `src/app/BoingScreen.h/.cpp` (the
-animated screen), `src/app/StockScreen.h/.cpp` (the direct-draw fallback when
-the framebuffer is compiled out), `src/app/StockApp.cpp` (the App glue and the
-`makeApp()` seam), `src/app/hex_color.h` (the shared `#RRGGBB` parser). This
-guide walks the code at the end.
+**demo clock**, the device's identity (IP, hostname, NTP time) over a rotation
+of full-screen 256-color demoscene effects, animated through the framebuffer at
+30 FPS and switched by a long press. One file per class so you can gut it
+piecewise: `src/app/DemoScreen.h/.cpp` (the animated screen — overlay,
+timestep, effect roster), `src/app/effects/` (one class per effect behind the
+`Effect` interface), `src/app/StockScreen.h/.cpp` (the direct-draw fallback
+when the framebuffer is compiled out), `src/app/StockApp.cpp` (the App glue and
+the `makeApp()` seam), `src/app/hex_color.h` (the shared `#RRGGBB` parser).
+This guide walks the code at the end.
 
 ## The threading rule (read this first)
 
@@ -64,7 +66,7 @@ App& makeApp() {
 
 ### More than one app in the repo
 
-The repo carries two apps — the Boing demo in `src/app/` and the weather
+The repo carries two apps — the demo clock in `src/app/` and the weather
 clock in `src/app-weather/` — and one PlatformIO env per app selects which
 one links. Each env's `build_src_filter` excludes every *other* `src/app*/`
 directory, so exactly one directory provides `makeApp()` per build (two
@@ -374,13 +376,15 @@ What that means for your animated screen:
   at the next `present()` — the Boing ball's whole rotation is 14 of them per
   frame (the authentic 1984 technique: the ball never rotates as pixels; see
   `docs/research/boing-ball-technique.md`).
-- **Reserve palette indices deliberately.** The Boing clock reserves
-  `0x01–0x12` (14 ball-cycle entries + grid/shadow/background) and restores
-  them to RGB332 identity in `onExit()`, since palette edits are global to the
-  shared `frame()`. The sacrificed RGB332 codes are the r=0 dark-blue corner;
-  everything else — including arbitrary user-picked text colors — still maps
-  via `color332()` (the demo nudges any color that lands in the reserved block
-  one green step out).
+- **Reserve palette indices deliberately.** The demo clock splits the palette
+  in two: `0x00–0x7F` belongs to whichever effect is running, `0x80–0x85` to
+  the overlay (black plus the five user-picked text colors), and `0x86–0xFF`
+  keeps its RGB332 identity. It restores every index it touched in `onExit()`,
+  since palette edits are global to the shared `frame()`. Two things fall out
+  of that split worth stealing: a power-of-two bank makes palette cycling a
+  single masked add per pixel (`(value + phase) & 0x7F`), and giving your text
+  its own reserved entries means it renders in *exact* RGB instead of
+  quantizing through `color332()`.
 - **Blitting pre-rendered art**: an 8-bpp sprite pushed into `frame()` with a
   transparent index copies raw palette indices (no color conversion) at
   ~1–1.5 ms for a 120-px ball. Author sprite pixels in the frame's index
@@ -390,52 +394,70 @@ What that means for your animated screen:
   mandatory: reading flash-resident data while OTA writes flash can panic the
   chip (see issue #53 for the full trade-off).
 
-## The worked example: the Boing clock
+## The worked example: the demo clock
 
-`src/app/BoingScreen.cpp` wires all of the above into one screen (with
-`src/app/StockApp.cpp` as the App glue): the red/white checkered ball bouncing
-on a purple grid, identity text drop-shadowed over it, running at a fixed
-30 Hz through `frame()`/`present()`. The parts worth stealing:
+`src/app/DemoScreen.cpp` wires all of the above into one screen (with
+`src/app/StockApp.cpp` as the App glue): the identity text drop-shadowed over a
+rotation of full-screen 256-color effects — the Boing ball, plasma, fire, a
+palette tunnel, a rotozoomer, and a calm black clock — running at a fixed 30 Hz
+through `frame()`/`present()`. Technique notes and sources for each effect:
+[research/palette-effects.md](research/palette-effects.md). The parts worth
+stealing:
 
-**The rotation is palette cycling, not pixels.** The ball is pre-rendered
-*once* at boot into an 8-bpp sprite of palette indices, using the original
-demo's facet formula (`((lat&1)*7 + lon) % 14` over 8 latitude bands × 56
-longitude facets). Each frame, 14 `setPaletteColor()` writes shift the
-red/white assignment by `SPIN_STEPS` stripes — the ball appears to spin while
-not a single ball pixel is redrawn. (The pre-render is the app's one
-deliberate heap allocation, 14.4 KB at boot: a static buffer would overflow
-the DRAM segment the 57.6 KB framebuffer already occupies.)
+**The screen owns the frame; the effects own the pixels.** `src/app/effects/`
+holds one class per effect behind a two-method interface (`enter()` claims the
+palette bank and builds whatever tables it needs, `step()` paints one frame).
+The screen draws the clock on top afterwards, so no effect knows the time
+exists. Adding a sixth is one file and one line in the roster table.
+
+**One buffer, six effects.** They share a single 120×120 byte scratch
+(`fx::scratch()`) — the pre-rendered ball, the fire's heat map, the tunnel's
+field and the rotozoomer's texture are never alive at once. That is one 14.4 KB
+heap allocation for the whole roster, the same one the ball always made on its
+own: a static buffer does not fit, and the linker says so out loud — the DRAM
+segment already carries the 57.6 KB framebuffer.
+
+**The rotation is palette cycling, not pixels.** The ball is pre-rendered into
+palette indices using the original demo's facet formula (`((lat&1)*7 + lon) %
+14` over 8 latitude bands × 56 longitude facets). Each frame, 14
+`setPaletteColor()` writes shift the red/white assignment by `SPIN_STEPS`
+stripes — the ball appears to spin while not a single ball pixel is redrawn.
+The tunnel takes the same idea further: its whole inward rush is one byte added
+to a field that never changes.
 
 **The animated tick is a fixed timestep, not a dirty flag:**
 
 ```cpp
-void tick(lgfx::LGFX_Device&) override {
-  if (enabled) {
+void DemoScreen::tick(lgfx::LGFX_Device&) {
+  auto& f = Display::frame();
+  if (entered && ROSTER[idx].fx) {
     if (now - lastFrameMs < FRAME_MS) return; // 30 Hz gate; passes between
     lastFrameMs += FRAME_MS;                  // frames cost microseconds
-    stepPhysics();
-    applyCycle(f);   // 14 palette writes = the whole rotation
-    drawScene(f);    // full clear + grid + shadow + ball blit + text, ~2 ms
-    Display::present(); // ~24 ms blocking push — the frame's real cost
-    return;
+    if (dirty) { dirty = false; applySettings(f); } // may switch effects
+  } else {
+    // The calm clock: classic dirty-draw — repaint only on settings change,
+    // minute rollover, or the colon heartbeat.
+    if (!dirty && !calmDue()) return;
+    if (dirty) { dirty = false; applySettings(f); }
   }
-  // Frozen (the "boing" setting off — the basic clock): classic dirty-draw —
-  // repaint only on settings change, minute rollover, or the colon heartbeat.
-  ...
+  if (Effect* e = ROSTER[idx].fx) e->step(f); // ~2-3 ms, full frame
+  else f.fillScreen(fx::UI_BLACK);
+  drawIdentity(f);    // two text passes, ~2 ms
+  Display::present(); // ~24 ms blocking push — the frame's real cost
 }
 ```
 
-Both disciplines live in one screen: animation while the ball runs, dirty-draw
-when it's frozen. The colon still blinks at 1 Hz in both modes as visible
-proof the clock is live.
+Both disciplines live in one screen, chosen by what is running. The colon still
+blinks at 1 Hz in either mode as visible proof the clock is live.
 
-**Touch drives app state** (#60): `onTap()` kicks the ball upward — a pure
-physics impulse whose extra energy decays back to the natural bounce over a
-few floor contacts. `onLongPress()` is the physical twin of the settings UI's
-**`boing` bool setting** (default on): it flips and persists the setting via
-`ConfigStore::setBool` + `save()`, riding the same `SettingsChanged` path as a
-web save, so screen and settings pages never disagree. Boing off is the calm
-black identity screen; either surface turns it back on.
+**Touch drives app state** (#60): `onTap()` goes to the running effect, which
+decides what a tap means to it (kick the ball, poke the fire, reverse the
+tunnel, re-color the plasma). `onLongPress()` belongs to the screen: it
+advances the roster and persists the pick through `ConfigStore::setString` +
+`save()`, riding the same `SettingsChanged` path a web save takes — the switch
+itself happens in `applySettings()`, on the repaint, whichever surface asked
+for it. Screen, settings page and landing page therefore cannot disagree about
+what is on the panel.
 
 The app glues the screen to the system — and registers its settings:
 
@@ -444,8 +466,7 @@ void setup() override {
   ConfigStore::setAppNote("These render here for free — ..."); // blurb atop the App tab
   ConfigStore::registerColor(SettingSection::App, "col_hour", "Clock hour color", "#ffffff");
   // ... col_min, col_colon, col_host, col_ip likewise ...
-  ConfigStore::registerBool(SettingSection::App, "boing", "Boing ball", true);
-  screen.begin();               // pre-render the ball
+  screen.registerSettings();    // the "effect" choice, built from the roster
   Display::setActive(&screen);
 }
 
@@ -456,24 +477,26 @@ void onSystemEvent(SysEvent e) override {
 ```
 
 Those registrations are the whole app/config/html triangle in action.
-**App**: the screen re-reads colors and the `boing` flag on every dirty
+**App**: the screen re-reads the colors and the chosen effect on every dirty
 repaint, so a change lands on the panel live via `SettingsChanged`.
 **Config**: the values persist in `settings.json` and ride the standard
 `GET`/`POST /api/settings` contract — the settings UI's App tab renders all
-six automatically, colors as pickers, the bool as a checkbox. **HTML**:
+six automatically, colors as pickers, the effect as a dropdown. **HTML**:
 `html/index.html` renders the same six a second time as a custom skin — a
-color picker for every app-section color setting, a Behaviour toggle for
-every app-section bool, driven by the schema's `type` (never by sniffing
-values); register a seventh setting and it appears in both places with zero
-HTML changes. That duplication is deliberate: the App tab is
+color picker for every app-section color setting, a Behaviour row for every
+app-section bool or inline choice, driven by the schema's `type` (never by
+sniffing values); register a seventh setting and it appears in both places
+with zero HTML changes. That duplication is deliberate: the App tab is
 the free UI registration buys (its `setAppNote()` blurb says so on the page),
 index.html is the hand-built one, and both read and write the identical
 contract — your app keeps whichever suits it, or suppresses the tab and keeps
 only its own. Colors are stored as the `#RRGGBB` string an
 `<input type="color">` speaks; the app parses hex once per repaint (`hexRgb`),
-maps it to a palette index (`textIdx`), and draws every string twice — black
-offset +2,+2, then the real color — so the text stays legible over whatever
-the ball is doing.
+writes it straight into its reserved palette entries, and draws every string
+twice — black offset +2,+2, then the real color — so the text stays legible
+over whatever the effect is doing. The effect is a **Choice** setting, so it
+persists as the flat `effect` + `effect_name` pair (ADR 0002) and the long
+press writes both halves from the roster, which is the authoritative catalog.
 
 `NetworkUp` and `TimeSynced` don't draw anything — they mark dirty and let the
 next `tick` repaint on core 1, which is exactly the pattern your HTTP handlers

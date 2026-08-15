@@ -94,8 +94,10 @@ smolbase was already built to leave TLS room:
 - The 57.6 KB framebuffer is **static `.bss`**, not heap —
   `src/core/Display.cpp:70`: `uint8_t fbData[240 * 240]; // static, .bss — heap
   stays contiguous for TLS`. It lowers the heap ceiling but never fragments it.
-- Palette: one-time 1 KB boot allocation (`Display.cpp:96`). Boing ball sprite:
-  14.4 KB heap, only while that Screen runs (`src/app/BoingScreen.h:21`).
+- Palette: one-time 1 KB boot allocation (`Display.cpp:96`). Demo effect
+  scratch (the pre-rendered Boing ball and every other effect's working
+  buffer): 14.4 KB heap, only while that Screen runs — one shared allocation
+  (`src/app/effects/Effect.cpp`; it was `BoingScreen.h:21` at research time).
 - PsychicHttp: ~8 KB httpd task plus per-connection buffers
   (`docs/research/psychichttp-capabilities.md` — budget ~8 KB for the task).
 - A bare arduino-esp32 sketch with WiFi up typically reports ~180–200 KB free;
