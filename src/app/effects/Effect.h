@@ -74,8 +74,9 @@ constexpr uint8_t UI_LAST = 0xF5;
 constexpr int SCRATCH_W = 120;
 constexpr int SCRATCH_H = 120;
 constexpr int PLANE = SCRATCH_W * SCRATCH_H; // one half-res quarter-frame
-constexpr int TEX_W = 64;                    // the rotozoomer's texture
+constexpr int TEX_W = 128; // the rotozoomer's texture
 constexpr int TEX_MASK = TEX_W - 1;
+constexpr int TEX_SHIFT = 7; // log2(TEX_W): the row stride as a shift
 
 // Size the pool to exactly what the incoming effect asked for (freeing and
 // re-allocating if that differs), or hand it back entirely. Returns nullptr if
