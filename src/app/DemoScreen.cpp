@@ -36,7 +36,7 @@ struct RosterEntry {
 
 const RosterEntry ROSTER[] = {
     {"Boing ball", "boing", &boing},   {"Plasma", "plasma", &plasma},
-    {"Fire", "fire", &fire},           {"Tunnel", "tunnel", &tunnel},
+    {"Fire", "fire", &fire},           {"Wormhole", "tunnel", &tunnel},
     {"Rotozoomer", "roto", &rotozoom}, {"Calm clock", "calm", nullptr},
 };
 constexpr int ROSTER_N = (int)(sizeof(ROSTER) / sizeof(ROSTER[0]));
