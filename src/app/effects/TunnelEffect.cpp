@@ -23,29 +23,37 @@ constexpr int AMASK = T_ANG - 1;
 constexpr int DMASK = T_DEP - 1;
 constexpr int CELL = 8;
 
-// depth = DEPTH_K / r is the perspective, and 1/r means ring density cannot be
-// right everywhere at once: spacing on screen is 8*r*r/K pixels, so any K that
-// keeps the rim from stretching turns the mouth into moire. K is tuned for the
-// MID field — a ring roughly every 6 half-res pixels at r = 40 — which leaves
-// the rim stretched and the mouth shimmering, exactly as the reference art
-// does, because it is the same geometry. Tuned against a host-side mirror of
-// this file rather than by reflashing (scratchpad/tunnel_sim.py).
-constexpr float DEPTH_K = 2100.0f;
-// Inside R_HOLE the rings are finer than a pixel; rather than let the centre
-// alias into noise it becomes the black mouth of the tunnel. Inside R_FOG the
-// wall is halved into the dark half of the ramp — a two-level distance fog,
-// one shift per pixel, which stops the mouth looking like a hole punched in a
-// flat pattern. Both flags live in the spare bits of the depth byte.
-constexpr float R_HOLE = 7.0f;
-constexpr float R_FOG = 24.0f;
-constexpr uint8_t HOLE = 0xFF;
-constexpr uint8_t FOG = 0x40;
-// The tunnel axis sits well off the centre of the field. That offset is the
-// whole reason the view reads as OBLIQUE — you look down the pipe at an angle,
-// the mouth rides high, and the near wall stretches away below instead of
-// sitting in a tidy symmetric ring. A small offset just looks like a mistake.
-constexpr float CX = (FW - 1) * 0.5f + 7.0f;
-constexpr float CY = (FW - 1) * 0.5f - 26.0f;
+// ---- The view is OBLIQUE, which is why this is ray casting -------------------
+// A tunnel built from distance-and-angle around a screen point is always a view
+// straight down the pipe: the rings come out as concentric circles, and moving
+// that point around only slides the same symmetric target about. The reference
+// look — rings as migrating, non-concentric arcs sweeping past a mouth that
+// sits off to one side — is a genuinely tilted camera, and nothing short of
+// intersecting rays with the cylinder produces it.
+//
+// So each field pixel casts a ray and solves for where it meets the wall.
+// That is all PRECOMPUTE: any fixed camera pose costs the same at runtime,
+// which is two adds and a texture lookup. The camera sits just off the axis
+// and looks across the pipe; the tilt is what does the work, and hugging the
+// wall (tried at 0.62 of the radius) is actively wrong — rays then strike the
+// near wall at z ~ 0, where the axial coordinate barely changes, and the whole
+// near field degenerates into rings-free radial streaks.
+constexpr float CAM_X = 0.10f;   // camera offset from the axis, in radii
+constexpr float TILT = 0.40f;    // how far the view swings across the pipe
+constexpr float TAN_FOV = 0.5f;  // half-angle; wide FOVs put the wall beside us
+constexpr float K_Z = 7.0f;      // texels per unit of axial distance
+// Distance fade, packed into the depth byte's top two bits: near, one
+// ramp-half down, one ramp-quarter down, then the black mouth. Both bits are
+// multiples of T_DEP, so they vanish in the depth wrap and never need masking
+// off. Three steps rather than one is what makes the mouth read as a receding
+// funnel instead of a hole punched in a flat pattern.
+constexpr float Z_FOG1 = 10.0f;
+constexpr float Z_FOG2 = 22.0f;
+constexpr float Z_HOLE = 60.0f;
+constexpr uint8_t FLAGS = 0xC0;
+constexpr uint8_t F1 = 0x40;
+constexpr uint8_t F2 = 0x80;
+constexpr uint8_t HOLE = 0xC0;
 
 // The drift: the window pans across the oversized field, so the vanishing
 // point wanders the screen the way a hand-held camera would. Two incommensurate
@@ -53,12 +61,9 @@ constexpr float CY = (FW - 1) * 0.5f - 26.0f;
 constexpr float PAN_X_RATE = 0.011f;
 constexpr float PAN_Y_RATE = 0.0071f;
 
-// A chunky rune, stamped black into every cell — the reference art has one too,
+// A chunky mark, stamped black into every cell — the reference art has one too,
 // and it is what makes the wall read as *surface* rather than as gradient.
-const uint8_t RUNE[CELL] = {0, 0, 0b00011000, 0b00100100, 0b00111100, 0, 0, 0};
-// Brightness by ring within the cell: heart, then out to the mortar. A LINEAR
-// falloff was tried first and read as flat blobs — the gradient has to bite.
-const uint8_t SHADE[CELL / 2] = {126, 106, 70, 18};
+const uint8_t RUNE[CELL] = {0, 0, 0, 0b00011000, 0b00011000, 0, 0, 0};
 
 // ---- The palette -------------------------------------------------------------
 // A textured tunnel changes what the palette is FOR. The texture carries the
@@ -76,20 +81,29 @@ const Rgb RAMP_RGB[RAMP_N] = {{0, 0, 0}, {88, 0, 0}, {196, 8, 0}, {248, 40, 16},
 
 } // namespace
 
-// Each cell is bright at the heart and falls away to dark at its borders, so
-// the cells read as quilted panels catching light. Flat interiors with
-// one-texel mortar (an earlier cut) read as a checkerboard instead; the soft
-// shading is most of the difference between "checkerboard" and "tunnel".
+// Each cell is a pillowed panel: a black mortar ring around the outside, then a
+// smooth Euclidean falloff from a bright heart. Both halves are load-bearing.
+// Flat interiors with one-texel mortar read as a checkerboard; a pure falloff
+// with no mortar lets the cells bleed into one continuous red field; and a
+// SQUARE falloff has only four levels in an 8x8 cell, which reads as steps.
 void TunnelEffect::buildTexture() {
   uint8_t* tex = fx::scratch() + fx::TEX_OFF;
+  const float edge = CELL * 0.5f - 1.2f;
+  const float span = CELL * 0.58f;
   for (int v = 0; v < T_ANG; ++v) {
     const int cv = v % CELL;
     const float dv = fabsf((float)cv - (CELL - 1) * 0.5f);
     for (int u = 0; u < T_DEP; ++u) {
       const int cu = u % CELL;
       const float du = fabsf((float)cu - (CELL - 1) * 0.5f);
-      const float m = (du > dv) ? du : dv; // 0.5 at the cell's heart, 3.5 at its edge
-      uint8_t t = SHADE[(int)(m - 0.5f)];
+      uint8_t t;
+      if (((du > dv) ? du : dv) > edge) {
+        t = 0; // mortar
+      } else {
+        const float d = sqrtf(du * du + dv * dv) / span;
+        const int v8 = (int)(126.0f * (1.0f - powf(d, 1.2f)));
+        t = (uint8_t)(v8 < 6 ? 6 : v8);
+      }
       if (RUNE[cv] & (0x80 >> cu)) t = 0;
       tex[v * T_DEP + u] = (uint8_t)(t & fx::BANK_MASK);
     }
@@ -117,30 +131,50 @@ void TunnelEffect::writePalette(lgfx::LGFX_Sprite& f) {
 }
 
 void TunnelEffect::enter(lgfx::LGFX_Sprite& f) {
-  // The one expensive moment in this effect's life: ~23 K pixels of sqrtf and
-  // atan2f, paid once when the effect is switched in and never again.
+  // The one expensive moment in this effect's life: ~23 K rays intersected with
+  // the cylinder, paid once when the effect is switched in and never again.
   // Everything after this is two adds and a lookup.
+  //
+  // Cylinder of radius 1 about the z axis, camera at (CAM_X, 0, 0) looking
+  // along a tilted forward vector. With Fy = 0 the camera basis collapses to
+  // Rt = (Fz, 0, -Fx) and U = (0, 1, 0), and the ray needs no normalising:
+  // scaling the direction scales t inversely and lands on the same point.
   uint8_t* depth = fx::scratch();
   uint8_t* angle = fx::scratch() + fx::TUN_PLANE;
+  const float fn = sqrtf(TILT * TILT + 1.0f);
+  const float fx0 = -TILT / fn, fz0 = 1.0f / fn;
+  const float pix = TAN_FOV / (W * 0.5f);
+  const float c = CAM_X * CAM_X - 1.0f; // camera is inside, so c < 0: always one hit
   for (int y = 0; y < FW; ++y) {
-    const float dy = (float)y - CY;
+    const float py = ((float)y - (FW - 1) * 0.5f) * pix;
     for (int x = 0; x < FW; ++x) {
-      const float dx = (float)x - CX;
-      const float r = sqrtf(dx * dx + dy * dy);
+      const float px = ((float)x - (FW - 1) * 0.5f) * pix;
+      const float dx = fx0 + px * fz0;
+      const float dy = -py;
+      const float dz = fz0 - px * fx0;
       const int i = y * FW + x;
-      if (r < R_HOLE) {
+      const float a = dx * dx + dy * dy;
+      if (a < 1e-7f) { // dead ahead, parallel to the axis: infinitely far
         depth[i] = HOLE;
         angle[i] = 0;
         continue;
       }
-      // Only the low 6 bits are kept, which costs nothing: the shift is added
-      // before the wrap, and (a + s) mod 64 == ((a mod 64) + s) mod 64.
-      uint8_t d = (uint8_t)((int)(DEPTH_K / r) & DMASK);
-      if (r < R_FOG) d |= FOG;
-      depth[i] = d;
-      // atan2 spans the full texture width per revolution, so the seam at
-      // +/-pi lands back on the texel it left: the wall wraps invisibly.
-      angle[i] = (uint8_t)((int)((atan2f(dy, dx) + (float)M_PI) *
+      const float b = 2.0f * CAM_X * dx;
+      const float disc = b * b - 4.0f * a * c;
+      const float t = (-b + sqrtf(disc > 0.0f ? disc : 0.0f)) / (2.0f * a);
+      const float z = t * dz;
+      // Only the FAR mouth is a hole. Rays that hit the wall behind the camera
+      // have large negative z and are the nearest wall of all.
+      uint8_t fl = 0;
+      if (z > Z_FOG1) fl = F1;
+      if (z > Z_FOG2) fl = F2;
+      if (z > Z_HOLE) fl = HOLE;
+      // Only the low 6 bits of depth are kept, which costs nothing: the shift
+      // is added before the wrap, and (a + s) mod 64 == ((a mod 64) + s) mod 64.
+      depth[i] = (uint8_t)(((int)(z * K_Z) & DMASK) | fl);
+      // atan2 around the hit point spans the full texture width per
+      // revolution, so the seam at +/-pi lands back on the texel it left.
+      angle[i] = (uint8_t)((int)((atan2f(t * dy, CAM_X + t * dx) + (float)M_PI) *
                                  (T_ANG / (2.0f * (float)M_PI))) &
                            AMASK);
     }
@@ -173,14 +207,16 @@ void TunnelEffect::step(lgfx::LGFX_Sprite& f) {
     const int row = (y + oy) * FW + ox;
     for (int x = 0; x < W; ++x) {
       const uint8_t d = depth[row + x];
+      const uint8_t fl = d & FLAGS;
       uint8_t t;
-      if (d == HOLE) {
+      if (fl == HOLE) {
         t = 0;
       } else {
-        // The fog bit needs no masking off: FOG is exactly T_DEP, so it
-        // vanishes in the wrap (64 == 0 mod 64).
+        // The fog bits need no masking off: both are multiples of T_DEP, so
+        // they vanish in the wrap (64 and 128 are 0 mod 64).
         t = tex[(((angle[row + x] + sv) & AMASK) << 6) | ((d + su) & DMASK)];
-        if (d & FOG) t >>= 1; // the far end of the pipe, half a ramp darker
+        if (fl == F1) t >>= 1;      // mid distance
+        else if (fl == F2) t >>= 2; // far, sliding into the mouth
       }
       dst[x * 2] = t;
       dst[x * 2 + 1] = t;

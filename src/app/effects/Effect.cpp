@@ -23,6 +23,11 @@ uint8_t* scratch() {
 
 bool scratchReady() { return scratch() != nullptr; }
 
+void releaseScratch() {
+  free(scratchData);
+  scratchData = nullptr;
+}
+
 uint8_t rand8() {
   rngState ^= rngState << 13;
   rngState ^= rngState >> 17;

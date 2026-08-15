@@ -78,6 +78,13 @@ constexpr int TEX_BYTES = 256 * 64; // the tunnel's wall, which sizes the tail
 constexpr int SCRATCH_BYTES = TEX_OFF + TEX_BYTES;
 uint8_t* scratch();
 bool scratchReady();
+// Hand the pool back. The roster is the largest allocation in the firmware, and
+// an OTA needs room to stream a 1.2 MB image through the web server — measured
+// the hard way: with the pool held, a full firmware upload fails outright on a
+// device that has no serial port to recover through. The screen releases it
+// whenever no effect needs it, which includes parking on OtaStarting. The next
+// enter() allocates again.
+void releaseScratch();
 
 // Expand plane 0 into the full frame as 2x2 chunky pixels. ~1 ms.
 void blit2x(lgfx::LGFX_Sprite& f);

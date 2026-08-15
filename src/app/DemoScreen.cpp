@@ -83,6 +83,10 @@ void DemoScreen::applySettings(lgfx::LGFX_Sprite& f) {
   // The effect is settings-driven, both ways round: long press writes the key
   // and a web save writes the key, and either way the switch happens HERE, on
   // the SettingsChanged repaint. One path, so the three surfaces cannot drift.
+  // Parked (an OTA is streaming): the pool stays freed. Without this guard the
+  // very next dirty repaint would read the stored effect, switch back to it,
+  // and re-allocate the memory the update is busy needing.
+  if (parked) return;
   const int want = rosterIndexOf(ConfigStore::getString("effect"));
   if (want >= 0 && (want != idx || !entered)) select(want, f);
 }
@@ -98,6 +102,20 @@ void DemoScreen::select(int i, lgfx::LGFX_Sprite& f) {
   lastFrameMs = millis();
   lastMinute = -1; // force the calm clock to repaint if that is what we landed on
   if (ROSTER[idx].fx) ROSTER[idx].fx->enter(f);
+  else fx::releaseScratch(); // the calm clock needs none of it — give it back
+}
+
+// Park for an OTA (SysEvent::OtaStarting). The roster's pool is the largest
+// allocation in this firmware, and the web server needs that room to stream a
+// 1.2 MB image: held, a full firmware upload fails outright, which on a device
+// with no serial port is a hole with no ladder. So parking drops to the calm
+// clock and frees the pool. The stored setting is deliberately NOT written —
+// the user's pick comes back on the next boot, and the reboot after a
+// successful update restores it anyway.
+void DemoScreen::park() {
+  auto& f = Display::frame();
+  parked = true; // and it stays parked: see applySettings()
+  select(CALM_IDX, f);
 }
 
 bool DemoScreen::calmDue() const {

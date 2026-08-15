@@ -49,6 +49,16 @@ public:
   }
 
   void onSystemEvent(SysEvent e) override {
+#if SMOLBASE_FRAMEBUFFER == SMOLBASE_FB_PALETTE_8
+    // Park on OtaStarting — the contract every app signs, and here it is not
+    // politeness but a hard requirement: the effect roster's pool is the
+    // largest allocation in the firmware, and the update needs that room to
+    // stream through. Held, a firmware upload fails outright.
+    if (e == SysEvent::OtaStarting) {
+      screen.park();
+      return;
+    }
+#endif
     // SettingsChanged matters too: the hostname shown on screen can change at
     // runtime. The idempotent-repaint pattern makes "which setting?" moot.
     if (e == SysEvent::NetworkUp || e == SysEvent::TimeSynced ||

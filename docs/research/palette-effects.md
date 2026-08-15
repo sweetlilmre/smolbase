@@ -175,6 +175,15 @@ roster pays it. Measured on device: free heap 106.4 KB → 59.4 KB, steady. That
 dial to turn if the app ever needs the heap back: `TUN_MARGIN` trades travel for RAM at
 ~1 KB per half-res pixel, and zero margin puts the pool back at 46 KB.
 
+**And there is a hard floor under all of this that has nothing to do with the effects.**
+At ~59 KB free the device stopped accepting firmware uploads entirely — a 2 KB multipart
+upload still worked, a 1.2 MB one failed at the first parse — because an OTA streams the
+image through the web server and needs the room. On a device with no serial port that is
+unrecoverable except by power-cycling with a lighter effect stored. The roster therefore
+releases its pool on `SysEvent::OtaStarting` (`DemoScreen::park()`), which is the
+documented contract anyway; the lesson worth carrying is that an app's memory budget is
+set by what OTA needs, not by what the app can get away with while running.
+
 ### 2.4 Rotozoomer — one matrix per frame, two adds per pixel
 
 The rotozoomer "maps the coordinate of that pixel backwards through a sin/cos transform

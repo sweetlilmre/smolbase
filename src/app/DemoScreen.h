@@ -13,6 +13,7 @@
 class DemoScreen : public Screen {
   bool dirty = true;
   bool entered = false;
+  bool parked = false; // an OTA is streaming: hold the calm clock, stay freed
   int idx = 0; // index into the roster (see DemoScreen.cpp)
   int lastMinute = -1;
   bool colonOn = true;
@@ -35,6 +36,10 @@ public:
   // effect list exists, so the catalog is built from it here rather than
   // spelled out a second time in the App.
   void registerSettings();
+
+  // Park for an OTA: drop to the calm clock and hand back the effect pool, which
+  // the web server needs to stream the image. Sticky until the next boot.
+  void park();
 
   void onEnter(lgfx::LGFX_Device&) override;
   void onExit() override;

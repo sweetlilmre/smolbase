@@ -393,6 +393,15 @@ What that means for your animated screen:
   flash (`.rodata`), parking during OTA stops being politeness and becomes
   mandatory: reading flash-resident data while OTA writes flash can panic the
   chip (see issue #53 for the full trade-off).
+- **Your memory ceiling is set by OTA, not by your app.** An update streams a
+  ~1.2 MB image through the web server, and that needs room. The demo clock
+  learned this the hard way: holding a 61 KB effect pool left ~59 KB free,
+  which ran fine for days and then refused every firmware upload outright —
+  on a device with no serial port, that is a hole with no ladder. If your app
+  holds a large allocation, free it in your `OtaStarting` handler (the demo
+  screen's `park()` drops to a static screen and releases the pool), and treat
+  "can this device still be flashed?" as a requirement your allocation has to
+  satisfy.
 
 ## The worked example: the demo clock
 
