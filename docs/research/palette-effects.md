@@ -77,34 +77,43 @@ matter:
   rotation wraps. Every ramp in this roster therefore repeats its first stop as its last;
   the fire ramp is the sole exception, and it is the one ramp that is never rotated.
 
-### 2.2 Fire — the fuel row and the random bleed
+### 2.2 Fire — the original, not the copy of the copy
 
-Every version of this effect agrees on the shape: "the bottom row (just offscreen) is
-filled with random indices. This becomes the fuel of the fire effect", then each frame
-"averages each pixel with adjacent values, then darkens them slightly, causing upward
-flame progression" (https://seancode.com/demofx/). The palette runs black → red → orange
-→ yellow → white, so the heat number *is* the color and nothing has to decide what a
-flame looks like.
+The textbook fire is well documented and everyone implements it: seed a random bottom
+row, average each cell with the three below it plus one two rows down, subtract a little
+so it dies out as it rises (https://seancode.com/demofx/, https://lodev.org/cgtutor/fire.html).
+That version was built here first, tuned twice on the panel, and then thrown away — because
+the fire everyone is copying is **firedemo** by Javier "Jare" Arevalo of Iguana (1993),
+and his does almost none of that.
 
-`FireEffect` follows that exactly, with the three-tap blur widened by a fourth sample two
-rows down (taller flames, less smoke) and a **random** 0–3 bleed-off per cell rather than
-a fixed one. The randomness is the entire flicker: a deterministic decay gives a
-perfectly still flame that reads as a photograph of fire.
+From his own HTML5 reprise (https://github.com/TheJare/FiredemoHTML5):
 
-Two corrections came out of watching the first cut on the panel, both about *rate*:
+- **The blur is all eight neighbours, divided by eight.** It is symmetric: the kernel has
+  no idea which way is up.
+- **Nothing rises through the kernel.** The buffer is *scrolled* up one row per tick, and
+  that alone sets the flame's speed. The textbook version's "heat climbs one row per
+  step, so the step rate is the speed" is a property of a design he did not use.
+- **The cooling is not random.** A quarter of cells are selected by the low bits of the
+  neighbour sum — there is no PRNG anywhere in the effect — and cooled by one, **wrapping
+  at zero**. Within four rows of the base, cold cells are cooled too, so `0 - 1 = 255`:
+  white-hot. Every spark in the fire is that wrap. Jare has written that the effect came
+  out of "a few programming mistakes"; this is the best of them, and it is not something
+  anyone arrives at by reasoning about fire.
+- **The field is tiny and heavily magnified** — 80×50 in his, 60×60 at 4× here. The
+  softness comes from magnifying a small, heavily-blurred field, not from smoothing a
+  large one. It also makes this the second-cheapest effect in the roster.
+- **The palette has a cyan toe.** The coldest embers are dark blue-green rather than
+  black-red, and the ramp tops out at *yellow* and never reaches white — white is left
+  for the wrap-around sparks. It is the most recognisable thing about this fire and no
+  invented ramp finds it.
 
-- **Heat climbs exactly one row per simulation step, so the simulation rate is the flame
-  speed** — there is no other knob. Running it at the screen's 30 Hz makes the flames
-  sprint. It now simulates at 15 Hz and blits at 30 (the blit happens regardless, since
-  the clock overlay overwrites the frame either way).
-- **The fuel row must persist.** Re-rolling every cell from random each step boils the
-  base of the flame at the frame rate, which reads as television static. The embers now
-  random-walk inside a narrow band, so the roots breathe.
+The 64-entry palette is copied verbatim — his data, not a technique — and both it and the
+algorithm are used under the MIT licence, (C) 2013 by Javier Arevalo. See
+[../THIRD-PARTY.md](../THIRD-PARTY.md).
 
-It runs at 120×120 in the shared scratch and doubles up to 240×240 on the way out. That
-is not a concession to the ESP32 — mode 13h was 320×200 on a tube that displayed it at
-roughly twice that, so chunky is the period-correct look, and here it halves the heat
-simulation's cost as a bonus.
+The lesson is the one the wormhole taught in a different key: the canonical description of
+a classic effect is often a reconstruction of it, and the original is both stranger and
+better. Go to the source when there is one.
 
 ### 2.3 Wormhole — the one that was already solved
 

@@ -78,6 +78,26 @@ the basis for including it here. Note that demoscene productions are typically
 group works — if this repository is ever published more widely, the other
 credited authors are the people to check with.
 
+## The fire effect
+
+`src/app/effects/FireEffect.cpp` implements the fire from **firedemo** by
+**Javier "Jare" Arevalo** of **Iguana** (1993), ported from the author's own
+HTML5 reprise at [github.com/TheJare/FiredemoHTML5](https://github.com/TheJare/FiredemoHTML5).
+
+Both the algorithm (the eight-neighbour blur, the scroll-up, and the wrapping
+cool that generates sparks) and the **64-entry palette, which is copied
+verbatim**, are his work.
+
+Licensed **MIT**, Copyright (C) 2013 by Javier Arevalo — full text in
+`docs/licenses/MIT-firedemo.txt`, which carries the copyright and permission
+notice MIT requires to travel with the code.
+
+The rotozoomer's zoom-from-rotation coupling (`scale = sin(angle) + 1`) is a
+technique taken from [mrkite/demofx](https://github.com/mrkite/demofx). No code
+or artwork was copied: its textures are generated procedurally in
+`RotozoomEffect::buildTexture`, and the reference's own source image is not
+used.
+
 ## Linked libraries
 
 Pinned in `platformio.ini`; licenses verified from the installed packages'
