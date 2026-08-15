@@ -44,29 +44,38 @@ constexpr uint8_t UI_TEXT = 0x81; // .. 0x85, one per identity string
 constexpr uint8_t UI_LAST = 0x85;
 
 // ---- The Scratch -------------------------------------------------------------
-// One 120x120 byte buffer — a quarter of a frame — lent to whichever effect is
-// running. It is the ONE piece of memory the roster shares, so the cost of six
-// effects is the cost of one: 14.4 KB on the heap, allocated at the first
-// switch-in and never freed, exactly the allocation the Boing ball used to
-// make on its own (a static buffer does not fit — see Effect.cpp). Effects use
-// it for whatever they need: a pre-rendered ball, a heat map, a tunnel field,
-// a texture. scratchReady() is false only if that one allocation failed, in
-// which case the screen falls back to the calm clock.
+// One byte pool, lent to whichever effect is running. It is the ONE piece of
+// memory the roster shares, so six effects cost what the hungriest one costs:
+// a single heap allocation at the first switch-in, never freed (a static
+// buffer does not fit — see Effect.cpp). scratchReady() is false only if that
+// allocation failed, in which case the screen falls back to the calm clock.
 //
-// Two of the effects here work at half resolution in the scratch and expand it
-// through blit2x(). That is not a concession to the ESP32 — it is how these
-// effects ran in 1993, on a 320x200 mode-13h screen a CRT stretched to fill a
-// 640x400 tube. Chunky is the period-correct look.
+// Layout — planes are 120x120, a quarter-frame each:
+//   plane 0   ball pixels / fire's heat map / the tunnel's depth field
+//   plane 1   the tunnel's angle field
+//   TEX_OFF   a texture: 128x128 for the tunnel's wall, 64x64 for the
+//             rotozoomer (which uses the front quarter of the same space)
+// The tunnel is what sizes the pool: a textured tunnel needs BOTH coordinates
+// per pixel, and collapsing them into one byte (which is what a 14.4 KB pool
+// would force) can only produce a spiral gradient, never a checkered funnel.
+//
+// Effects that work at half resolution here and expand through blit2x() are
+// not conceding anything to the ESP32 — that is how these effects ran in 1993,
+// on a 320x200 mode-13h screen a CRT stretched to fill a 640x400 tube. Chunky
+// is the period-correct look.
 constexpr int SCRATCH_W = 120;
 constexpr int SCRATCH_H = 120;
+constexpr int PLANE = SCRATCH_W * SCRATCH_H;
+constexpr int TEX_W = 64;  // the rotozoomer's texture
+constexpr int TEX_MASK = TEX_W - 1;
+constexpr int TEX_OFF = 2 * PLANE;
+constexpr int TEX_BYTES = 128 * 128; // the tunnel's wall, which sizes the tail
+constexpr int SCRATCH_BYTES = TEX_OFF + TEX_BYTES;
 uint8_t* scratch();
 bool scratchReady();
 
-// Expand the scratch into the full frame as 2x2 chunky pixels, adding `phase`
-// to every value and folding the result into the bank. The phase add is free
-// here and it is what makes a STATIC field animate: a tunnel's whole inward
-// rush is one incrementing byte. ~1 ms for the full frame.
-void blit2x(lgfx::LGFX_Sprite& f, uint8_t phase);
+// Expand plane 0 into the full frame as 2x2 chunky pixels. ~1 ms.
+void blit2x(lgfx::LGFX_Sprite& f);
 
 // ---- Palette ramps -----------------------------------------------------------
 // An effect declares its colors as a handful of stops and lets writeRamp()

@@ -6,8 +6,8 @@
 
 namespace {
 
-constexpr int TEX = 64;      // power of two: wrapping is a mask, never a modulo
-constexpr int TEX_MASK = 63;
+constexpr int TEX = fx::TEX_W; // power of two: wrapping is a mask, never a modulo
+constexpr int TEX_MASK = fx::TEX_MASK;
 constexpr int CX = 120, CY = 120;
 
 // Copper: the metal-and-highlight ramp the era used for everything from scroll
@@ -24,7 +24,7 @@ const fx::Stop COPPER[] = {{0, 24, 8, 0},      {32, 200, 96, 16}, {56, 255, 208,
 // Variant 1 is a double sine, seamless by construction, which turns the whole
 // screen into moving colour bands when the palette rotates.
 void RotozoomEffect::buildTexture() {
-  uint8_t* tex = fx::scratch();
+  uint8_t* tex = fx::scratch() + fx::TEX_OFF;
   for (int y = 0; y < TEX; ++y) {
     for (int x = 0; x < TEX; ++x) {
       uint8_t v;
@@ -73,7 +73,7 @@ void RotozoomEffect::step(lgfx::LGFX_Sprite& f) {
   int32_t u0 = driftU - CX * ca - CY * sa;
   int32_t v0 = driftV + CX * sa - CY * ca;
 
-  const uint8_t* tex = fx::scratch();
+  const uint8_t* tex = fx::scratch() + fx::TEX_OFF;
   uint8_t* fb = (uint8_t*)f.getBuffer();
   for (int y = 0; y < 240; ++y) {
     int32_t u = u0, v = v0;

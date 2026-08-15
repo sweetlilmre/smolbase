@@ -13,12 +13,11 @@ uint32_t rngState = 0x1234abcdu;
 } // namespace
 
 // Allocated once, on the first switch into an effect that needs it, and never
-// freed — the roster's whole memory cost, and the same 14.4 KB the Boing ball
-// used to hold on its own. A static buffer was tried and does not fit: the
-// DRAM segment already carries the 57.6 KB framebuffer, and the linker turns
-// down another quarter-frame by ~4.4 KB.
+// freed — the roster's whole memory cost. A static buffer was tried and does
+// not fit: the DRAM segment already carries the 57.6 KB framebuffer, and the
+// linker turned down even a single quarter-frame by ~4.4 KB.
 uint8_t* scratch() {
-  if (!scratchData) scratchData = (uint8_t*)malloc(SCRATCH_W * SCRATCH_H);
+  if (!scratchData) scratchData = (uint8_t*)malloc(SCRATCH_BYTES);
   return scratchData;
 }
 
@@ -34,13 +33,13 @@ uint8_t rand8() {
 // Row-doubling by memcpy: the expensive row is computed once, the twin is a
 // 240-byte block copy. Raw buffer access — the frame is a contiguous 240x240
 // byte plane in both 8-bpp modes.
-void blit2x(lgfx::LGFX_Sprite& f, uint8_t phase) {
+void blit2x(lgfx::LGFX_Sprite& f) {
   uint8_t* fb = (uint8_t*)f.getBuffer();
   const uint8_t* src = scratchData;
   for (int y = 0; y < SCRATCH_H; ++y) {
     uint8_t* dst = fb + (y * 2) * 240;
     for (int x = 0; x < SCRATCH_W; ++x) {
-      const uint8_t v = (uint8_t)((src[x] + phase) & BANK_MASK);
+      const uint8_t v = (uint8_t)(src[x] & BANK_MASK);
       dst[x * 2] = v;
       dst[x * 2 + 1] = v;
     }

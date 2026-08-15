@@ -17,8 +17,9 @@ frame, cheaply enough that it doesn't matter, and use the palette as a mapping f
 rather than a clock. The roster deliberately ships two of each, plus Boing, which is the
 purest palette animation of the lot (14 registers, zero pixel writes). All four new
 effects render the full frame in an estimated 2–3 ms against a ~8 ms budget (24 ms of
-every 33 ms frame belongs to `present()`), and the whole roster shares one 14.4 KB
-buffer — the same allocation the Boing ball already made.
+every 33 ms frame belongs to `present()`), and the whole roster shares one 45 KB
+pool, sized by its hungriest client (the tunnel's two coordinate planes plus its wall
+texture).
 
 ---
 
@@ -88,6 +89,16 @@ rows down (taller flames, less smoke) and a **random** 0–3 bleed-off per cell 
 a fixed one. The randomness is the entire flicker: a deterministic decay gives a
 perfectly still flame that reads as a photograph of fire.
 
+Two corrections came out of watching the first cut on the panel, both about *rate*:
+
+- **Heat climbs exactly one row per simulation step, so the simulation rate is the flame
+  speed** — there is no other knob. Running it at the screen's 30 Hz makes the flames
+  sprint. It now simulates at 15 Hz and blits at 30 (the blit happens regardless, since
+  the clock overlay overwrites the frame either way).
+- **The fuel row must persist.** Re-rolling every cell from random each step boils the
+  base of the flame at the frame rate, which reads as television static. The embers now
+  random-walk inside a narrow band, so the roots breathe.
+
 It runs at 120×120 in the shared scratch and doubles up to 240×240 on the way out. That
 is not a concession to the ESP32 — mode 13h was 320×200 on a tube that displayed it at
 roughly twice that, so chunky is the period-correct look, and here it halves the heat
@@ -109,23 +120,57 @@ forward". The `1/r` distance term is what makes it read as depth rather than as 
 rings crowd together toward the center exactly as a real tunnel's do, so a *constant*
 shift per frame looks like constant speed down the pipe.
 
-`TunnelEffect` keeps the geometry and collapses the texture. Two 16-bit coordinate tables
-for a 240×240 screen would be 115 KB; there is no such memory on this chip. Instead the
-two coordinates are summed into **one byte per pixel** — `(depth + angle) & 0x7F` — over a
-120×120 field, and the "texture" becomes the 128-entry palette ramp itself. Consequences,
-recorded honestly:
+**The first cut collapsed the two coordinates into one byte** — `(depth + angle) & 0x7F`
+over a single 120×120 plane, with the 128-entry ramp standing in for the texture. It
+saved 14.4 KB and it was wrong, which is worth recording because the reasoning looked
+sound: two coordinates summed onto one axis cannot be shifted independently, so "moving
+forward" and "turning" become the same motion, and with no texture there are no cells —
+what it actually draws is a smooth one-armed spiral gradient. Rejected on sight against
+reference art (a red/black checkered funnel): the structure is the effect.
 
-- Forward motion and rotation are no longer independent knobs, because they now share
-  one axis. The effect gets its second axis back from the palette instead: the field
-  offset advances one way each frame while the ramp rotates the other way, and the eye
-  reads the difference as banded light sliding over a moving surface.
-- The angle term spans the **full** 128 entries per revolution, so the wrap from 359° to
-  0° lands on the same entry it left — no seam. The side effect is a one-armed spiral,
-  which is a period-correct look in its own right.
-- Lode's tutorial says nothing about the center singularity, where `1/r` outruns the
-  pixel grid. Here `r` is clamped to 3 (half-res) units, which confines the aliasing
-  shimmer to about a dozen pixels at the vanishing point instead of a quarter of the
-  screen. UNVERIFIED how that reads on the panel at 30 Hz.
+`TunnelEffect` now follows the reference implementation properly. Depth and angle live in
+**two separate 120×120 planes**, each masked to 7 bits of a 128×128 texture (free: the
+shift is added before the wrap, and `(a + s) mod 128 == ((a mod 128) + s) mod 128`), and
+the per-frame read is Lode's, one texel per half-res pixel:
+
+```
+tex[((angle[i] + shiftV) & 127) << 7 | ((depth[i] + shiftU) & 127)]
+```
+
+Two shifts, two motions, composing — `shiftU` sucks the wall toward the camera, `shiftV`
+rolls it around. Four adaptations of note, three of them learned from frame-grabbing a
+capture of the DOS demo the user was comparing against:
+
+- **The palette's job changes when a texture arrives.** With structure in the texture,
+  rotating the ramp drags the black mortar through every color and strobes the whole
+  wall — the second cut did exactly that and read as a flashing chessboard. The ramp is
+  now a fixed red intensity curve, and the only thing that moves in it is a slow pulse
+  in its hot end, like a light swinging somewhere down the pipe. Palette animation is a
+  tool, not a reflex.
+- **Cells need soft shading, not mortar.** A flat interior with a one-texel black border
+  reads as a checkerboard. The reference's cells are bright at the heart and fall away
+  to dark at the edges — quilted panels catching light — so the texture shades by
+  distance from the cell center (square falloff) with a chunky rune stamped in the
+  middle. That single change is most of the difference between "checkerboard" and
+  "tunnel".
+- **Ring density cannot be right everywhere.** Screen-space ring spacing is `8r²/K`, so
+  any `K` that keeps the corners from stretching turns the mouth into moiré. `K` is
+  tuned for the *mid* field, which leaves stretched corners and a shimmering mouth —
+  exactly what the reference art shows, because it is the same geometry.
+- **The center is a hole with fog around it.** Lode's tutorial says nothing about the
+  singularity where `1/r` outruns the pixel grid. A sentinel in the depth plane paints
+  `r < 7` black, and a spare bit in the same byte marks `r < 24` for a one-shift
+  darkening — a two-level distance fog that stops the mouth looking like a hole punched
+  in a flat pattern.
+
+**The tuning was done on the host, not on the device.** `scratchpad/tunnel_sim.py` is a
+faithful Python mirror of the effect that writes a 240×240 PNG; three iterations of ring
+density and cell shading took seconds each, against minutes per OTA round-trip on a
+device only the user can see.
+
+The cost is memory: the tunnel sizes the shared pool at 45 KB rather than 14.4 KB (two
+planes plus a 16 KB texture), and the whole roster pays it. Measured on device: free heap
+106.4 KB → 76.6 KB.
 
 ### 2.4 Rotozoomer — one matrix per frame, two adds per pixel
 
@@ -166,8 +211,16 @@ text color through `color332()`.
   exists behind a framebuffer that is pushed to the panel in one DMA transfer.
 - **Starfield / 3D dots** — genuinely 90s, but it animates by moving points, not colors,
   and would have been the one effect in the roster with nothing to say about the palette.
+- **A moving vanishing point.** The reference capture drifts the tunnel's center around
+  the screen, and it is a large part of why it feels alive. The standard implementation
+  is a lookup table twice the screen size with a window panned over it — at half
+  resolution that is 115 KB of coordinate planes on a chip with ~107 KB of free heap, so
+  it is not a tuning question but a memory one. Computing depth and angle per pixel
+  instead (fast `atan2`/`rsqrt` approximations) is the alternative at an estimated
+  4-5 ms per frame, which would fit the budget but leaves little margin. UNVERIFIED and
+  unshipped; the center is fixed, a few pixels off dead-center.
 - **Voxel landscape** — the per-column ray walk is affordable, but it needs a height map
-  *and* a color map in RAM, and there is one shared 14.4 KB buffer.
+  *and* a color map in RAM, and the shared pool is already sized by the tunnel.
 
 ## 5. Budget
 

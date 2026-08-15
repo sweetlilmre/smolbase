@@ -410,20 +410,22 @@ palette bank and builds whatever tables it needs, `step()` paints one frame).
 The screen draws the clock on top afterwards, so no effect knows the time
 exists. Adding a sixth is one file and one line in the roster table.
 
-**One buffer, six effects.** They share a single 120×120 byte scratch
-(`fx::scratch()`) — the pre-rendered ball, the fire's heat map, the tunnel's
-field and the rotozoomer's texture are never alive at once. That is one 14.4 KB
-heap allocation for the whole roster, the same one the ball always made on its
-own: a static buffer does not fit, and the linker says so out loud — the DRAM
-segment already carries the 57.6 KB framebuffer.
+**One buffer, six effects.** They share a single byte pool (`fx::scratch()`) —
+the pre-rendered ball, the fire's heat map, the tunnel's two coordinate planes
+and the rotozoomer's texture are never alive at once, so the roster costs one
+heap allocation sized by its hungriest client rather than six. A static buffer
+does not fit, and the linker says so out loud: the DRAM segment already carries
+the 57.6 KB framebuffer.
 
 **The rotation is palette cycling, not pixels.** The ball is pre-rendered into
 palette indices using the original demo's facet formula (`((lat&1)*7 + lon) %
 14` over 8 latitude bands × 56 longitude facets). Each frame, 14
 `setPaletteColor()` writes shift the red/white assignment by `SPIN_STEPS`
 stripes — the ball appears to spin while not a single ball pixel is redrawn.
-The tunnel takes the same idea further: its whole inward rush is one byte added
-to a field that never changes.
+The tunnel shows the flip side: once a texture carries the structure, rotating
+the *whole* ramp drags the black mortar through every color, so its bank is
+split again — 32 fixed structure entries, 96 that cycle. Palette animation is a
+tool, not a reflex.
 
 **The animated tick is a fixed timestep, not a dirty flag:**
 
