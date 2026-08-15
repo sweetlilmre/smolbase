@@ -92,17 +92,21 @@ void DemoScreen::applySettings(lgfx::LGFX_Sprite& f) {
 }
 
 void DemoScreen::select(int i, lgfx::LGFX_Sprite& f) {
-  // Every effect but the calm clock needs the shared scratch. Its one 14.4 KB
-  // allocation cannot realistically fail at boot, but if it ever does the
-  // screen degrades to the entry that needs nothing rather than to a crash.
-  if (ROSTER[i].fx && !fx::scratchReady()) i = CALM_IDX;
+  // Size the pool to the incoming effect — exactly, so nothing holds memory it
+  // does not use (the plasma holds none at all) — or hand it back. If the
+  // allocation fails the screen degrades to the entry that needs nothing
+  // rather than to a crash.
+  const size_t need = ROSTER[i].fx ? ROSTER[i].fx->scratchBytes() : 0;
+  if (need == 0 || !fx::ensureScratch(need)) {
+    if (need != 0) i = CALM_IDX; // wanted memory, could not have it
+    fx::releaseScratch();
+  }
   if (entered && i != idx) nameShownMs = millis(); // announce, but not at boot
   idx = i;
   entered = true;
   lastFrameMs = millis();
   lastMinute = -1; // force the calm clock to repaint if that is what we landed on
   if (ROSTER[idx].fx) ROSTER[idx].fx->enter(f);
-  else fx::releaseScratch(); // the calm clock needs none of it — give it back
 }
 
 // Park for an OTA (SysEvent::OtaStarting). The roster's pool is the largest

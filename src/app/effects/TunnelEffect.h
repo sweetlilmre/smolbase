@@ -15,6 +15,8 @@ class TunnelEffect : public Effect {
   uint16_t pulse = 0; // frame counter: the ramp's breath and the window's pan
   int8_t dir = 1;     // tap flips it: fly in, or fall out
 
+  size_t scratchBytes() const override; // two coordinate planes plus the wall
+
   void buildTexture();
   void writePalette(lgfx::LGFX_Sprite& f);
 

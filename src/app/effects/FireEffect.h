@@ -17,6 +17,8 @@ class FireEffect : public Effect {
   uint8_t blast = 0; // tap: simulation steps of extra fuel still to burn
 
 public:
+  size_t scratchBytes() const override { return fx::PLANE; } // the heat map
+
   void enter(lgfx::LGFX_Sprite& f) override;
   void step(lgfx::LGFX_Sprite& f) override;
   void onTap() override { blast = 6; }

@@ -9,23 +9,29 @@ namespace fx {
 
 namespace {
 uint8_t* scratchData = nullptr;
+size_t scratchSize = 0;
 uint32_t rngState = 0x1234abcdu;
 } // namespace
 
-// Allocated once, on the first switch into an effect that needs it, and never
-// freed — the roster's whole memory cost. A static buffer was tried and does
-// not fit: the DRAM segment already carries the 57.6 KB framebuffer, and the
-// linker turned down even a single quarter-frame by ~4.4 KB.
-uint8_t* scratch() {
-  if (!scratchData) scratchData = (uint8_t*)malloc(SCRATCH_BYTES);
+// Heap, not .bss: a static buffer was tried and does not fit — the DRAM
+// segment already carries the 57.6 KB framebuffer, and the linker turned down
+// even a single quarter-frame by ~4.4 KB. Sized to the running effect and
+// released the moment nothing needs it, because free heap is what an OTA
+// spends (see the header).
+uint8_t* scratch() { return scratchData; }
+
+uint8_t* ensureScratch(size_t bytes) {
+  if (scratchData && scratchSize == bytes) return scratchData;
+  releaseScratch();
+  scratchData = (uint8_t*)malloc(bytes);
+  scratchSize = scratchData ? bytes : 0;
   return scratchData;
 }
-
-bool scratchReady() { return scratch() != nullptr; }
 
 void releaseScratch() {
   free(scratchData);
   scratchData = nullptr;
+  scratchSize = 0;
 }
 
 uint8_t rand8() {

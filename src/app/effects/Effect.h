@@ -50,16 +50,18 @@ constexpr uint8_t UI_LAST = 0x85;
 // buffer does not fit — see Effect.cpp). scratchReady() is false only if that
 // allocation failed, in which case the screen falls back to the calm clock.
 //
-// Layout:
-//   [0, PLANE)          ball pixels / fire's heat map, a 120x120 quarter-frame
-//   [0, 2*TUN_PLANE)    the tunnel's depth and angle fields, 152x152 each
-//   [TEX_OFF, ...)      a texture: 256x64 for the tunnel's wall, 64x64 for the
-//                       rotozoomer (which uses a corner of the same space)
-// The tunnel is what sizes the pool, twice over. It needs BOTH coordinates per
-// pixel — collapsing them into one byte can only produce a spiral gradient,
-// never a checkered funnel — and its fields are LARGER than the screen so the
-// window can pan across them, which is how the vanishing point drifts without
-// recomputing a single atan2.
+// Each effect declares how many bytes it wants through Effect::scratchBytes()
+// and carves its own layout out of them; an effect that needs none (the plasma
+// computes everything from tiny per-frame tables) allocates nothing at all.
+// The screen sizes the pool to the running effect and frees it whenever
+// nothing needs it.
+//
+// SIZE IS A SAFETY PROPERTY HERE, not a preference. An OTA streams a ~1.2 MB
+// image through the web server and needs free heap to do it. Measured on
+// device: with ~77 KB free an upload succeeds, with ~60 KB it fails at the
+// first parse, every time — and this board has no serial port to recover
+// through. The tunnel, the hungriest effect, is budgeted so the device stays
+// flashable while it runs. Do not grow this without re-testing an OTA.
 //
 // Effects that work at half resolution here and expand through blit2x() are
 // not conceding anything to the ESP32 — that is how these effects ran in 1993,
@@ -67,23 +69,15 @@ constexpr uint8_t UI_LAST = 0x85;
 // is the period-correct look.
 constexpr int SCRATCH_W = 120;
 constexpr int SCRATCH_H = 120;
-constexpr int PLANE = SCRATCH_W * SCRATCH_H;
-constexpr int TEX_W = 64;  // the rotozoomer's texture
+constexpr int PLANE = SCRATCH_W * SCRATCH_H; // one half-res quarter-frame
+constexpr int TEX_W = 64;                    // the rotozoomer's texture
 constexpr int TEX_MASK = TEX_W - 1;
-constexpr int TUN_MARGIN = 16; // how far the tunnel's window may pan, per axis
-constexpr int TUN_W = SCRATCH_W + 2 * TUN_MARGIN;
-constexpr int TUN_PLANE = TUN_W * TUN_W;
-constexpr int TEX_OFF = 2 * TUN_PLANE;
-constexpr int TEX_BYTES = 256 * 64; // the tunnel's wall, which sizes the tail
-constexpr int SCRATCH_BYTES = TEX_OFF + TEX_BYTES;
-uint8_t* scratch();
-bool scratchReady();
-// Hand the pool back. The roster is the largest allocation in the firmware, and
-// an OTA needs room to stream a 1.2 MB image through the web server — measured
-// the hard way: with the pool held, a full firmware upload fails outright on a
-// device that has no serial port to recover through. The screen releases it
-// whenever no effect needs it, which includes parking on OtaStarting. The next
-// enter() allocates again.
+
+// Size the pool to exactly what the incoming effect asked for (freeing and
+// re-allocating if that differs), or hand it back entirely. Returns nullptr if
+// the allocation failed, in which case the screen falls back to the calm clock.
+uint8_t* ensureScratch(size_t bytes);
+uint8_t* scratch(); // the current pool; nullptr when nothing holds one
 void releaseScratch();
 
 // Expand plane 0 into the full frame as 2x2 chunky pixels. ~1 ms.
@@ -111,6 +105,9 @@ uint8_t rand8();
 class Effect {
 public:
   virtual ~Effect() = default;
+  // How much scratch this effect wants, and how it carves it up, is entirely
+  // the effect's business — the screen only allocates it. Zero means none.
+  virtual size_t scratchBytes() const { return 0; }
   virtual void enter(lgfx::LGFX_Sprite& f) = 0; // claim the bank, fill the scratch
   virtual void step(lgfx::LGFX_Sprite& f) = 0;  // one 30 Hz frame, full screen
   virtual void onTap() {}

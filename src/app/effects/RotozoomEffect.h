@@ -14,6 +14,8 @@ class RotozoomEffect : public Effect {
   uint8_t variant = 0; // tap swaps the texture
   bool rebuild = true;
 
+  size_t scratchBytes() const override { return fx::TEX_W * fx::TEX_W; }
+
   void buildTexture();
 
 public:

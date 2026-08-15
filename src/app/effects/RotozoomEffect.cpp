@@ -24,7 +24,7 @@ const fx::Stop COPPER[] = {{0, 24, 8, 0},      {32, 200, 96, 16}, {56, 255, 208,
 // Variant 1 is a double sine, seamless by construction, which turns the whole
 // screen into moving colour bands when the palette rotates.
 void RotozoomEffect::buildTexture() {
-  uint8_t* tex = fx::scratch() + fx::TEX_OFF;
+  uint8_t* tex = fx::scratch();
   for (int y = 0; y < TEX; ++y) {
     for (int x = 0; x < TEX; ++x) {
       uint8_t v;
@@ -73,7 +73,7 @@ void RotozoomEffect::step(lgfx::LGFX_Sprite& f) {
   int32_t u0 = driftU - CX * ca - CY * sa;
   int32_t v0 = driftV + CX * sa - CY * ca;
 
-  const uint8_t* tex = fx::scratch() + fx::TEX_OFF;
+  const uint8_t* tex = fx::scratch();
   uint8_t* fb = (uint8_t*)f.getBuffer();
   for (int y = 0; y < 240; ++y) {
     int32_t u = u0, v = v0;

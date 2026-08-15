@@ -19,6 +19,8 @@ class BoingEffect : public Effect {
   // colors (research #45).
   lgfx::LGFX_Sprite ball;
 
+  size_t scratchBytes() const override { return fx::PLANE; } // the pre-rendered ball
+
   void applyCycle(lgfx::LGFX_Sprite& f);
   void stepPhysics();
   void drawShadow(lgfx::LGFX_Sprite& f, int cx, int cy);
