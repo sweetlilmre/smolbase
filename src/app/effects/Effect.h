@@ -5,10 +5,11 @@
 //
 // The contract every effect signs:
 //
-//   - It owns the EFFECT BANK (palette indices 0x00-0x7F) and nothing else. The
-//     screen owns 0x80-0x85 (black + the five identity text colors), so the
-//     clock overlay stays exactly the colors the user picked no matter what the
-//     effect does to its own 128 entries. Both halves are rewritten on every
+//   - It owns the EFFECT BANK (palette indices 0x00-0x7F) and nothing else,
+//     except the wormhole, which replays a whole original palette of 225
+//     colours from index 1. Either way the screen's own entries sit at
+//     0xF0-0xF5, above anything an effect claims, so the clock overlay stays
+//     exactly the colors the user picked. Both halves are rewritten on every
 //     switch, so an effect inherits no palette state and leaves none behind.
 //   - enter() rebuilds everything it needs: only one effect runs at a time and
 //     they SHARE one scratch buffer (below), so nothing survives an exit.
@@ -47,11 +48,10 @@ constexpr uint8_t UI_TEXT = 0xF1; // .. 0xF5, one per identity string
 constexpr uint8_t UI_LAST = 0xF5;
 
 // ---- The Scratch -------------------------------------------------------------
-// One byte pool, lent to whichever effect is running. It is the ONE piece of
-// memory the roster shares, so six effects cost what the hungriest one costs:
-// a single heap allocation at the first switch-in, never freed (a static
-// buffer does not fit — see Effect.cpp). scratchReady() is false only if that
-// allocation failed, in which case the screen falls back to the calm clock.
+// One byte pool, lent to whichever effect is running, sized to that effect and
+// freed the moment nothing needs it. It is heap, not .bss: a static buffer does
+// not fit — the DRAM segment already carries the 57.6 KB framebuffer, and the
+// linker turned down even a single quarter-frame by ~4.4 KB.
 //
 // Each effect declares how many bytes it wants through Effect::scratchBytes()
 // and carves its own layout out of them; an effect that needs none (the plasma
@@ -63,8 +63,9 @@ constexpr uint8_t UI_LAST = 0xF5;
 // image through the web server and needs free heap to do it. Measured on
 // device: with ~77 KB free an upload succeeds, with ~60 KB it fails at the
 // first parse, every time — and this board has no serial port to recover
-// through. The tunnel, the hungriest effect, is budgeted so the device stays
-// flashable while it runs. Do not grow this without re-testing an OTA.
+// through. An earlier effect held 61 KB and made the device unflashable while
+// it ran. The current worst case is 14.4 KB (the ball and the fire). Do not
+// grow it without re-testing an OTA with that effect running.
 //
 // Effects that work at half resolution here and expand through blit2x() are
 // not conceding anything to the ESP32 — that is how these effects ran in 1993,

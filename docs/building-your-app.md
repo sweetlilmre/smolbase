@@ -376,15 +376,17 @@ What that means for your animated screen:
   at the next `present()` — the Boing ball's whole rotation is 14 of them per
   frame (the authentic 1984 technique: the ball never rotates as pixels; see
   `docs/research/boing-ball-technique.md`).
-- **Reserve palette indices deliberately.** The demo clock splits the palette
-  in two: `0x00–0x7F` belongs to whichever effect is running, `0x80–0x85` to
-  the overlay (black plus the five user-picked text colors), and `0x86–0xFF`
-  keeps its RGB332 identity. It restores every index it touched in `onExit()`,
-  since palette edits are global to the shared `frame()`. Two things fall out
-  of that split worth stealing: a power-of-two bank makes palette cycling a
-  single masked add per pixel (`(value + phase) & 0x7F`), and giving your text
-  its own reserved entries means it renders in *exact* RGB instead of
-  quantizing through `color332()`.
+- **Reserve palette indices deliberately.** The demo clock splits the palette:
+  `0x00–0x7F` belongs to whichever effect is running, `0xF0–0xF5` to the
+  overlay (black plus the five user-picked text colors), and the rest keeps its
+  RGB332 identity. It restores every index it touched in `onExit()`, since
+  palette edits are global to the shared `frame()`. Three things fall out of
+  that split worth stealing: a power-of-two bank makes palette cycling a single
+  masked add per pixel (`(value + phase) & 0x7F`); giving your text its own
+  reserved entries means it renders in *exact* RGB instead of quantizing
+  through `color332()`; and putting the overlay's entries at the *top* leaves
+  the low range free for an effect that needs an unusual amount of it — the
+  wormhole replays an original VGA palette of 225 colours starting at index 1.
 - **Blitting pre-rendered art**: an 8-bpp sprite pushed into `frame()` with a
   transparent index copies raw palette indices (no color conversion) at
   ~1–1.5 ms for a 120-px ball. Author sprite pixels in the frame's index
@@ -408,7 +410,7 @@ What that means for your animated screen:
 `src/app/DemoScreen.cpp` wires all of the above into one screen (with
 `src/app/StockApp.cpp` as the App glue): the identity text drop-shadowed over a
 rotation of full-screen 256-color effects — the Boing ball, plasma, fire, a
-palette tunnel, a rotozoomer, and a calm black clock — running at a fixed 30 Hz
+a wormhole, a rotozoomer, and a calm black clock — running at a fixed 30 Hz
 through `frame()`/`present()`. Technique notes and sources for each effect:
 [research/palette-effects.md](research/palette-effects.md). The parts worth
 stealing:
@@ -419,22 +421,24 @@ palette bank and builds whatever tables it needs, `step()` paints one frame).
 The screen draws the clock on top afterwards, so no effect knows the time
 exists. Adding a sixth is one file and one line in the roster table.
 
-**One buffer, six effects.** They share a single byte pool (`fx::scratch()`) —
-the pre-rendered ball, the fire's heat map, the tunnel's two coordinate planes
-and the rotozoomer's texture are never alive at once, so the roster costs one
-heap allocation sized by its hungriest client rather than six. A static buffer
-does not fit, and the linker says so out loud: the DRAM segment already carries
-the 57.6 KB framebuffer.
+**One buffer, six effects.** They share a single byte pool (`fx::scratch()`),
+sized to whichever effect is running through `Effect::scratchBytes()` and freed
+when nothing needs it — the pre-rendered ball, the fire's heat map and the
+rotozoomer's texture are never alive at once, and two of the effects declare
+zero and hold nothing at all. A static buffer does not fit, and the linker says
+so out loud: the DRAM segment already carries the 57.6 KB framebuffer. Size it
+against what an **OTA** needs, not what your app can get away with — see the
+animation notes above.
 
 **The rotation is palette cycling, not pixels.** The ball is pre-rendered into
 palette indices using the original demo's facet formula (`((lat&1)*7 + lon) %
 14` over 8 latitude bands × 56 longitude facets). Each frame, 14
 `setPaletteColor()` writes shift the red/white assignment by `SPIN_STEPS`
 stripes — the ball appears to spin while not a single ball pixel is redrawn.
-The tunnel shows the flip side: once a texture carries the structure, rotating
-the *whole* ramp drags the black mortar through every color, so its bank is
-split again — 32 fixed structure entries, 96 that cycle. Palette animation is a
-tool, not a reflex.
+The wormhole takes it further and computes *nothing*: a pre-rendered field of
+indices in flash, a window spiralling across it, and two palette rotations
+running against each other. Its frame is 240 row copies and 225 palette writes,
+which makes the most faithful effect in the roster also the cheapest.
 
 **The animated tick is a fixed timestep, not a dirty flag:**
 
@@ -463,7 +467,7 @@ blinks at 1 Hz in either mode as visible proof the clock is live.
 
 **Touch drives app state** (#60): `onTap()` goes to the running effect, which
 decides what a tap means to it (kick the ball, poke the fire, reverse the
-tunnel, re-color the plasma). `onLongPress()` belongs to the screen: it
+wormhole, re-color the plasma). `onLongPress()` belongs to the screen: it
 advances the roster and persists the pick through `ConfigStore::setString` +
 `save()`, riding the same `SettingsChanged` path a web save takes — the switch
 itself happens in `applySettings()`, on the repaint, whichever surface asked

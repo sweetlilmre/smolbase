@@ -9,7 +9,9 @@ color cycling as an art form. Everything measured is marked as measured; everyth
 yet confirmed on hardware is marked UNVERIFIED.
 
 **TL;DR** — The 1990s 256-color effect canon splits into two families, and the split is
-about *where the animation lives*. **Palette-animated** effects (color cycling, plasma,
+about *where the animation lives*. The wormhole is the extreme case and the one that took
+four attempts: three of them computed geometry at runtime before the original's source
+turned up and showed it computed nothing at all. **Palette-animated** effects (color cycling, plasma,
 tunnel) precompute a field of indices once and animate by rewriting the palette or by
 adding a single offset to the index — the pixels barely change, the colors do all the
 work. **Buffer-animated** effects (fire, rotozoomer) recompute the index field each
@@ -17,9 +19,9 @@ frame, cheaply enough that it doesn't matter, and use the palette as a mapping f
 rather than a clock. The roster deliberately ships two of each, plus Boing, which is the
 purest palette animation of the lot (14 registers, zero pixel writes). All four new
 effects render the full frame in an estimated 2–3 ms against a ~8 ms budget (24 ms of
-every 33 ms frame belongs to `present()`), and the whole roster shares one 45 KB
-pool, sized by its hungriest client (the tunnel's two coordinate planes plus its wall
-texture).
+every 33 ms frame belongs to `present()`), and the roster's memory is a
+single pool sized to whichever effect is running — 14.4 KB at most, and nothing at all
+for the two that need none.
 
 ---
 
@@ -104,85 +106,64 @@ is not a concession to the ESP32 — mode 13h was 320×200 on a tube that displa
 roughly twice that, so chunky is the period-correct look, and here it halves the heat
 simulation's cost as a bonus.
 
-### 2.3 Tunnel — the palette wormhole
+### 2.3 Wormhole — the one that was already solved
 
-The reference implementation precomputes two tables and then does nothing but add to
-them (https://lodev.org/cgtutor/tunnel.html):
+This effect was built four times. The first three were runtime geometry — a distance-and-
+angle field around a screen point, then a ray-cast cylinder, then a ray-cast funnel with a
+rim — each one tuned against reference frames and each one wrong in a way the next was
+supposed to fix. The fourth was to stop computing anything.
 
-```
-distance = ratio * texHeight / sqrt((x - w/2)² + (y - h/2)²)   // ratio = 32.0
-angle    = (0.5 * texWidth * atan2(y - h/2, x - w/2)) / π
-```
+**The original never computed a tunnel.** Psycho Neurosis (Asphyxia, 1994) drew a
+640×400 image of palette indices, stored it in four Mode-X planes, loaded it into video
+memory once, and then did no per-pixel work at all for the rest of the scene. Everything
+that moves is palette animation plus hardware panning. The reconstruction of that scene —
+`PART3_TUNNEL.PAS`, in a separate repository — states it in its own header, and reading
+it ended the search immediately.
 
-and per frame reads `texture[(distance + shiftX) % texWidth][(angle + shiftY) % texHeight]`,
-where the two shifts "independently change the speed of the rotation, and of the moving
-forward". The `1/r` distance term is what makes it read as depth rather than as a zoom:
-rings crowd together toward the center exactly as a real tunnel's do, so a *constant*
-shift per frame looks like constant speed down the pipe.
+What smolbase runs is that scene, ported:
 
-**The first cut collapsed the two coordinates into one byte** — `(depth + angle) & 0x7F`
-over a single 120×120 plane, with the 128-entry ramp standing in for the texture. It
-saved 14.4 KB and it was wrong, which is worth recording because the reasoning looked
-sound: two coordinates summed onto one axis cannot be shifted independently, so "moving
-forward" and "turning" become the same motion, and with no texture there are no cells —
-what it actually draws is a smooth one-armed spiral gradient. Rejected on sight against
-reference art (a red/black checkered funnel): the structure is the effect.
+- **The field is the demo's own image**, unresampled, in flash. Its values are a sawtooth
+  of indices 1..225; scaling or interpolating them would invent a ring across the wrap
+  that was never there, so nothing touches them.
+- **The palette is the demo's own three 225-byte channel tables**, 15 bands of 15, 6-bit
+  VGA values. They are not merely colour: printed as a 15×15 grid of set/clear, the red
+  table draws a **letter A framed in black**. The tiles on the tunnel wall and the dark
+  grid between them are painted by the palette, which is why the field on its own looks
+  like plain concentric rings — and why every ramp invented for the earlier attempts was
+  doomed regardless of how carefully it was tuned.
+- **Two rotations per step, against each other.** `RotateBandsFine` turns each 15-colour
+  band left by one, independently; `RotateBandsCoarse` turns the whole 225-entry table
+  right by one whole band. One alone shimmers in place; the pair is what makes the rings
+  flow inward.
+- **The window spirals.** 3° and 0.1 of radius per frame, from the largest radius that
+  keeps the window inside the field — 100 there for a 320×200 view, 80 here for a square
+  one. Rates are converted 70 → 30 Hz for wall-clock fidelity, and the rotations step
+  through an accumulator because 2.33 of them per frame is not something you can do a
+  fractional number of times.
 
-`TunnelEffect` now follows the reference implementation properly. Depth and angle live in
-**two separate 120×120 planes**, each masked to 7 bits of a 128×128 texture (free: the
-shift is added before the wrap, and `(a + s) mod 128 == ((a mod 128) + s) mod 128`), and
-the per-frame read is Lode's, one texel per half-res pixel:
+One deliberate departure: the original ended the scene when the radius reached 1. A clock
+face cannot end, so this one turns around and spirals back out.
 
-```
-tex[((angle[i] + shiftV) & 127) << 7 | ((depth[i] + shiftU) & 127)]
-```
+**What the three abandoned attempts are worth.** They are recorded because the failure was
+not in the tuning, and no amount of it would have helped:
 
-Two shifts, two motions, composing — `shiftU` sucks the wall toward the camera, `shiftV`
-rolls it around. Four adaptations of note, three of them learned from frame-grabbing a
-capture of the DOS demo the user was comparing against:
+- A field of `(depth + angle)` summed into one byte cannot shift its two coordinates
+  independently, so falling and turning become the same motion. Separate planes fix that
+  and cost twice the memory.
+- Pitching the camera sideways puts the vanishing point out to one side at mid-height and
+  fills the frame with concentric rings — still a view straight down the pipe, however far
+  the centre is moved. Pitch has to be vertical.
+- Pitch stored as a *tangent* cannot reach the useful end of its own range. Near the
+  horizon it runs to infinity, so no value of the constant could produce the view being
+  asked for. An angle in degrees can.
+- Inside a cylinder there is no horizon — perpendicular to the axis is wall — so "looking
+  across the lip" is not expressible in that model at any parameter value. That needs a
+  surface with a rim.
 
-- **The palette's job changes when a texture arrives.** With structure in the texture,
-  rotating the ramp drags the black mortar through every color and strobes the whole
-  wall — the second cut did exactly that and read as a flashing chessboard. The ramp is
-  now a fixed red intensity curve, and the only thing that moves in it is a slow pulse
-  in its hot end, like a light swinging somewhere down the pipe. Palette animation is a
-  tool, not a reflex.
-- **Cells need soft shading, not mortar.** A flat interior with a one-texel black border
-  reads as a checkerboard. The reference's cells are bright at the heart and fall away
-  to dark at the edges — quilted panels catching light — so the texture shades by
-  distance from the cell center (square falloff) with a chunky rune stamped in the
-  middle. That single change is most of the difference between "checkerboard" and
-  "tunnel".
-- **Ring density cannot be right everywhere.** Screen-space ring spacing is `8r²/K`, so
-  any `K` that keeps the corners from stretching turns the mouth into moiré. `K` is
-  tuned for the *mid* field, which leaves stretched corners and a shimmering mouth —
-  exactly what the reference art shows, because it is the same geometry.
-- **The center is a hole with fog around it.** Lode's tutorial says nothing about the
-  singularity where `1/r` outruns the pixel grid. A sentinel in the depth plane paints
-  `r < 7` black, and a spare bit in the same byte marks `r < 24` for a one-shift
-  darkening — a two-level distance fog that stops the mouth looking like a hole punched
-  in a flat pattern.
-
-**The tuning was done on the host, not on the device.** `scratchpad/tunnel_sim.py` is a
-faithful Python mirror of the effect that writes a 240×240 PNG; three iterations of ring
-density and cell shading took seconds each, against minutes per OTA round-trip on a
-device only the user can see.
-
-The cost is memory, and the pan is most of it: the fields are 152×152 rather than
-120×120 so the window has ±16 half-res pixels (±32 screen pixels) of travel. The tunnel
-sizes the shared pool at 61 KB — two fields plus a 16 KB wall texture — and the whole
-roster pays it. Measured on device: free heap 106.4 KB → 59.4 KB, steady. That is the
-dial to turn if the app ever needs the heap back: `TUN_MARGIN` trades travel for RAM at
-~1 KB per half-res pixel, and zero margin puts the pool back at 46 KB.
-
-**And there is a hard floor under all of this that has nothing to do with the effects.**
-At ~59 KB free the device stopped accepting firmware uploads entirely — a 2 KB multipart
-upload still worked, a 1.2 MB one failed at the first parse — because an OTA streams the
-image through the web server and needs the room. On a device with no serial port that is
-unrecoverable except by power-cycling with a lighter effect stored. The roster therefore
-releases its pool on `SysEvent::OtaStarting` (`DemoScreen::park()`), which is the
-documented contract anyway; the lesson worth carrying is that an app's memory budget is
-set by what OTA needs, not by what the app can get away with while running.
+Every one of those is a case of the *model* being unable to express the target, discovered
+only by tuning parameters inside it. The general lesson is cheaper than the specific ones:
+when tuning keeps almost working, suspect the model, not the numbers. And when the target
+is a fixed image someone already drew, ship the image.
 
 ### 2.4 Rotozoomer — one matrix per frame, two adds per pixel
 
@@ -202,9 +183,11 @@ the whole screen into moving bands under a rotating palette.
 ## 3. The palette split, and why 128
 
 Everything above wants "the whole palette", and the clock overlay wants some of it. The
-screen splits the 256 entries: **0x00–0x7F to the running effect, 0x80–0x85 to the
-overlay** (black plus the five user-picked identity colors), 0x86–0xFF left as the
-framebuffer's documented RGB332 identity.
+screen splits the 256 entries: **0x00–0x7F to the running effect, 0xF0–0xF5 to the
+overlay** (black plus the five user-picked identity colors), the rest left as the
+framebuffer's documented RGB332 identity. The overlay sits that high because the wormhole
+replays a palette of 225 colours starting at index 1, and anything lower would be
+repainted by a tunnel.
 
 128 is not a compromise, it is the useful number: it makes the cycling primitive
 `(value + phase) & 0x7F` a single masking instruction per pixel, where a 240-entry bank
@@ -223,15 +206,8 @@ text color through `color332()`.
   exists behind a framebuffer that is pushed to the panel in one DMA transfer.
 - **Starfield / 3D dots** — genuinely 90s, but it animates by moving points, not colors,
   and would have been the one effect in the roster with nothing to say about the palette.
-- **A full-screen wander for the vanishing point.** The shipped pan is ±32 screen
-  pixels, not the half-screen sweep the reference capture makes: a window that could
-  reach anywhere would need fields roughly twice the screen in each axis, ~115 KB of
-  coordinate planes, which this chip does not have. Computing depth and angle per pixel
-  instead (fast `atan2`/`rsqrt` approximations, no fields at all) would buy unlimited
-  travel and cost an estimated 4-5 ms per frame — it fits the budget on paper but leaves
-  little margin, and it is UNVERIFIED.
 - **Voxel landscape** — the per-column ray walk is affordable, but it needs a height map
-  *and* a color map in RAM, and the shared pool is already sized by the tunnel.
+  *and* a color map in RAM, and both would have to fit the one shared pool.
 
 ## 5. Budget
 
@@ -245,10 +221,33 @@ Per 33 ms frame at the fixed 30 Hz timestep, on the measurements in
 | Effect `step()` — full-frame index field + palette writes | ~2–3 ms (UNVERIFIED estimate: 57,600 pixels at roughly 8–12 cycles each on a 240 MHz core) |
 | Headroom | ~4 ms |
 
-One-time costs, paid on switch-in and never again: the tunnel's field build (~14 K pixels
-of `sqrtf`/`atan2f`) and the Boing ball's pre-render (~11 K pixels of `asinf`/`atan2f`) —
-tens of milliseconds each, i.e. a perceptible but sub-frame pause on a long press.
-UNVERIFIED on hardware.
+The wormhole is the cheapest of the five despite being the most faithful: its frame is
+240 row copies out of flash and 225 palette writes, with no per-pixel arithmetic at all.
+
+One-time cost, paid on switch-in and never again: the Boing ball's pre-render, ~11 K
+pixels of `asinf`/`atan2f` — tens of milliseconds, a perceptible but sub-frame pause on a
+long press. UNVERIFIED on hardware.
+
+## 5a. Memory, which turned out to be a safety property
+
+An OTA streams a ~1.2 MB image through the web server and needs free heap to do it.
+Measured on device: with ~77 KB free an upload succeeds; with ~60 KB it fails at the first
+parse, every time — and this board has no serial port to recover through. An earlier cut
+of the wormhole held a 61 KB pool and made the device unflashable while it ran.
+
+Two fixes, only one of which worked:
+
+- **Parking on `SysEvent::OtaStarting`** (drop to the calm clock, free the pool) does
+  *not* rescue it. The upload dies before the first chunk callback, which is where that
+  event is posted. It is still right to stop drawing and allocating during an update, but
+  it is not what makes the device flashable.
+- **Not holding the memory** does. The pool is now sized per effect
+  (`Effect::scratchBytes`) rather than to the worst case: the plasma and the wormhole
+  declare zero and hold nothing, the rotozoomer 4 KB, the Boing ball and the fire 14.4 KB
+  each. Free heap with the wormhole running is the full idle figure, ~122 KB.
+
+The rule worth carrying: an app's memory budget on an OTA-only device is set by what the
+updater needs, not by what the app can get away with while running.
 
 ## 6. Sources
 
@@ -259,5 +258,8 @@ UNVERIFIED on hardware.
 - Tunnel: https://lodev.org/cgtutor/tunnel.html
 - Fire, rotozoomer, and the wider effect canon: https://seancode.com/demofx/
 - Boing ball (the roster's first effect): [boing-ball-technique.md](boing-ball-technique.md)
+- The wormhole's field, palette and motion: the Psycho Neurosis reconstruction
+  (`src/PART3_TUNNEL.PAS`, `src/gen/P3PAL.INC`, `docs/06-part3-scene1-tunnel.md` in that
+  project) — a separate repository, not vendored here. Provenance: [../THIRD-PARTY.md](../THIRD-PARTY.md)
 - Frame budget and framebuffer contract: [../building-your-app.md](../building-your-app.md),
   `src/core/Display.h`

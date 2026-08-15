@@ -109,13 +109,18 @@ void DemoScreen::select(int i, lgfx::LGFX_Sprite& f) {
   if (ROSTER[idx].fx) ROSTER[idx].fx->enter(f);
 }
 
-// Park for an OTA (SysEvent::OtaStarting). The roster's pool is the largest
-// allocation in this firmware, and the web server needs that room to stream a
-// 1.2 MB image: held, a full firmware upload fails outright, which on a device
-// with no serial port is a hole with no ladder. So parking drops to the calm
-// clock and frees the pool. The stored setting is deliberately NOT written —
-// the user's pick comes back on the next boot, and the reboot after a
-// successful update restores it anyway.
+// Park for an OTA (SysEvent::OtaStarting): drop to the calm clock, stop
+// animating, hand the pool back. This is the contract every app signs — do not
+// draw or allocate while flash is being written.
+//
+// Honest note on what it does NOT do: parking was first added to rescue
+// firmware uploads that were failing for want of heap, and it does not, because
+// the upload dies before the first chunk callback, which is where OtaStarting
+// is posted. What fixed that was not holding the memory in the first place
+// (Effect::scratchBytes). Parking is still correct; it is just not the cure.
+//
+// The stored setting is deliberately NOT written — the user's pick comes back
+// on the next boot, and the reboot after a successful update restores it.
 void DemoScreen::park() {
   auto& f = Display::frame();
   parked = true; // and it stays parked: see applySettings()
