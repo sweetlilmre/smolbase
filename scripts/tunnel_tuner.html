@@ -103,7 +103,7 @@
   </header>
   <p class="sub">
     The firmware's tunnel, run in the browser: same ray cast, same integer wraps, same 120&times;120
-    field drawn as 2&times;2 chunky pixels. Drag until it looks right, then copy the constants.
+    field drawn as 2&times;2 chunky pixels. You are standing at the lip of a funnel. Drag until it looks right, then copy the constants.
   </p>
 
   <div class="cols">
@@ -141,13 +141,15 @@
 const W = 120, H = 120, T_ANG = 256, T_DEP = 32, AMASK = 255, DMASK = 31;
 
 const GROUPS = [
-  { title: "Geometry — the camera", kind: "geom",
-    note: "Pitch is measured from straight down the hole: 0° stares along the axis, 90° looks flat at the horizon across the lip. Past roughly 60° the axis vanishing point leaves the frame entirely — that is the setting where you see walls falling away and no hole at all. Pitch and squeeze are coupled: the convergence sits at tan(pitch) / (TAN_FOV × ASPECT) above centre.",
+  { title: "Geometry — standing at the lip", kind: "geom",
+    note: "A funnel with a RIM, not an endless pipe. Pitch is degrees from straight down the throat: 0 stares into it, 90 looks flat across the mouth at the far lip, with sky above that line. Inside a pipe there is no horizon — perpendicular to the axis is just wall — which is why the earlier model could never show the view being described.",
     items: [
-      ["PITCH", "Pitch", "degrees from straight down; 90 = at the horizon", 0, 89, 1, 72],
-      ["CAM_Y", "Camera off-axis", "0 = middle of the pipe, 1 = against the wall", 0, .95, .01, .45],
-      ["TAN_FOV", "Horizontal FOV", "half-angle, as a tangent", .2, 1.2, .01, .5],
-      ["ASPECT", "Vertical squeeze", "above 1 flattens rings into floor rows", .4, 2.6, .05, 1.7],
+      ["PITCH", "Pitch", "degrees from straight down; 90 = level, across the mouth", 0, 89, 1, 78],
+      ["CAM_R", "Where you stand", "0 = over the middle, 1 = on the lip, past = outside it", 0, 1.3, .02, 1.0],
+      ["CAM_H", "Eye height", "above the rim plane", 0, .8, .02, .18],
+      ["FLARE", "Funnel narrowing", "higher = steeper walls, tighter throat", .05, 1.5, .05, .35],
+      ["TAN_FOV", "Horizontal FOV", "half-angle, as a tangent", .2, 1.4, .01, .7],
+      ["ASPECT", "Vertical squeeze", "above 1 flattens rings into rows", .4, 2.6, .05, 1.2],
       ["K_Z", "Ring density", "texels per unit of depth", 2, 40, .5, 16],
     ]},
   { title: "Distance fade", kind: "geom",
@@ -174,7 +176,7 @@ const GROUPS = [
 ];
 
 const V = {}, EL = {};
-let depth, fade, angleF, tex, pal, su = 0, sv = 0, geomDirty = true, texDirty = true, palDirty = true;
+let depth, fade, angleF, sky, skyPct = 0, tex, pal, su = 0, sv = 0, geomDirty = true, texDirty = true, palDirty = true;
 
 const controls = document.getElementById("controls");
 for (const g of GROUPS) {
@@ -207,32 +209,50 @@ for (const g of GROUPS) {
 function fmt(v) { return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/0$/, ""); }
 
 function buildGeometry() {
-  const { PITCH, CAM_Y, TAN_FOV, ASPECT, K_Z, Z1, Z2, Z3 } = V;
+  const { PITCH, CAM_R, CAM_H, FLARE, TAN_FOV, ASPECT, K_Z, Z1, Z2, Z3 } = V;
   depth = new Uint8Array(W * H); fade = new Uint8Array(W * H); angleF = new Uint16Array(W * H);
-  // Pitch as an ANGLE, not a tangent: 0 rad stares straight down the axis and
-  // 90 degrees looks flat across the lip. A tangent cannot express the useful
-  // end of that range at all.
+  sky = new Uint8Array(W * H);
+  // z runs DOWN into the hole; the rim plane is z = 0 and the funnel is the
+  // cone r(z) = 1 - FLARE*z below it. A ray that misses, or would only meet
+  // the cone above the rim, has gone out over the lip: that is sky.
   const th = PITCH * Math.PI / 180, fy0 = -Math.sin(th), fz0 = Math.cos(th);
-  const pix = TAN_FOV / (W * 0.5), pixy = pix * ASPECT, c = CAM_Y * CAM_Y - 1;
+  const pix = TAN_FOV / (W * 0.5), pixy = pix * ASPECT;
+  const cy = CAM_R, cz = -CAM_H;
+  const E = 1 - FLARE * cz;
+  const c = cy * cy - E * E;
+  let skyCount = 0;
   for (let y = 0; y < H; y++) {
     const py = (y - (H - 1) * 0.5) * pixy, dy = fy0 - py * fz0, dz = fz0 + py * fy0;
     for (let x = 0; x < W; x++) {
       const dx = (x - (W - 1) * 0.5) * pix, i = y * W + x;
-      const a = dx * dx + dy * dy;
-      if (a < 1e-7) { depth[i] = 0; fade[i] = 3; angleF[i] = 0; continue; }
-      const b = 2 * CAM_Y * dy;
-      const t = (-b + Math.sqrt(Math.max(b * b - 4 * a * c, 0))) / (2 * a);
-      const z = t * dz;
+      const a = dx * dx + dy * dy - FLARE * FLARE * dz * dz;
+      const b = 2 * (cy * dy + E * FLARE * dz);
+      let t = -1;
+      if (Math.abs(a) > 1e-9) {
+        const disc = b * b - 4 * a * c;
+        if (disc >= 0) {
+          const r = Math.sqrt(disc);
+          for (const cand of [(-b - r) / (2 * a), (-b + r) / (2 * a)].sort((m, n) => m - n)) {
+            if (cand > 1e-4 && cz + cand * dz >= 0) { t = cand; break; }
+          }
+        }
+      } else if (Math.abs(b) > 1e-9) {
+        const cand = -c / b;
+        if (cand > 1e-4 && cz + cand * dz >= 0) t = cand;
+      }
+      if (t < 0) { sky[i] = 1; skyCount++; continue; }
+      const z = cz + t * dz;
       let f = 0;
       if (z > Z1) f = 1;
       if (z > Z2) f = 2;
       if (z > Z3) f = 3;
       fade[i] = f;
       depth[i] = ((z * K_Z) | 0) & DMASK;
-      let ang = Math.atan2(CAM_Y + t * dy, t * dx) + Math.PI;
+      const ang = Math.atan2(cy + t * dy, t * dx) + Math.PI;
       angleF[i] = ((ang * (T_ANG / (2 * Math.PI))) | 0) & AMASK;
     }
   }
+  skyPct = 100 * skyCount / (W * H);
   geomDirty = false;
 }
 
@@ -288,7 +308,8 @@ function paint() {
   if (palDirty) buildPalette();
   const d = img.data;
   for (let i = 0; i < W * H; i++) {
-    const t = tex[(((angleF[i] + sv) & AMASK) * T_DEP) | ((depth[i] + su) & DMASK)] >> fade[i];
+    const t = sky[i] ? 0
+      : tex[(((angleF[i] + sv) & AMASK) * T_DEP) | ((depth[i] + su) & DMASK)] >> fade[i];
     const p = t * 3, o = i * 4;
     d[o] = pal[p]; d[o + 1] = pal[p + 1]; d[o + 2] = pal[p + 2]; d[o + 3] = 255;
   }
@@ -317,18 +338,18 @@ function drawOverlay() {
 }
 
 function updateReadout() {
-  const vpFraction = Math.tan(V.PITCH * Math.PI / 180) / (V.TAN_FOV * V.ASPECT); // half-heights above centre
-  const convergence = (0.5 - vpFraction / 2) * 100;         // as % from the top edge
-  const inFrame = Math.abs(vpFraction) <= 1;
+  const overLip = skyPct > 0.5;
   document.getElementById("derived").innerHTML = `
-    <div class="stat"><b>${inFrame ? convergence.toFixed(0) + "%" : "off-frame"}</b>
-      <span>${inFrame ? "convergence, from the top" : "no hole in view"}</span></div>
+    <div class="stat"><b>${skyPct.toFixed(0)}%</b>
+      <span>${overLip ? "sky — you can see past the lip" : "no sky in frame"}</span></div>
     <div class="stat"><b>${(T_ANG / (V.CELL | 0))}</b><span>cells per revolution</span></div>
     <div class="stat"><b>${(V.K_Z / (V.CELL | 0)).toFixed(2)}</b><span>rings per unit depth</span></div>
     <div class="stat"><b>37 KB</b><span>heap held while running</span></div>`;
   document.getElementById("cpp").textContent =
 `constexpr float PITCH_DEG = ${V.PITCH.toFixed(0)}.0f;
-constexpr float CAM_Y = ${V.CAM_Y.toFixed(2)}f;
+constexpr float CAM_R = ${V.CAM_R.toFixed(2)}f;
+constexpr float CAM_H = ${V.CAM_H.toFixed(2)}f;
+constexpr float FLARE = ${V.FLARE.toFixed(2)}f;
 constexpr float TAN_FOV = ${V.TAN_FOV.toFixed(2)}f;
 constexpr float ASPECT = ${V.ASPECT.toFixed(2)}f;
 constexpr float K_Z = ${V.K_Z.toFixed(1)}f;
