@@ -142,9 +142,9 @@ const W = 120, H = 120, T_ANG = 256, T_DEP = 32, AMASK = 255, DMASK = 31;
 
 const GROUPS = [
   { title: "Geometry — the camera", kind: "geom",
-    note: "Pitch and squeeze are coupled: the convergence sits at TILT / (TAN_FOV × ASPECT) above centre, so raising one alone slides it back to mid-frame and it reads as a symmetric target.",
+    note: "Pitch is measured from straight down the hole: 0° stares along the axis, 90° looks flat at the horizon across the lip. Past roughly 60° the axis vanishing point leaves the frame entirely — that is the setting where you see walls falling away and no hole at all. Pitch and squeeze are coupled: the convergence sits at tan(pitch) / (TAN_FOV × ASPECT) above centre.",
     items: [
-      ["TILT", "Pitch", "down from the horizon", 0, 1.2, .01, .34],
+      ["PITCH", "Pitch", "degrees from straight down; 90 = at the horizon", 0, 89, 1, 72],
       ["CAM_Y", "Camera off-axis", "0 = middle of the pipe, 1 = against the wall", 0, .95, .01, .45],
       ["TAN_FOV", "Horizontal FOV", "half-angle, as a tangent", .2, 1.2, .01, .5],
       ["ASPECT", "Vertical squeeze", "above 1 flattens rings into floor rows", .4, 2.6, .05, 1.7],
@@ -207,9 +207,12 @@ for (const g of GROUPS) {
 function fmt(v) { return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/0$/, ""); }
 
 function buildGeometry() {
-  const { TILT, CAM_Y, TAN_FOV, ASPECT, K_Z, Z1, Z2, Z3 } = V;
+  const { PITCH, CAM_Y, TAN_FOV, ASPECT, K_Z, Z1, Z2, Z3 } = V;
   depth = new Uint8Array(W * H); fade = new Uint8Array(W * H); angleF = new Uint16Array(W * H);
-  const n = Math.sqrt(TILT * TILT + 1), fy0 = -TILT / n, fz0 = 1 / n;
+  // Pitch as an ANGLE, not a tangent: 0 rad stares straight down the axis and
+  // 90 degrees looks flat across the lip. A tangent cannot express the useful
+  // end of that range at all.
+  const th = PITCH * Math.PI / 180, fy0 = -Math.sin(th), fz0 = Math.cos(th);
   const pix = TAN_FOV / (W * 0.5), pixy = pix * ASPECT, c = CAM_Y * CAM_Y - 1;
   for (let y = 0; y < H; y++) {
     const py = (y - (H - 1) * 0.5) * pixy, dy = fy0 - py * fz0, dz = fz0 + py * fy0;
@@ -314,17 +317,17 @@ function drawOverlay() {
 }
 
 function updateReadout() {
-  const vpFraction = V.TILT / (V.TAN_FOV * V.ASPECT);      // half-heights above centre
+  const vpFraction = Math.tan(V.PITCH * Math.PI / 180) / (V.TAN_FOV * V.ASPECT); // half-heights above centre
   const convergence = (0.5 - vpFraction / 2) * 100;         // as % from the top edge
   const inFrame = Math.abs(vpFraction) <= 1;
   document.getElementById("derived").innerHTML = `
     <div class="stat"><b>${inFrame ? convergence.toFixed(0) + "%" : "off-frame"}</b>
-      <span>convergence, from the top</span></div>
+      <span>${inFrame ? "convergence, from the top" : "no hole in view"}</span></div>
     <div class="stat"><b>${(T_ANG / (V.CELL | 0))}</b><span>cells per revolution</span></div>
     <div class="stat"><b>${(V.K_Z / (V.CELL | 0)).toFixed(2)}</b><span>rings per unit depth</span></div>
     <div class="stat"><b>37 KB</b><span>heap held while running</span></div>`;
   document.getElementById("cpp").textContent =
-`constexpr float TILT = ${V.TILT.toFixed(2)}f;
+`constexpr float PITCH_DEG = ${V.PITCH.toFixed(0)}.0f;
 constexpr float CAM_Y = ${V.CAM_Y.toFixed(2)}f;
 constexpr float TAN_FOV = ${V.TAN_FOV.toFixed(2)}f;
 constexpr float ASPECT = ${V.ASPECT.toFixed(2)}f;

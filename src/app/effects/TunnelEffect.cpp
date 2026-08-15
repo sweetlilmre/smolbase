@@ -51,7 +51,12 @@ constexpr int BYTES = TEX_OFF + T_ANG * T_DEP;
 // edge and horizontally centred, the near floor sweeping toward the viewer in
 // big panels, rings crossing the frame as arcs rather than closing into
 // circles. That is a camera pitched DOWN relative to the tunnel axis.
-constexpr float TILT = 0.34f;   // pitch: shallow, from the horizon rather than steeply down
+// Pitch is an ANGLE from straight down the hole: 0 stares along the axis, 90
+// looks flat at the horizon across the lip. It was a tangent, which cannot
+// express the useful end of that range — and the useful end is near the
+// horizon, because that is where the axis vanishing point leaves the frame and
+// the viewer stops seeing a hole at all, which is the whole point.
+constexpr float PITCH_DEG = 72.0f;
 constexpr float CAM_Y = 0.45f;  // riding above the axis, so the floor runs long
 constexpr float TAN_FOV = 0.5f; // half-angle; wide FOVs put the wall beside us
 // The vertical FOV is WIDER than the horizontal, which squashes the view
@@ -162,8 +167,8 @@ void TunnelEffect::enter(lgfx::LGFX_Sprite& f) {
   // scales t inversely and lands on the same point.
   uint8_t* depth = fx::scratch();
   uint8_t* angle = fx::scratch() + fx::PLANE;
-  const float fn = sqrtf(TILT * TILT + 1.0f);
-  const float fy0 = -TILT / fn, fz0 = 1.0f / fn;
+  const float th = PITCH_DEG * (float)M_PI / 180.0f;
+  const float fy0 = -sinf(th), fz0 = cosf(th);
   const float pix = TAN_FOV / (W * 0.5f);
   const float pixy = pix * ASPECT;
   const float c = CAM_Y * CAM_Y - 1.0f; // camera is inside, so c < 0: always one hit
