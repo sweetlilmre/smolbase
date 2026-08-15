@@ -64,8 +64,9 @@ constexpr uint8_t UI_LAST = 0xF5;
 // device: with ~77 KB free an upload succeeds, with ~60 KB it fails at the
 // first parse, every time — and this board has no serial port to recover
 // through. An earlier effect held 61 KB and made the device unflashable while
-// it ran. The current worst case is 14.4 KB (the ball and the fire). Do not
-// grow it without re-testing an OTA with that effect running.
+// it ran. Measured worst case now is the rotozoomer's 128x128 texture at
+// 17.4 KB, leaving ~105 KB free. Do not grow it without re-testing an OTA with
+// that effect running.
 //
 // Effects that work at half resolution here and expand through blit2x() are
 // not conceding anything to the ESP32 — that is how these effects ran in 1993,
@@ -99,6 +100,13 @@ struct Stop {
   uint8_t r, g, b;
 };
 void writeRamp(lgfx::LGFX_Sprite& f, const Stop* stops, int count, uint8_t rotate);
+
+// The colour a ramp takes at one bank index, for callers that need the value
+// rather than the write — blending between two ramps, mostly.
+struct Rgb888 {
+  uint8_t r, g, b;
+};
+Rgb888 rampColor(const Stop* stops, int count, int i);
 
 // xorshift PRNG — the fire needs one per pixel, which rules out random().
 uint8_t rand8();

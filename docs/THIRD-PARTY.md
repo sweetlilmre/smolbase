@@ -92,11 +92,19 @@ Licensed **MIT**, Copyright (C) 2013 by Javier Arevalo — full text in
 `docs/licenses/MIT-firedemo.txt`, which carries the copyright and permission
 notice MIT requires to travel with the code.
 
-The rotozoomer's zoom-from-rotation coupling (`scale = sin(angle) + 1`) is a
-technique taken from [mrkite/demofx](https://github.com/mrkite/demofx). No code
-or artwork was copied: its textures are generated procedurally in
-`RotozoomEffect::buildTexture`, and the reference's own source image is not
-used.
+## Techniques (no code or assets)
+
+Two effects use ideas credited to their sources, reimplemented from scratch in
+fixed point against our palette bank. Nothing was copied.
+
+- The rotozoomer's zoom-from-rotation coupling (`scale = sin(angle) + 1`) is
+  from [mrkite/demofx](https://github.com/mrkite/demofx). Its textures are
+  generated in `RotozoomEffect::buildTexture`; the reference's own source image
+  is not used.
+- The plasma's circular flavours use a table indexed by r² holding the sine of
+  the root (no `sqrt` per pixel), and multiplicative rather than additive
+  combination, both described at
+  [4rknova.com](https://www.4rknova.com/blog/2016/11/01/plasma).
 
 ## Linked libraries
 

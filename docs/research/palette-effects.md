@@ -50,32 +50,55 @@ re-lay cost it cannot avoid anyway.
 
 ## 2. The four effects
 
-### 2.1 Plasma — sine sums, palette rotation
+### 2.1 Plasma — three fields, one palette clock
 
 The canonical construction: "generate a palette, generate a plasma buffer that contains
 the results of each sine function calculation, and then use them to draw each pixel with
 the correct color from the palette, then shift the palette every frame"
-(https://en.wikipedia.org/wiki/Plasma_effect). Lode's tutorial gives both the sine sums
-(`128 + 128*sin(x/16)` style terms, optionally with a radial
-`sin(sqrt((x-w/2)² + (y-h/2)²)/8)` term) and the two animation modes: **palette looping**
-— `palette[(plasma[y][x] + paletteShift) % 256]` over a static buffer, "computationally
-efficient" — or recomputing the sine fields per frame with time folded in, "more
-expensive but allows shape variation" (https://lodev.org/cgtutor/plasma.html).
+(https://en.wikipedia.org/wiki/Plasma_effect, https://lodev.org/cgtutor/plasma.html).
 
-`PlasmaEffect` does **both**, because on this hardware it can afford to. Three fields
-(horizontal, vertical, diagonal), each the average of two sines at unrelated
-frequencies, drift at their own rates *and* the palette rotates on top. Two adaptations
-matter:
+`PlasmaEffect` ships three fields, cycled by tap, because the canonical one has a ceiling
+that no amount of extra sine terms lifts:
 
-- **Separability is what makes it cheap.** A horizontal term depends only on `x` and a
-  vertical only on `y`, so each is one 240-entry table computed per frame and hoisted out
-  of the pixel loop. The diagonal term `f(x+y)` looks non-separable, but for a fixed row
-  it is just the same table read from an offset — a pointer add per row. The inner loop
-  is three lookups, two adds, a mask, a store.
-- **The ramps must be cyclic.** Lode's tutorial is explicit that plasma palettes must be
-  "seamlessly tileable (no discontinuities between last and first colors)", since the
-  rotation wraps. Every ramp in this roster therefore repeats its first stop as its last;
-  the fire ramp is the sole exception, and it is the one ramp that is never rotated.
+**0 — Classic.** Separable sines of `x`, `y` and `x+y`, each the average of two sines at
+unrelated frequencies. Separability is what makes it cheap: the horizontal term is one
+240-entry table per frame hoisted out of the pixel loop, and the diagonal `f(x+y)` is the
+same table read from a per-row offset. The inner loop is three lookups, two adds, a mask
+and a store. **But separable means the field is a fixed lattice.** Change the phases and
+it can only slide past itself; it cannot change shape. That is the "a bit static" ceiling,
+and it is structural.
+
+**1 — Ripples.** Three moving centres, each throwing a circular wave, summed. Nothing is
+separable, so as the centres orbit on unrelated periods the interference genuinely
+deforms. Two tricks make circles affordable:
+
+- **A table indexed by r², holding the sine of the root.** No `sqrt` and no multiply per
+  pixel (https://www.4rknova.com/blog/2016/11/01/plasma).
+- **Squared distances are still separable even though circles are not:**
+  `(x-cx)² + (y-cy)²` is one row of squares per axis per source, so a frame costs six
+  short table builds rather than a multiply per pixel.
+
+One bug worth recording, because it was visible as jitter on the panel and invisible in
+the code: the difference `x - cx` was truncated to an integer *before* squaring. The
+centres orbit in float, but the tables only saw whole half-res pixels, so the entire
+pattern snapped two screen pixels whenever a centre crossed a boundary — and since C
+truncates toward zero, the snap was asymmetric across `d = 0`. Squaring in float and
+quantising afterwards keeps the sub-pixel motion, at a cost of 720 multiplies per frame
+in the table build and nothing in the inner loop.
+
+**2 — Interfere.** One circular wave *multiplied* by a diagonal one. Multiplying rather
+than adding pinches the bands into sharp nodes wherever either term crosses its midpoint,
+and the two beat at different rates so the nodes sweep.
+
+Flavours 1 and 2 run at half resolution and expand 2x, which buys back the extra
+per-pixel work.
+
+**The ramp runs on its own clock** — four cyclic ramps, thirty seconds each, crossfading
+over 1.5 s rather than snapping. It is deliberately independent of the flavour, so the
+field and the colours never change together and the same field is seen four ways. Cyclic
+matters for the same reason it always does here: the rotation wraps, and a ramp whose
+first and last stops differ drags a seam through the field once per cycle. The fire's
+ramp is the roster's only non-cyclic one, and it is the only one never rotated.
 
 ### 2.2 Fire — the original, not the copy of the copy
 
@@ -228,6 +251,7 @@ Per 33 ms frame at the fixed 30 Hz timestep, on the measurements in
 | `present()`, full 240×240 push at 40 MHz SPI | ~24 ms (measured) |
 | Identity overlay (two text passes, bitmap fonts) | ~2 ms (measured, as part of the old Boing scene) |
 | Effect `step()` — full-frame index field + palette writes | ~2–3 ms (UNVERIFIED estimate: 57,600 pixels at roughly 8–12 cycles each on a 240 MHz core) |
+| Half-res effects (fire, two plasma flavours) expand 2x instead | roughly a quarter of the per-pixel cost, plus ~1 ms of expansion |
 | Headroom | ~4 ms |
 
 The wormhole is the cheapest of the five despite being the most faithful: its frame is
@@ -250,10 +274,21 @@ Two fixes, only one of which worked:
   *not* rescue it. The upload dies before the first chunk callback, which is where that
   event is posted. It is still right to stop drawing and allocating during an update, but
   it is not what makes the device flashable.
-- **Not holding the memory** does. The pool is now sized per effect
-  (`Effect::scratchBytes`) rather than to the worst case: the plasma and the wormhole
-  declare zero and hold nothing, the rotozoomer 4 KB, the Boing ball and the fire 14.4 KB
-  each. Free heap with the wormhole running is the full idle figure, ~122 KB.
+- **Not holding the memory** does. The pool is sized per effect
+  (`Effect::scratchBytes`) rather than to the worst case. Measured free heap on device,
+  with the calm clock's 122.4 KB as the baseline:
+
+  | Effect | Free heap | Pool |
+  | --- | --- | --- |
+  | Calm clock | 122.4 KB | — |
+  | Wormhole | 121.5 KB | ~0 (field and palette are in flash) |
+  | Plasma | 118.0 KB | 4.4 KB (ring table + source rows) |
+  | Fire | 114.9 KB | 7.4 KB (two 60x61 buffers) |
+  | Boing ball | 107.6 KB | 14.8 KB (pre-rendered ball) |
+  | Rotozoomer | 105.0 KB | 17.4 KB (128x128 texture) |
+
+  The worst case leaves ~105 KB free, well clear of the ~77 KB at which an upload was
+  observed to succeed.
 
 The rule worth carrying: an app's memory budget on an OTA-only device is set by what the
 updater needs, not by what the app can get away with while running.

@@ -467,7 +467,7 @@ blinks at 1 Hz in either mode as visible proof the clock is live.
 
 **Touch drives app state** (#60): `onTap()` goes to the running effect, which
 decides what a tap means to it (kick the ball, poke the fire, reverse the
-wormhole, re-color the plasma). `onLongPress()` belongs to the screen: it
+wormhole, reshape the plasma). `onLongPress()` belongs to the screen: it
 advances the roster and persists the pick through `ConfigStore::setString` +
 `save()`, riding the same `SettingsChanged` path a web save takes — the switch
 itself happens in `applySettings()`, on the repaint, whichever surface asked
