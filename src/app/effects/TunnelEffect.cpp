@@ -51,22 +51,34 @@ constexpr int BYTES = TEX_OFF + T_ANG * T_DEP;
 // edge and horizontally centred, the near floor sweeping toward the viewer in
 // big panels, rings crossing the frame as arcs rather than closing into
 // circles. That is a camera pitched DOWN relative to the tunnel axis.
-constexpr float TILT = 0.42f;    // pitch, in TAN_FOV units: 0.42/0.5 = 84% toward the top
-constexpr float CAM_Y = 0.25f;   // and riding above the axis, so the floor runs long
-constexpr float TAN_FOV = 0.5f;  // half-angle; wide FOVs put the wall beside us
-constexpr float K_Z = 10.0f;     // texels per unit of axial distance
-// Distance fade, packed into the depth byte's top two bits: near, one
-// ramp-half down, one ramp-quarter down, then the black mouth. Both bits are
-// multiples of T_DEP, so they vanish in the depth wrap and never need masking
-// off. Three steps rather than one is what makes the mouth read as a receding
-// funnel instead of a hole punched in a flat pattern.
-constexpr float Z_FOG1 = 10.0f;
-constexpr float Z_FOG2 = 22.0f;
-constexpr float Z_HOLE = 60.0f;
+constexpr float TILT = 0.34f;   // pitch: shallow, from the horizon rather than steeply down
+constexpr float CAM_Y = 0.45f;  // riding above the axis, so the floor runs long
+constexpr float TAN_FOV = 0.5f; // half-angle; wide FOVs put the wall beside us
+// The vertical FOV is WIDER than the horizontal, which squashes the view
+// vertically — the reference is a 320x200 mode-13h image on a 4:3 screen, and
+// without the same anamorphic squeeze the rings come out as tall ovals instead
+// of the flat arcs that read as rows of floor sweeping toward the viewer. The
+// vanishing point lands at TILT / (TAN_FOV * ASPECT) above centre, so these
+// three move together: raise the squeeze and the pitch has to follow or the
+// convergence slides back to the middle of the frame and it looks like a
+// target again.
+constexpr float ASPECT = 1.7f;
+constexpr float K_Z = 16.0f;    // texels per unit of axial distance
+// Distance fade, packed into the depth byte's top two bits as a shift count:
+// 0, 1, 2, 3 ramp-halves darker. Both bits are multiples of T_DEP, so they
+// vanish in the depth wrap and never need masking off, and the runtime cost is
+// one shift per pixel with no branch.
+//
+// There is deliberately NO far clip. An earlier cut hard-cut everything past a
+// distance to black, which drew a punched hole at the vanishing point — and
+// what the viewer should see is the walls falling away into darkness, never a
+// visible opening. The fade does that, and the fine moire where the rings
+// outrun the pixel grid is the same shimmer the reference art has.
+constexpr float Z1 = 4.0f;
+constexpr float Z2 = 10.0f;
+constexpr float Z3 = 22.0f;
 constexpr uint8_t FLAGS = 0xC0;
-constexpr uint8_t F1 = 0x40;
-constexpr uint8_t F2 = 0x80;
-constexpr uint8_t HOLE = 0xC0;
+constexpr uint8_t DEEPEST = 0xC0;
 
 // A chunky mark, stamped black into every cell — the reference art has one too,
 // and it is what makes the wall read as *surface* rather than as gradient.
@@ -153,9 +165,10 @@ void TunnelEffect::enter(lgfx::LGFX_Sprite& f) {
   const float fn = sqrtf(TILT * TILT + 1.0f);
   const float fy0 = -TILT / fn, fz0 = 1.0f / fn;
   const float pix = TAN_FOV / (W * 0.5f);
+  const float pixy = pix * ASPECT;
   const float c = CAM_Y * CAM_Y - 1.0f; // camera is inside, so c < 0: always one hit
   for (int y = 0; y < H; ++y) {
-    const float py = ((float)y - (H - 1) * 0.5f) * pix;
+    const float py = ((float)y - (H - 1) * 0.5f) * pixy;
     const float dy = fy0 - py * fz0;
     const float dz = fz0 + py * fy0;
     for (int x = 0; x < W; ++x) {
@@ -163,7 +176,7 @@ void TunnelEffect::enter(lgfx::LGFX_Sprite& f) {
       const int i = y * W + x;
       const float a = dx * dx + dy * dy;
       if (a < 1e-7f) { // dead ahead, parallel to the axis: infinitely far
-        depth[i] = HOLE;
+        depth[i] = DEEPEST;
         angle[i] = 0;
         continue;
       }
@@ -171,12 +184,12 @@ void TunnelEffect::enter(lgfx::LGFX_Sprite& f) {
       const float disc = b * b - 4.0f * a * c;
       const float t = (-b + sqrtf(disc > 0.0f ? disc : 0.0f)) / (2.0f * a);
       const float z = t * dz;
-      // Only the FAR mouth is a hole. Rays that hit the wall behind the camera
-      // have large negative z and are the nearest wall of all.
+      // Rays that hit the wall behind the camera have large negative z and are
+      // the nearest wall of all, so only forward distance fades.
       uint8_t fl = 0;
-      if (z > Z_FOG1) fl = F1;
-      if (z > Z_FOG2) fl = F2;
-      if (z > Z_HOLE) fl = HOLE;
+      if (z > Z1) fl = 0x40;
+      if (z > Z2) fl = 0x80;
+      if (z > Z3) fl = DEEPEST;
       // Only the low bits of depth are kept, which costs nothing: the shift is
       // added before the wrap, and (a + s) mod n == ((a mod n) + s) mod n.
       depth[i] = (uint8_t)(((int)(z * K_Z) & DMASK) | fl);
@@ -214,18 +227,13 @@ void TunnelEffect::step(lgfx::LGFX_Sprite& f) {
     uint8_t* dst = fb + (y * 2) * 240;
     const int row = y * W;
     for (int x = 0; x < W; ++x) {
+      // The fade bits need no masking off: both are multiples of T_DEP, so
+      // they vanish in the depth wrap. Branchless — the top two bits ARE the
+      // shift count.
       const uint8_t d = depth[row + x];
-      const uint8_t fl = d & FLAGS;
-      uint8_t t;
-      if (fl == HOLE) {
-        t = 0;
-      } else {
-        // The fog bits need no masking off: both are multiples of T_DEP, so
-        // they vanish in the wrap (64 and 128 are 0 mod 64).
-        t = tex[(((angle[row + x] + sv) & AMASK) * T_DEP) | ((d + su) & DMASK)];
-        if (fl == F1) t >>= 1;      // mid distance
-        else if (fl == F2) t >>= 2; // far, sliding into the mouth
-      }
+      const uint8_t t =
+          (uint8_t)(tex[(((angle[row + x] + sv) & AMASK) * T_DEP) | ((d + su) & DMASK)] >>
+                    ((d & FLAGS) >> 6));
       dst[x * 2] = t;
       dst[x * 2 + 1] = t;
     }
