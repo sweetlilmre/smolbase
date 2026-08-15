@@ -32,16 +32,19 @@ namespace fx {
 //            palette-cycling primitive these effects are built on, one
 //            instruction per pixel, and a 128-entry ramp was a period-correct
 //            budget on VGA too (the other 128 held the UI and the sprites).
-// 0x80       black — the drop shadow under every identity string.
-// 0x81-0x85  the five identity colors, written verbatim from the settings. The
+// 0xF0       black — the drop shadow under every identity string.
+// 0xF1-0xF5  the five identity colors, written verbatim from the settings. The
 //            old screen quantized text through color332(); with its own bank
 //            the overlay now shows the exact RGB the user picked.
-// 0x86-0xFF  untouched: still the framebuffer's documented RGB332 identity.
+// Everything else keeps the framebuffer's documented RGB332 identity, and the
+// gap from 0x80 to 0xEF is deliberate: the wormhole replays the original
+// demo's palette, which is 225 colours starting at index 1, so the overlay has
+// to live above that range or the clock would be repainted by a tunnel.
 constexpr uint8_t BANK_SIZE = 128;
 constexpr uint8_t BANK_MASK = 0x7F;
-constexpr uint8_t UI_BLACK = 0x80;
-constexpr uint8_t UI_TEXT = 0x81; // .. 0x85, one per identity string
-constexpr uint8_t UI_LAST = 0x85;
+constexpr uint8_t UI_BLACK = 0xF0;
+constexpr uint8_t UI_TEXT = 0xF1; // .. 0xF5, one per identity string
+constexpr uint8_t UI_LAST = 0xF5;
 
 // ---- The Scratch -------------------------------------------------------------
 // One byte pool, lent to whichever effect is running. It is the ONE piece of
