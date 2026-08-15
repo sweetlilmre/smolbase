@@ -352,11 +352,24 @@ document.getElementById("showref").addEventListener("change", e => {
   document.getElementById("refbox").hidden = !e.target.checked;
 });
 document.getElementById("overlay").addEventListener("change", paint);
+// Opened from disk this page is not a secure context, so navigator.clipboard
+// is missing entirely — fall back to a throwaway textarea, which works there.
 document.getElementById("copy").addEventListener("click", async () => {
+  const text = document.getElementById("cpp").textContent;
   try {
-    await navigator.clipboard.writeText(document.getElementById("cpp").textContent);
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.cssText = "position:fixed;top:-1000px";
+      document.body.append(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
     toast("Constants copied");
-  } catch { toast("Copy blocked — select the block instead"); }
+  } catch { toast("Copy blocked — select the block and copy it"); }
 });
 document.getElementById("reset").addEventListener("click", () => {
   for (const k in EL) { V[k] = EL[k].def; EL[k].input.value = EL[k].def; EL[k].out.textContent = fmt(EL[k].def); }
