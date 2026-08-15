@@ -168,9 +168,12 @@ faithful Python mirror of the effect that writes a 240×240 PNG; three iteration
 density and cell shading took seconds each, against minutes per OTA round-trip on a
 device only the user can see.
 
-The cost is memory: the tunnel sizes the shared pool at 45 KB rather than 14.4 KB (two
-planes plus a 16 KB texture), and the whole roster pays it. Measured on device: free heap
-106.4 KB → 76.6 KB.
+The cost is memory, and the pan is most of it: the fields are 152×152 rather than
+120×120 so the window has ±16 half-res pixels (±32 screen pixels) of travel. The tunnel
+sizes the shared pool at 61 KB — two fields plus a 16 KB wall texture — and the whole
+roster pays it. Measured on device: free heap 106.4 KB → 59.4 KB, steady. That is the
+dial to turn if the app ever needs the heap back: `TUN_MARGIN` trades travel for RAM at
+~1 KB per half-res pixel, and zero margin puts the pool back at 46 KB.
 
 ### 2.4 Rotozoomer — one matrix per frame, two adds per pixel
 
@@ -211,14 +214,13 @@ text color through `color332()`.
   exists behind a framebuffer that is pushed to the panel in one DMA transfer.
 - **Starfield / 3D dots** — genuinely 90s, but it animates by moving points, not colors,
   and would have been the one effect in the roster with nothing to say about the palette.
-- **A moving vanishing point.** The reference capture drifts the tunnel's center around
-  the screen, and it is a large part of why it feels alive. The standard implementation
-  is a lookup table twice the screen size with a window panned over it — at half
-  resolution that is 115 KB of coordinate planes on a chip with ~107 KB of free heap, so
-  it is not a tuning question but a memory one. Computing depth and angle per pixel
-  instead (fast `atan2`/`rsqrt` approximations) is the alternative at an estimated
-  4-5 ms per frame, which would fit the budget but leaves little margin. UNVERIFIED and
-  unshipped; the center is fixed, a few pixels off dead-center.
+- **A full-screen wander for the vanishing point.** The shipped pan is ±32 screen
+  pixels, not the half-screen sweep the reference capture makes: a window that could
+  reach anywhere would need fields roughly twice the screen in each axis, ~115 KB of
+  coordinate planes, which this chip does not have. Computing depth and angle per pixel
+  instead (fast `atan2`/`rsqrt` approximations, no fields at all) would buy unlimited
+  travel and cost an estimated 4-5 ms per frame — it fits the budget on paper but leaves
+  little margin, and it is UNVERIFIED.
 - **Voxel landscape** — the per-column ray walk is affordable, but it needs a height map
   *and* a color map in RAM, and the shared pool is already sized by the tunnel.
 

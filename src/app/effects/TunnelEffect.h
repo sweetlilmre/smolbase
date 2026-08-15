@@ -10,9 +10,9 @@
 #if SMOLBASE_FRAMEBUFFER == SMOLBASE_FB_PALETTE_8
 
 class TunnelEffect : public Effect {
-  uint16_t uAcc = 0;  // 8.8 fixed: depth shift, the fall down the pipe
-  uint16_t vAcc = 0;  // 8.8 fixed: angle shift, the roll around it
-  uint16_t pulse = 0; // the slow breath in the ramp's hot end
+  uint8_t uAcc = 0;   // depth shift: the fall down the pipe, one texel a frame
+  uint8_t vAcc = 0;   // angle shift: the roll around it, one texel a frame
+  uint16_t pulse = 0; // frame counter: the ramp's breath and the window's pan
   int8_t dir = 1;     // tap flips it: fly in, or fall out
 
   void buildTexture();

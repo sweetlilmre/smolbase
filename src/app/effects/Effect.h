@@ -50,14 +50,16 @@ constexpr uint8_t UI_LAST = 0x85;
 // buffer does not fit — see Effect.cpp). scratchReady() is false only if that
 // allocation failed, in which case the screen falls back to the calm clock.
 //
-// Layout — planes are 120x120, a quarter-frame each:
-//   plane 0   ball pixels / fire's heat map / the tunnel's depth field
-//   plane 1   the tunnel's angle field
-//   TEX_OFF   a texture: 128x128 for the tunnel's wall, 64x64 for the
-//             rotozoomer (which uses the front quarter of the same space)
-// The tunnel is what sizes the pool: a textured tunnel needs BOTH coordinates
-// per pixel, and collapsing them into one byte (which is what a 14.4 KB pool
-// would force) can only produce a spiral gradient, never a checkered funnel.
+// Layout:
+//   [0, PLANE)          ball pixels / fire's heat map, a 120x120 quarter-frame
+//   [0, 2*TUN_PLANE)    the tunnel's depth and angle fields, 152x152 each
+//   [TEX_OFF, ...)      a texture: 256x64 for the tunnel's wall, 64x64 for the
+//                       rotozoomer (which uses a corner of the same space)
+// The tunnel is what sizes the pool, twice over. It needs BOTH coordinates per
+// pixel — collapsing them into one byte can only produce a spiral gradient,
+// never a checkered funnel — and its fields are LARGER than the screen so the
+// window can pan across them, which is how the vanishing point drifts without
+// recomputing a single atan2.
 //
 // Effects that work at half resolution here and expand through blit2x() are
 // not conceding anything to the ESP32 — that is how these effects ran in 1993,
@@ -68,8 +70,11 @@ constexpr int SCRATCH_H = 120;
 constexpr int PLANE = SCRATCH_W * SCRATCH_H;
 constexpr int TEX_W = 64;  // the rotozoomer's texture
 constexpr int TEX_MASK = TEX_W - 1;
-constexpr int TEX_OFF = 2 * PLANE;
-constexpr int TEX_BYTES = 128 * 128; // the tunnel's wall, which sizes the tail
+constexpr int TUN_MARGIN = 16; // how far the tunnel's window may pan, per axis
+constexpr int TUN_W = SCRATCH_W + 2 * TUN_MARGIN;
+constexpr int TUN_PLANE = TUN_W * TUN_W;
+constexpr int TEX_OFF = 2 * TUN_PLANE;
+constexpr int TEX_BYTES = 256 * 64; // the tunnel's wall, which sizes the tail
 constexpr int SCRATCH_BYTES = TEX_OFF + TEX_BYTES;
 uint8_t* scratch();
 bool scratchReady();

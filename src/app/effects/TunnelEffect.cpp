@@ -7,45 +7,51 @@
 
 namespace {
 
-constexpr int W = fx::SCRATCH_W;
+constexpr int W = fx::SCRATCH_W; // the visible half-res field
 constexpr int H = fx::SCRATCH_H;
+constexpr int FW = fx::TUN_W;    // the precomputed field, larger than the window
+constexpr int MARGIN = fx::TUN_MARGIN;
 
-// The wall texture: 128 texels around the tunnel, 128 along it, in 8x8 cells —
-// 16 cells per revolution, 16 rings per wrap. Both axes are powers of two, so
-// wrapping is a mask, and 7 bits of each coordinate fit in one byte per plane.
-constexpr int T = 128;
-constexpr int TMASK = T - 1;
+// The wall texture: 256 texels AROUND the tunnel, 64 along it, in 8x8 cells —
+// 32 cells per revolution, 8 rings per wrap. The angular axis is 256 on
+// purpose: the roll advances exactly one texel per frame, and at 128 texels a
+// texel is ~8 screen pixels out at the rim, so the wall visibly stuttered
+// around. Finer texels make the same one-per-frame step smooth.
+constexpr int T_ANG = 256;
+constexpr int T_DEP = 64;
+constexpr int AMASK = T_ANG - 1;
+constexpr int DMASK = T_DEP - 1;
 constexpr int CELL = 8;
 
-// depth = DEPTH_K / r is the perspective, and it is the whole illusion: rings
-// crowd together toward the mouth exactly as a real tunnel's do, so a CONSTANT
-// shift per frame reads as constant speed down the pipe rather than as a zoom.
-// K is chosen for ring DENSITY, and 1/r means you cannot have it everywhere at
-// once: ring spacing on screen is 8*r*r/K pixels, so any K that keeps the
-// corners from stretching turns the mouth into moire. K is therefore tuned for
-// the MID field — a ring roughly every 6 half-res pixels at r = 40 — which
-// leaves the corners stretched and the mouth shimmering, exactly as the
-// reference art does. Tuned against a host-side mirror of this file rather
-// than by reflashing (scratchpad/tunnel_sim.py).
+// depth = DEPTH_K / r is the perspective, and 1/r means ring density cannot be
+// right everywhere at once: spacing on screen is 8*r*r/K pixels, so any K that
+// keeps the rim from stretching turns the mouth into moire. K is tuned for the
+// MID field — a ring roughly every 6 half-res pixels at r = 40 — which leaves
+// the rim stretched and the mouth shimmering, exactly as the reference art
+// does, because it is the same geometry. Tuned against a host-side mirror of
+// this file rather than by reflashing (scratchpad/tunnel_sim.py).
 constexpr float DEPTH_K = 2100.0f;
 // Inside R_HOLE the rings are finer than a pixel; rather than let the centre
 // alias into noise it becomes the black mouth of the tunnel. Inside R_FOG the
 // wall is halved into the dark half of the ramp — a two-level distance fog,
-// one shift per pixel, which is what stops the mouth looking like a hole
-// punched in a flat pattern.
+// one shift per pixel, which stops the mouth looking like a hole punched in a
+// flat pattern. Both flags live in the spare bits of the depth byte.
 constexpr float R_HOLE = 7.0f;
 constexpr float R_FOG = 24.0f;
 constexpr uint8_t HOLE = 0xFF;
-constexpr uint8_t FOG = 0x80;
-// The vanishing point sits a little right of and below centre. Dead-centre
-// reads as a target; off-centre reads as a funnel you are falling into.
-constexpr float CX = (W - 1) * 0.5f + 5.0f;
-constexpr float CY = (H - 1) * 0.5f + 4.0f;
+constexpr uint8_t FOG = 0x40;
+// The tunnel axis sits well off the centre of the field. That offset is the
+// whole reason the view reads as OBLIQUE — you look down the pipe at an angle,
+// the mouth rides high, and the near wall stretches away below instead of
+// sitting in a tidy symmetric ring. A small offset just looks like a mistake.
+constexpr float CX = (FW - 1) * 0.5f + 7.0f;
+constexpr float CY = (FW - 1) * 0.5f - 26.0f;
 
-// Speeds in 8.8 fixed point, per frame: the fall is brisk, the roll is slow —
-// a revolution takes about eleven seconds, so the walls turn rather than spin.
-constexpr int FALL = 256; // 1 texel/frame
-constexpr int ROLL = 100; // ~0.39 texels/frame
+// The drift: the window pans across the oversized field, so the vanishing
+// point wanders the screen the way a hand-held camera would. Two incommensurate
+// periods (~19 s and ~29 s) mean it never retraces the same path.
+constexpr float PAN_X_RATE = 0.011f;
+constexpr float PAN_Y_RATE = 0.0071f;
 
 // A chunky rune, stamped black into every cell — the reference art has one too,
 // and it is what makes the wall read as *surface* rather than as gradient.
@@ -57,7 +63,7 @@ const uint8_t SHADE[CELL / 2] = {126, 106, 70, 18};
 // ---- The palette -------------------------------------------------------------
 // A textured tunnel changes what the palette is FOR. The texture carries the
 // structure now, so rotating the ramp would drag the black mortar through every
-// colour and strobe the whole wall — which is what the first cut did, and it
+// colour and strobe the whole wall — which is what an earlier cut did, and it
 // looked like a flashing chessboard. The ramp is a fixed red intensity curve;
 // the only thing that moves is a slow pulse in its hot end, like a light
 // swinging somewhere down the pipe.
@@ -70,32 +76,31 @@ const Rgb RAMP_RGB[RAMP_N] = {{0, 0, 0}, {88, 0, 0}, {196, 8, 0}, {248, 40, 16},
 
 } // namespace
 
-// Each cell is bright in the middle and falls to black at its borders — a
-// SQUARE falloff, so the cells read as raised quilted panels with dark mortar
-// between them. Flat interiors with a one-texel border (the first cut) read as
-// a checkerboard instead; the soft shading is the whole difference.
+// Each cell is bright at the heart and falls away to dark at its borders, so
+// the cells read as quilted panels catching light. Flat interiors with
+// one-texel mortar (an earlier cut) read as a checkerboard instead; the soft
+// shading is most of the difference between "checkerboard" and "tunnel".
 void TunnelEffect::buildTexture() {
   uint8_t* tex = fx::scratch() + fx::TEX_OFF;
-  for (int v = 0; v < T; ++v) {
+  for (int v = 0; v < T_ANG; ++v) {
     const int cv = v % CELL;
     const float dv = fabsf((float)cv - (CELL - 1) * 0.5f);
-    for (int u = 0; u < T; ++u) {
+    for (int u = 0; u < T_DEP; ++u) {
       const int cu = u % CELL;
       const float du = fabsf((float)cu - (CELL - 1) * 0.5f);
       const float m = (du > dv) ? du : dv; // 0.5 at the cell's heart, 3.5 at its edge
       uint8_t t = SHADE[(int)(m - 0.5f)];
       if (RUNE[cv] & (0x80 >> cu)) t = 0;
-      tex[v * T + u] = (uint8_t)(t & fx::BANK_MASK);
+      tex[v * T_DEP + u] = (uint8_t)(t & fx::BANK_MASK);
     }
   }
 }
 
 void TunnelEffect::writePalette(lgfx::LGFX_Sprite& f) {
-  // The hot end breathes between deep red and a hotter orange over ~8 seconds.
+  // The hot end breathes between deep red and a hotter orange over ~14 seconds.
   const float k = 0.5f + 0.5f * sinf((float)pulse * 0.0075f);
-  Rgb top = {(uint8_t)(RAMP_RGB[RAMP_N - 1].r),
-             (uint8_t)(RAMP_RGB[RAMP_N - 1].g + k * 84.0f),
-             (uint8_t)(RAMP_RGB[RAMP_N - 1].b + k * 40.0f)};
+  const Rgb top = {RAMP_RGB[RAMP_N - 1].r, (uint8_t)(RAMP_RGB[RAMP_N - 1].g + k * 84.0f),
+                   (uint8_t)(RAMP_RGB[RAMP_N - 1].b + k * 40.0f)};
   int s = 0;
   for (int i = 0; i < fx::BANK_SIZE; ++i) {
     while (s + 2 < RAMP_N - 1 && i >= RAMP_AT[s + 1]) ++s;
@@ -112,33 +117,32 @@ void TunnelEffect::writePalette(lgfx::LGFX_Sprite& f) {
 }
 
 void TunnelEffect::enter(lgfx::LGFX_Sprite& f) {
-  // The one expensive moment in this effect's life: ~14 K pixels of sqrtf and
+  // The one expensive moment in this effect's life: ~23 K pixels of sqrtf and
   // atan2f, paid once when the effect is switched in and never again.
   // Everything after this is two adds and a lookup.
   uint8_t* depth = fx::scratch();
-  uint8_t* angle = fx::scratch() + fx::PLANE;
-  for (int y = 0; y < H; ++y) {
+  uint8_t* angle = fx::scratch() + fx::TUN_PLANE;
+  for (int y = 0; y < FW; ++y) {
     const float dy = (float)y - CY;
-    for (int x = 0; x < W; ++x) {
+    for (int x = 0; x < FW; ++x) {
       const float dx = (float)x - CX;
       const float r = sqrtf(dx * dx + dy * dy);
-      const int i = y * W + x;
+      const int i = y * FW + x;
       if (r < R_HOLE) {
         depth[i] = HOLE;
         angle[i] = 0;
         continue;
       }
-      // Only the low 7 bits are stored, which costs nothing: the shift is
-      // added before the wrap, and (a + s) mod 128 == ((a mod 128) + s) mod 128.
-      uint8_t d = (uint8_t)((int)(DEPTH_K / r) & TMASK);
-      if (d == TMASK) d = TMASK - 1; // 0x7F | FOG would collide with the HOLE sentinel
+      // Only the low 6 bits are kept, which costs nothing: the shift is added
+      // before the wrap, and (a + s) mod 64 == ((a mod 64) + s) mod 64.
+      uint8_t d = (uint8_t)((int)(DEPTH_K / r) & DMASK);
       if (r < R_FOG) d |= FOG;
       depth[i] = d;
       // atan2 spans the full texture width per revolution, so the seam at
       // +/-pi lands back on the texel it left: the wall wraps invisibly.
       angle[i] = (uint8_t)((int)((atan2f(dy, dx) + (float)M_PI) *
-                                 (T / (2.0f * (float)M_PI))) &
-                           TMASK);
+                                 (T_ANG / (2.0f * (float)M_PI))) &
+                           AMASK);
     }
   }
   buildTexture();
@@ -146,29 +150,36 @@ void TunnelEffect::enter(lgfx::LGFX_Sprite& f) {
 }
 
 void TunnelEffect::step(lgfx::LGFX_Sprite& f) {
-  // Two counters and a texture read: that is the entire per-frame cost of a
+  // Three counters and a texture read: that is the entire per-frame cost of a
   // tunnel. The depth shift pulls the wall toward the camera, the angle shift
-  // rolls it around, and because they are independent the two motions compose
-  // — which is the whole reason the coordinates are kept in separate planes.
-  uAcc = (uint16_t)((uAcc + dir * FALL) & 0x7FFF);
-  vAcc = (uint16_t)((vAcc + dir * ROLL) & 0x7FFF);
+  // rolls it around, and the window pans across the field so the vanishing
+  // point drifts — three independent motions, none of which recomputes any
+  // geometry. Both shifts advance by exactly ONE texel per frame: a fractional
+  // rate would land on the same texel for two frames and then jump two, which
+  // is precisely the stutter this effect had before.
+  uAcc = (uint8_t)(uAcc + dir);
+  vAcc = (uint8_t)(vAcc + dir);
   ++pulse;
-  const uint8_t su = (uint8_t)(uAcc >> 8), sv = (uint8_t)(vAcc >> 8);
+  const uint8_t su = (uint8_t)(uAcc & DMASK), sv = vAcc;
+  const int ox = MARGIN + (int)(MARGIN * sinf((float)pulse * PAN_X_RATE));
+  const int oy = MARGIN + (int)(MARGIN * sinf((float)pulse * PAN_Y_RATE + 1.3f));
 
   const uint8_t* depth = fx::scratch();
-  const uint8_t* angle = fx::scratch() + fx::PLANE;
+  const uint8_t* angle = fx::scratch() + fx::TUN_PLANE;
   const uint8_t* tex = fx::scratch() + fx::TEX_OFF;
   uint8_t* fb = (uint8_t*)f.getBuffer();
   for (int y = 0; y < H; ++y) {
     uint8_t* dst = fb + (y * 2) * 240;
-    const int row = y * W;
+    const int row = (y + oy) * FW + ox;
     for (int x = 0; x < W; ++x) {
       const uint8_t d = depth[row + x];
       uint8_t t;
       if (d == HOLE) {
         t = 0;
       } else {
-        t = tex[(((angle[row + x] + sv) & TMASK) << 7) | (((d & TMASK) + su) & TMASK)];
+        // The fog bit needs no masking off: FOG is exactly T_DEP, so it
+        // vanishes in the wrap (64 == 0 mod 64).
+        t = tex[(((angle[row + x] + sv) & AMASK) << 6) | ((d + su) & DMASK)];
         if (d & FOG) t >>= 1; // the far end of the pipe, half a ramp darker
       }
       dst[x * 2] = t;
