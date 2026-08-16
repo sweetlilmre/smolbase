@@ -83,7 +83,13 @@ constexpr int TEX_SHIFT = 7; // log2(TEX_W): the row stride as a shift
 // re-allocating if that differs), or hand it back entirely. Returns nullptr if
 // the allocation failed, in which case the screen falls back to the calm clock.
 uint8_t* ensureScratch(size_t bytes);
-uint8_t* scratch(); // the current pool; nullptr when nothing holds one
+// The current pool; nullptr when nothing holds one. THE ADDRESS IS NOT STABLE
+// ACROSS enter(): the pool is freed on switch-out and allocated again on
+// switch-in, so anything an effect derives from this pointer — a raw pointer, a
+// sprite wrapped around it — must be re-derived in enter(), never cached in a
+// member behind a one-shot flag. The boing ball did exactly that and wrote its
+// pre-rendered sphere into freed heap on the second visit.
+uint8_t* scratch();
 void releaseScratch();
 
 // Expand plane 0 into the full frame as 2x2 chunky pixels. ~1 ms.

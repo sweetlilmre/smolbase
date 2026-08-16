@@ -138,13 +138,26 @@ void BoingEffect::drawShadow(lgfx::LGFX_Sprite& f, int cx, int cy) {
 }
 
 void BoingEffect::enter(lgfx::LGFX_Sprite& f) {
+  // Re-wrap the pool EVERY time, not once. The pool is freed on switch-out and
+  // malloc'd again on switch-in, so its address is not stable across visits —
+  // caching the wrap behind a one-shot flag left the sprite pointing at freed
+  // heap, and the next renderBall() wrote 14 KB through it and reset the board
+  // (reported as: leave for the calm clock, come back, panic). setBuffer takes
+  // no ownership (the pool is Preallocated to LovyanGFX), so re-wrapping frees
+  // nothing and cannot fail; it does drop the sprite's geometry, which is why
+  // the depth and size go back with it. The palette survives deleteSprite, so
+  // that stays a one-time 1 KB allocation — it is what makes drawPixel and
+  // pushSprite treat colors as raw indices.
+  //
+  // setColorDepth() is the once-only half, and it MUST stay that way: called
+  // while the buffer is still null it just records the depth, but called on a
+  // sprite that already has one it deletes the sprite AND the palette and
+  // allocates a fresh buffer of its own — leaving the ball as an RGB332 sprite
+  // whose indices are read as colors, so the whole ball takes one index and
+  // flashes white/red in unison instead of turning.
+  if (!spriteReady) ball.setColorDepth(8);
+  ball.setBuffer(fx::scratch(), BALL_D, BALL_D, 8);
   if (!spriteReady) {
-    // Wrapped around the shared scratch rather than allocated: setBuffer takes
-    // no ownership, so nothing here is ever freed or can fail. createPalette
-    // is what makes drawPixel/pushSprite treat colors as raw indices, and it
-    // is the sprite's only (1 KB, one-time) allocation.
-    ball.setColorDepth(8);
-    ball.setBuffer(fx::scratch(), BALL_D, BALL_D, 8);
     ball.createPalette();
     spriteReady = true;
   }

@@ -10,7 +10,7 @@
 class BoingEffect : public Effect {
   int cyclePhase = 0;
   float bx = 120, by = 90, vx = 2.2f, vy = 0;
-  bool spriteReady = false;
+  bool spriteReady = false; // the sprite's one-time palette allocation, not the buffer
   // The pre-rendered ball, drawn into the shared 120x120 scratch — which is
   // exactly a ball-sized buffer, and the reason the roster needs no memory
   // beyond the one it already had (this used to be the app's single 14.4 KB
