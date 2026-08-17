@@ -64,9 +64,10 @@ def render_font(name: str, ttf: Path, spec: dict) -> bytes:
     npx = shutil.which("npx") or shutil.which("npx.cmd")
     if not npx:
         sys.exit("npx not found — node is required for lv_font_conv")
-    # RLE compression re-enabled: #81 identified and patched decode_rle_bitmap
-    # in the pinned LovyanGFX source (bs->bit_pos != bpp → out != 0). Recovers
-    # ~15 KB flash vs the --no-compress workaround.
+    # RLE compression: #81 found the first-pixel guard bug in LovyanGFX's
+    # decode_rle_bitmap (bs->bit_pos != bpp → out != 0); the fix went upstream
+    # as lovyan03/LovyanGFX#884 and ships from 1.2.27, so the local patch this
+    # once needed is gone (#86). Recovers ~15 KB flash vs --no-compress.
     cmd = [npx, "--yes", LV_FONT_CONV, "--font", str(ttf), "--size", str(spec["size"]),
            "--bpp", "4", "-r", spec["range"], "--format", "bin",
            "-o", str(out)]

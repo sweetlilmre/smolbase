@@ -7,6 +7,16 @@ algorithm ID 1) render double-struck/smeared glyphs through LovyanGFX 1.2.26's `
 loader, while `--no-compress` (algorithm ID 0) bins render correctly. Identify the exact
 defect line, whether it has been fixed upstream, and the recommended path forward.
 
+> **Resolved upstream (2026-08-17).** The one-line fix below was filed as
+> [issue #883](https://github.com/lovyan03/LovyanGFX/issues/883), submitted as
+> [PR #884](https://github.com/lovyan03/LovyanGFX/pull/884), merged 2026-08-12 and released
+> in **LovyanGFX 1.2.27**. `platformio.ini` is pinned there and
+> `patches/lovyangfx-rle-bug.patch` is deleted (#86) — nothing needs re-applying after a
+> version bump any more. The pristine 1.2.27 `lgfx_fonts.cpp` is byte-identical to our
+> patched 1.2.26 copy apart from one unrelated VLW space-glyph change, which this repo
+> does not exercise (the weather app loads BFF bins only). The analysis below is kept as
+> the record of how the bug was found.
+
 ## Recommendation (summary)
 
 Apply a **one-line local patch** to `decode_rle_bitmap` in the pinned LovyanGFX source.

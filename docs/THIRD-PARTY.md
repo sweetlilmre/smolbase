@@ -113,7 +113,7 @@ manifests and LICENSE files (versions as of this writing).
 
 | Library | Version | License | Copyright |
 | --- | --- | --- | --- |
-| [LovyanGFX](https://github.com/lovyan03/LovyanGFX) | 1.2.26 | FreeBSD (BSD-2-Clause); bundles BSD-licensed Adafruit-derived code (manifest: `MIT AND BSD-2-Clause`) | Copyright (c) 2020 lovyan03 |
+| [LovyanGFX](https://github.com/lovyan03/LovyanGFX) | 1.2.27 | FreeBSD (BSD-2-Clause); bundles BSD-licensed Adafruit-derived code (manifest: `MIT AND BSD-2-Clause`) | Copyright (c) 2020 lovyan03 |
 | [PsychicHttp](https://github.com/hoeken/PsychicHttp) | 3.1.2 | MIT | Copyright (c) 2024 Jeremy Poulter, Zachary Smith, and Mathieu Carbou |
 | [ArduinoJson](https://github.com/bblanchon/ArduinoJson) | 7.x | MIT | Copyright © 2014-2026, Benoit BLANCHON |
 
