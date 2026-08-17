@@ -125,9 +125,18 @@ The contract:
   active screen only. Default no-ops.
 
 One screen is active at a time, via a slot — `Display::setActive(&screen)` —
-no stack. The system takes the slot over during AP mode (to show provisioning
-instructions) and restores your screen when the network comes up; your
-`onEnter` runs again, so a full repaint from `onEnter` is not optional.
+no stack. The system takes the slot over twice, both times around the network:
+the **boot join** (a "Connecting" screen, from before your `setup()` runs) and
+**AP mode** (provisioning instructions, if the join times out). Either way your
+screen is restored when the network comes up, and your `onEnter` runs again — so
+a full repaint from `onEnter` is not optional.
+
+The boot case has one consequence worth knowing: `setActive()` during `setup()`
+**stores your screen without painting it**, because the system already holds the
+slot. Your `onEnter` fires later, on `NetworkUp`. So don't treat `setActive()` as
+"my screen is now on the panel" — nothing between there and `NetworkUp` reaches
+the display, and a screen that painted itself from `setup()` rather than from
+`onEnter` would never appear at all.
 
 ## Touch
 

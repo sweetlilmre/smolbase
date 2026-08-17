@@ -10,7 +10,9 @@ and a display stack already working — instead of a blank `setup()`.
 
 - **WiFi provisioning via captive portal** — unconfigured devices open an AP
   (`smolbase-XXXX`); joining it pops a scan-and-join portal. Boot-time AP
-  fallback only; runtime drops auto-reconnect silently, forever.
+  fallback only; runtime drops auto-reconnect silently, forever. The panel shows
+  the join in progress from boot — network, and a bar counting down to the AP
+  fallback — then hands over to your app.
 - **Settings web UI over a swappable JSON contract** — the served page is a pure
   static asset rendering `GET /api/settings` (schema + values) and saving a flat
   value map back. Settings your app registers in code appear automatically in an

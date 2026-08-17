@@ -18,6 +18,7 @@ enum class State : uint8_t { Idle, Connecting, Sta, Ap };
 static std::atomic<State> state{State::Idle};
 static uint32_t connectStart = 0;
 static String name;
+static String joinSsid; // the network begin() is trying; for the boot join screen
 
 String deviceName() { return name; }
 bool isUp() { return state.load() == State::Sta && WiFi.isConnected(); }
@@ -25,6 +26,12 @@ bool inApMode() { return state.load() == State::Ap; }
 IPAddress ip() { return inApMode() ? WiFi.softAPIP() : WiFi.localIP(); }
 int32_t rssi() { return isUp() ? WiFi.RSSI() : 0; }
 String ssid() { return isUp() ? WiFi.SSID() : String(""); }
+
+// WiFi.SSID() is empty while the link is still coming up, so the name being
+// joined is remembered from begin()'s credential load instead.
+bool isJoining() { return state.load() == State::Connecting; }
+String joiningSsid() { return isJoining() ? joinSsid : String(""); }
+uint32_t joinElapsedMs() { return isJoining() ? millis() - connectStart : 0; }
 
 // mDNS labels: lowercase alnum + dash, no leading/trailing dash, keep it short.
 static String sanitizeHostname(const String& raw) {
@@ -165,6 +172,7 @@ void begin() {
     startAp();
     return;
   }
+  joinSsid = ssid;
   WiFi.setHostname(name.c_str()); // must precede mode(): applies as the STA netif comes up
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);

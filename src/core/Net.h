@@ -18,6 +18,13 @@ String deviceName(); // effective hostname: "hostname" setting or smolbase-XXXX
 void applyHostname(); // re-apply after a settings change (re-registers mDNS live)
 int32_t rssi();      // STA link RSSI in dBm; 0 when not connected
 String ssid();       // joined network name; "" when not connected
+
+// The boot join, for anyone drawing it (the core's WifiJoinScreen). True only
+// while stored creds are being tried — it goes false the moment the link comes
+// up or the timeout hands over to AP mode, so it is never true at runtime.
+bool isJoining();
+String joiningSsid();     // network being joined; "" unless isJoining()
+uint32_t joinElapsedMs(); // since the attempt started; 0 unless isJoining()
 bool hasCredentials();
 bool saveCredentials(const String& ssid, const String& pass); // false = NVS write failed; then restartToApply()
 void clearCredentials(); // factory reset path

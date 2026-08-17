@@ -52,6 +52,13 @@ void setup() {
   Touch::begin();
   Clock::begin(); // registers Clock-owned settings; before Net so schema is complete
   Net::begin();
+  // Cover the boot join before the app can paint (Display::setActive is a no-op
+  // while the system holds the slot, so AppHost::setup below still registers its
+  // screen — it just does not reach the panel yet). Released by NetworkUp, or
+  // replaced by apInfoScreen if the join times out into AP mode. Net::begin()
+  // has already raised the AP when there are no stored credentials, so
+  // isJoining() is the whole condition.
+  if (Net::isJoining()) Display::systemTakeover(&wifiJoinScreen());
   Web::begin(AppHost::app());
   AppHost::setup();
 }
