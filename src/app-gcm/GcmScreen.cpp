@@ -184,7 +184,7 @@ void GcmScreen::drawNotReady(lgfx::LovyanGFX& gfx) {
 
     // Value band — centred message
     scratch.fillRect(0, 0, W, VAL_H, C_BLACK);
-    scratch.setFont(&lgfx::fonts::Font2);
+    scratch.setFont(&lgfx::fonts::Font4);
     scratch.setTextSize(1);
     scratch.setTextDatum(lgfx::middle_center);
     scratch.setTextColor(c, C_BLACK);
