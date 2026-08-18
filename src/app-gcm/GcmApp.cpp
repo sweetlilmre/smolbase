@@ -40,8 +40,8 @@ public:
 
     void onSystemEvent(SysEvent e) override {
         if (e == SysEvent::OtaStarting) { parked = true; return; }
-        if (e == SysEvent::NetworkUp)      CgmFetch::forceRefresh();
-        if (e == SysEvent::SettingsChanged) screen.markDirty();
+        if (e == SysEvent::NetworkUp)       CgmFetch::forceRefresh();
+        if (e == SysEvent::SettingsChanged) { CgmFetch::forceRefresh(); screen.markDirty(); }
     }
 };
 

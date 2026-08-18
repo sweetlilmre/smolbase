@@ -185,6 +185,7 @@ static portMUX_TYPE      g_mux          = portMUX_INITIALIZER_UNLOCKED;
 static GcmData           g_pending;
 static GcmData           g_current;
 static volatile bool     g_pendingReady = false;
+static volatile bool     g_loginFailed  = false;  // sticky; cleared by forceRefresh()
 static bool              g_changedFlag  = false;
 static bool              g_fetchInFlight = false;
 static bool              g_fetchDue     = true;
@@ -198,17 +199,23 @@ static void runFetch(const FetchArgs& args) {
     result.clear();
     strlcpy(result.name, "CGM", sizeof(result.name));
 
-    auto fail = [&]() {
-        result.error = true;
+    auto post = [&]() {
         taskENTER_CRITICAL(&g_mux);
         g_pending = result;
         g_pendingReady = true;
         taskEXIT_CRITICAL(&g_mux);
     };
+    auto fail = [&]() { result.error = true; post(); };
+    auto loginFail = [&]() {
+        result.error      = true;
+        result.loginError = true;
+        g_loginFailed     = true;
+        post();
+    };
 
     // Ensure we have a valid token
     if (!tokenValid()) {
-        if (!lluLogin(args.email, args.pass)) { fail(); return; }
+        if (!lluLogin(args.email, args.pass)) { loginFail(); return; }
     }
 
     // ---- GET /llu/connections -----------------------------------------------
@@ -230,8 +237,9 @@ static void runFetch(const FetchArgs& args) {
             http.end();
             s_loggedIn = false;
             s_token    = "";
+            // One re-login attempt for expired tokens; if that fails it's an auth error.
             if (retry == 0 && lluLogin(args.email, args.pass)) continue;
-            fail(); return;
+            loginFail(); return;
         }
         if (code != 200) { http.end(); fail(); return; }
 
@@ -376,9 +384,10 @@ void loop() {
         if (fetched.valid) {
             g_current = fetched;
         } else {
-            // Keep stale reading on failure, just flip the error flag
-            g_current.error    = true;
-            g_current.lastOkMs = fetched.lastOkMs;
+            // Keep stale reading; propagate error type from the failed fetch.
+            g_current.error      = true;
+            g_current.loginError = fetched.loginError;
+            g_current.lastOkMs   = fetched.lastOkMs;
         }
         g_changedFlag    = true;
         g_fetchInFlight  = false;
@@ -390,8 +399,8 @@ void loop() {
     if (!g_fetchDue && (millis() - g_lastFetchMs >= intervalMs))
         g_fetchDue = true;
 
-    // Arm the task — only when idle, network up, and credentials present
-    if (!g_fetchDue || g_fetchInFlight || !g_task || !Net::isUp()) return;
+    // Arm the task — only when idle, network up, credentials present, and not auth-failed.
+    if (!g_fetchDue || g_fetchInFlight || g_loginFailed || !g_task || !Net::isUp()) return;
 
     String email = Secrets::get(CgmKeys::EMAIL);
     String pass  = Secrets::get(CgmKeys::PASSWORD);
@@ -417,6 +426,9 @@ const GcmData* takeChanged() {
     return &g_current;
 }
 
-void forceRefresh() { g_fetchDue = true; }
+void forceRefresh() {
+    g_loginFailed = false;  // allow retry after credential change
+    g_fetchDue    = true;
+}
 
 } // namespace CgmFetch

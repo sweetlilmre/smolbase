@@ -18,6 +18,7 @@ private:
     uint32_t lastTickSec_ = 0;
 
     void drawName(lgfx::LovyanGFX& gfx);
+    void drawNotReady(lgfx::LovyanGFX& gfx);
     void drawValue(lgfx::LovyanGFX& gfx);
     void drawArrow(lgfx::LovyanGFX& gfx);
     void drawSpark(lgfx::LovyanGFX& gfx);

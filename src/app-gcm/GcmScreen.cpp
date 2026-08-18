@@ -144,7 +144,10 @@ void GcmScreen::tick(lgfx::LGFX_Device& gfx) {
     if (dirty_) {
         dirty_ = false;
         drawName(gfx);
-        if (!data.valid) return;
+        if (!data.valid) {
+            drawNotReady(gfx);
+            return;
+        }
         drawValue(gfx);
         drawArrow(gfx);
         drawSpark(gfx);
@@ -168,17 +171,33 @@ void GcmScreen::drawName(lgfx::LovyanGFX& gfx) {
     scratch.setTextDatum(lgfx::top_center);
     scratch.setTextColor(data.error ? C_RED : C_WHITE, C_BLACK);
     scratch.drawString(data.name[0] ? data.name : "CGM", W / 2, 0);
-    if (!data.valid) {
-        scratch.setFont(&lgfx::fonts::Font2);
-        scratch.setTextColor(C_GRAY, C_BLACK);
-        scratch.drawString(data.error ? "fetch error" : "loading...", W / 2, 0 + 26 + 4);
-    }
     pushBand(gfx, NAME_Y, NAME_H);
+}
 
-    // Error dot in top-left corner (in the name band's rows)
-    if (data.error) {
-        gfx.fillCircle(6, NAME_Y + 4, 3, C_RED);
-    }
+// Shown when data.valid is false — clears value/arrow/spark/timestamp bands
+// and renders a centred message so the user knows why nothing is displayed.
+void GcmScreen::drawNotReady(lgfx::LovyanGFX& gfx) {
+    const char* msg = data.loginError ? "login error"
+                    : data.error     ? "fetch error"
+                    :                  "connecting...";
+    uint32_t    c   = data.error ? C_RED : C_GRAY;
+
+    // Value band — centred message
+    scratch.fillRect(0, 0, W, VAL_H, C_BLACK);
+    scratch.setFont(&lgfx::fonts::Font2);
+    scratch.setTextSize(1);
+    scratch.setTextDatum(lgfx::middle_center);
+    scratch.setTextColor(c, C_BLACK);
+    scratch.drawString(msg, W / 2, VAL_H / 2);
+    pushBand(gfx, VAL_Y, VAL_H);
+
+    // Clear arrow + spark + timestamp
+    scratch.fillRect(0, 0, W, ARROW_H, C_BLACK);
+    pushBand(gfx, ARROW_Y, ARROW_H);
+    scratch.fillRect(0, 0, W, SPARK_H, C_BLACK);
+    pushBand(gfx, SPARK_Y, SPARK_H);
+    scratch.fillRect(0, 0, W, TS_H, C_BLACK);
+    pushBand(gfx, TS_Y, TS_H);
 }
 
 void GcmScreen::drawValue(lgfx::LovyanGFX& gfx) {
