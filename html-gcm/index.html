@@ -1,0 +1,93 @@
+<!doctype html>
+<!-- CGM landing page. App-section choices render as inline selects for quick
+     access; color/bool settings follow the same pattern as html/index.html.
+     Int settings (poll interval) are on the full settings page only.
+     This file lives in html-gcm/ and is overlaid on top of html/ by
+     scripts/pack_fs.py. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CGM · smolbase</title>
+<link rel="stylesheet" href="/smolbase.css">
+<style>
+  body { display: grid; place-items: center; font-size: 16px; }
+  main { text-align: center; padding: 2rem 1rem; }
+  .mono { color: var(--muted); }
+  a.btn { display: inline-block; margin-top: 1.25rem; padding: 0.6rem 1.4rem;
+    background: var(--accent); color: var(--accent-ink); border-radius: 6px;
+    text-decoration: none; font-weight: 600; }
+  .cfg { margin-top: 2rem; border: 1px solid var(--line); border-radius: 8px;
+    padding: 1rem 1.25rem; text-align: left; }
+  .cfg h2 { font-size: 0.95rem; margin: 0 0 0.6rem; color: var(--muted); font-weight: 600; }
+  .cfg label { display: flex; align-items: center; justify-content: space-between;
+    gap: 1.5rem; padding: 0.3rem 0; font-size: 0.9rem; color: var(--ink); margin: 0; }
+  .hint { font-size: 0.8rem; color: var(--muted); margin-top: 0.75rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>CGM</h1>
+  <p class="mono" id="status">loading…</p>
+  <a class="btn" href="/settings.html">Open settings</a>
+  <div class="cfg" id="cfg" hidden>
+    <div id="colours" hidden><h2>Colours</h2><div id="pickers"></div></div>
+    <div id="behaviour" hidden><h2>Settings</h2><div id="toggles"></div></div>
+    <p class="msg" id="cfgmsg">Changes apply on the panel immediately.</p>
+    <p class="hint">Credentials (LibreLinkUp email &amp; password) and poll interval are in <a href="/settings.html">Settings</a>.</p>
+  </div>
+</main>
+<script src="/smolbase.js"></script>
+<script>
+fetch("/api/status").then(r => r.json()).then(s => {
+  document.getElementById("status").textContent =
+    `${s.name}.local · ${s.ip} · ${Math.round(s.heapFree / 1024)} kB heap free`;
+}).catch(() => document.getElementById("status").textContent = "api unreachable");
+
+fetch("/api/settings").then(r => r.json()).then(j => {
+  const msg = document.getElementById("cfgmsg");
+  const saveOne = (s, patch) => postSettings(patch)
+    .then(() => { setMsg(msg, "Changes apply on the panel immediately."); toast(s.label + " saved"); })
+    .catch(e => setMsg(msg, "Save failed — " + e.message, true));
+  const addRow = (boxId, s, inp, readPatch) => {
+    const row = document.createElement("label");
+    row.textContent = s.label;
+    inp.addEventListener("change", () => saveOne(s, readPatch()));
+    row.appendChild(inp);
+    document.getElementById(boxId).appendChild(row);
+  };
+  const app    = (j.settings || []).filter(s => s.section === "app");
+  const colors = app.filter(s => s.type === "color");
+  const bools  = app.filter(s => s.type === "bool");
+  const picks  = app.filter(s => s.type === "choice" && s.options);
+  colors.forEach(s => {
+    const inp = document.createElement("input");
+    inp.type = "color"; inp.value = s.value;
+    addRow("pickers", s, inp, () => ({ [s.key]: inp.value }));
+  });
+  bools.forEach(s => {
+    const inp = document.createElement("input");
+    inp.type = "checkbox"; inp.checked = !!s.value;
+    addRow("toggles", s, inp, () => ({ [s.key]: inp.checked }));
+  });
+  picks.forEach(s => {
+    const sel = document.createElement("select");
+    const opts = s.options || {};
+    Object.keys(opts).forEach(label => {
+      const o = document.createElement("option");
+      o.value = opts[label]; o.textContent = label; o.dataset.label = label;
+      if (label === s.valueLabel) o.selected = true;
+      sel.appendChild(o);
+    });
+    addRow("toggles", s, sel, () => ({
+      [s.key]: sel.value,
+      [s.key + "_name"]: sel.selectedOptions[0].dataset.label,
+    }));
+  });
+  document.getElementById("colours").hidden   = !colors.length;
+  document.getElementById("behaviour").hidden = !(bools.length + picks.length);
+  document.getElementById("cfg").hidden = !colors.length && !bools.length && !picks.length;
+}).catch(() => {});
+</script>
+</body>
+</html>
