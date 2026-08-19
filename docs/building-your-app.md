@@ -66,16 +66,17 @@ App& makeApp() {
 
 ### More than one app in the repo
 
-The repo carries two apps — the demo clock in `src/app/` and the weather
-clock in `src/app-weather/` — and one PlatformIO env per app selects which
-one links. Each env's `build_src_filter` excludes every *other* `src/app*/`
-directory, so exactly one directory provides `makeApp()` per build (two
-selected = duplicate-symbol linker error, zero = missing-symbol; both by
-design). To add your own app, copy the pattern in `platformio.ini`:
+The repo carries three apps — the demo clock (`src/app/`), the weather clock
+(`src/app-weather/`), and the CGM display (`src/app-gcm/`) — and one
+PlatformIO env per app selects which one links. Each env's
+`build_src_filter` excludes every *other* `src/app*/` directory, so exactly
+one directory provides `makeApp()` per build (two selected = duplicate-symbol
+linker error, zero = missing-symbol; both by design). To add your own app,
+copy the pattern in `platformio.ini`:
 
 ```ini
 [env:myapp]
-build_src_filter = +<*> -<app/> -<app-weather/>
+build_src_filter = +<*> -<app/> -<app-weather/> -<app-gcm/>
 ```
 
 put your code in `src/app-myapp/`, and build with `pio run -e myapp`. A bare
@@ -303,6 +304,15 @@ mutex-guarded and safe from handlers.
 Static pages need no routes at all: drop files into `html/`, rebuild the
 filesystem image (`pio run -t buildfs`), and they are packed as gzip and
 served from LittleFS.
+
+**Per-env landing pages.** `scripts/pack_fs.py` overlays `html-{PIOENV}/`
+on top of `html/` at build time — any file in the env-specific directory
+wins over the same relative path in `html/`. This is how each app ships its
+own `index.html` without touching the shared assets: `html-weatherclock/`
+overrides for the `weatherclock` env, `html-gcm/` for `gcm`, and the base
+`html/` serves the `smolbase` env unchanged (no overlay directory needed).
+The merge is purely at pack time; LittleFS sees one flat `data/w/` tree per
+build.
 
 ## Framebuffer modes
 
