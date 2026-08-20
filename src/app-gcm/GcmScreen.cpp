@@ -203,10 +203,10 @@ void GcmScreen::drawName(lgfx::LovyanGFX& gfx) {
 // Shown when data.valid is false — clears value/arrow/spark/timestamp bands
 // and renders a centred message so the user knows why nothing is displayed.
 void GcmScreen::drawNotReady(lgfx::LovyanGFX& gfx) {
-    const char* msg = data.noCredentials ? "enter credentials"
-                    : data.loginError   ? "login error"
-                    : data.error        ? "fetch error"
-                    :                     "connecting...";
+    const char* msg = data.noCredentials ? "Enter credentials"
+                    : data.loginError   ? "Login error!"
+                    : data.error        ? "Fetch error!"
+                    :                     "Connecting...";
     uint32_t    c   = data.error ? C_RED : C_GRAY;
 
     // Value band — centred message
