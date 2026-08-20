@@ -36,14 +36,30 @@
   .d-page.on { display: block; }
   .d-page h1 { margin-bottom: 1rem; }
   .dz-box { border: 1px solid var(--danger); background: var(--danger-bg); border-radius: 8px; padding: 1rem; }
+  .field-error { display: block; color: var(--danger); font-size: 0.8rem; margin-top: 0.2rem; }
+  .field-error:empty { display: none; }
+  [data-invalid="1"] { border-color: var(--danger); outline-color: var(--danger); }
 </style>
 </head>
 <body>
 <div id="app"><p class="hint" style="padding:1.5rem 1rem">Loading settings…</p></div>
 
+<script>window.SECRET_VALIDATORS = {};</script>
+<script src="/w/validators.js" onerror="void 0"></script>
 <script src="/smolbase.js"></script>
 <script>
 "use strict";
+/* Named client-side validators, keyed by the `validate` token in the settings
+   schema. Return null = valid, return a string = error message shown inline.
+   Per-env validators.js may extend SECRET_VALIDATORS for secret fields. */
+const NAMED_VALIDATORS = {
+  email: v => {
+    const at = v.indexOf("@");
+    return at > 0 && v.indexOf(".", at + 1) > at + 1 ? null : "Not a valid email address";
+  },
+  nonblank: v => v.trim() ? null : "Required",
+  url: v => /^https?:\/\/\S+/.test(v.trim()) ? null : "Must be a URL starting with http:// or https://",
+};
 /* esc(), setMsg(), toast() and the [data-eye] password toggle come from
    smolbase.js. Feedback model (tickets #39/#41/#42): toast for quick save
    SUCCESSES; inline .msg for progress and for failures (which clear when
@@ -107,7 +123,8 @@ function renderField(s) {
     }
     return `<div class="field"><label for="${id}">${esc(s.label)}</label>
       <input type="number" id="${id}" data-key="${esc(s.key)}" data-type="int"
-        min="${s.min}" max="${s.max}" value="${s.value}">
+        min="${s.min}" max="${s.max}" value="${s.value}"${s.validate ? ` data-validate="${esc(s.validate)}"` : ""}>
+      <span class="field-error"></span>
       <p class="hint">${s.min} – ${s.max}</p></div>`;
   }
   if (s.type === "color") {
@@ -115,7 +132,8 @@ function renderField(s) {
       <input type="color" id="${id}" data-key="${esc(s.key)}" data-type="string" value="${esc(s.value)}"></div>`;
   }
   return `<div class="field"><label for="${id}">${esc(s.label)}</label>
-    <input type="text" id="${id}" data-key="${esc(s.key)}" data-type="string" value="${esc(s.value)}"></div>`;
+    <input type="text" id="${id}" data-key="${esc(s.key)}" data-type="string" value="${esc(s.value)}"${s.validate ? ` data-validate="${esc(s.validate)}"` : ""}>
+    <span class="field-error"></span></div>`;
 }
 
 /* Collect the staged values inside one section page into a flat map. */
@@ -136,6 +154,41 @@ function collect(page) {
 }
 
 /* postSettings() comes from smolbase.js. */
+
+/* Attach blur/input validation handlers to any [data-validate] inputs inside
+   `page`. Blur triggers the first check; subsequent input events check only
+   while an error is already showing (eager recovery, not eager complaint). */
+function wireValidators(page) {
+  page.querySelectorAll("[data-validate]").forEach(el => {
+    const fn = NAMED_VALIDATORS[el.dataset.validate];
+    if (!fn) return;
+    const span = el.parentElement.querySelector(".field-error");
+    if (!span) return;
+    const check = () => {
+      const err = fn(el.value);
+      span.textContent = err || "";
+      el.dataset.invalid = err ? "1" : "";
+    };
+    el.addEventListener("blur", check);
+    el.addEventListener("input", () => { if (el.dataset.invalid) check(); });
+  });
+}
+
+/* Run all validators in `page` synchronously. Shows inline errors and returns
+   false if any field is invalid — the caller should abort the save. */
+function validateSection(page) {
+  let ok = true;
+  page.querySelectorAll("[data-validate]").forEach(el => {
+    const fn = NAMED_VALIDATORS[el.dataset.validate];
+    if (!fn) return;
+    const span = el.parentElement.querySelector(".field-error");
+    const err = fn(el.value);
+    if (span) span.textContent = err || "";
+    el.dataset.invalid = err ? "1" : "";
+    if (err) ok = false;
+  });
+  return ok;
+}
 
 /* ---- non-schema pages ---- */
 
@@ -249,6 +302,8 @@ function render() {
       </section>`).join("")}</div>
   </div>`;
 
+  app.querySelectorAll(".d-page").forEach(wireValidators);
+
   const pages = [...document.getElementById("dPages").children];
   const tabs = [...app.querySelectorAll("[data-t]")];
   const setTab = i => {
@@ -262,10 +317,15 @@ function render() {
 
   // per-section save
   app.querySelectorAll(".savebtn").forEach(b => b.addEventListener("click", async () => {
+    const page = b.closest(".d-page");
     const msg = b.nextElementSibling; // the .savemsg under this button
+    if (!validateSection(page)) {
+      setMsg(msg, "Fix the errors above before saving.", true);
+      return;
+    }
     b.disabled = true;
     try {
-      const r = await postSettings(collect(b.closest(".d-page")));
+      const r = await postSettings(collect(page));
       setMsg(msg, "");
       toast(r.changed ? "Saved" : "No changes to save");
     } catch (e) {
@@ -302,6 +362,8 @@ function render() {
     const field = b.closest("[data-sk]");
     const inp = field.querySelector("input"), msg = field.querySelector(".sk-msg");
     if (!inp.value) { setMsg(msg, "Enter a value first.", true); return; }
+    const vfn = SECRET_VALIDATORS[b.dataset.skset];
+    if (vfn) { const err = vfn(inp.value); if (err) { setMsg(msg, err, true); return; } }
     b.disabled = true;
     try {
       await postSecret({ [b.dataset.skset]: inp.value });
