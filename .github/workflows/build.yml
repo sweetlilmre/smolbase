@@ -30,13 +30,10 @@ jobs:
         run: pip install platformio
 
       - name: Build firmware (all apps)
-        run: pio run
+        run: pio run -e smolbase
 
       - name: Build filesystem images (all apps)
-        run: |
-          pio run -e smolbase    -t buildfs
-          pio run -e weatherclock -t buildfs
-          pio run -e gcm          -t buildfs
+        run: pio run -e smolbase -t buildfs
 
       - name: Upload binaries
         uses: actions/upload-artifact@v4
@@ -45,10 +42,6 @@ jobs:
           path: |
             .pio/build/smolbase/firmware.bin
             .pio/build/smolbase/littlefs.bin
-            .pio/build/weatherclock/firmware.bin
-            .pio/build/weatherclock/littlefs.bin
-            .pio/build/gcm/firmware.bin
-            .pio/build/gcm/littlefs.bin
           retention-days: 14
 
       - name: Create GitHub release
@@ -60,9 +53,5 @@ jobs:
           gh release create "$TAG" \
             ".pio/build/smolbase/firmware.bin#smolbase-firmware-${TAG}.bin" \
             ".pio/build/smolbase/littlefs.bin#smolbase-littlefs-${TAG}.bin" \
-            ".pio/build/weatherclock/firmware.bin#weatherclock-firmware-${TAG}.bin" \
-            ".pio/build/weatherclock/littlefs.bin#weatherclock-littlefs-${TAG}.bin" \
-            ".pio/build/gcm/firmware.bin#gcm-firmware-${TAG}.bin" \
-            ".pio/build/gcm/littlefs.bin#gcm-littlefs-${TAG}.bin" \
             --title "$TAG" \
             --generate-notes
