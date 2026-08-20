@@ -45,23 +45,27 @@ struct Progress {
 static Progress s_progress;
 static bool s_inFlight = false;
 
-// HEAD redirect trick — returns "v0.3.2" style tag or "" on failure.
+// GitHub API: fetch /releases/latest and extract tag_name.
+// ArduinoJson filter skips everything except tag_name so heap cost is minimal.
 static String detectLatestTag() {
   BundleClient tls;
   HTTPClient http;
   http.setTimeout(10000);
   http.setConnectTimeout(10000);
-  http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
-  if (!http.begin(tls, String("https://github.com/") + GH_REPO + "/releases/latest")) return "";
-  int code = http.sendRequest("HEAD");
-  String tag;
-  if (code == 302) {
-    String loc = http.getLocation();
-    int idx = loc.lastIndexOf('/');
-    if (idx >= 0) tag = loc.substring(idx + 1);
-  }
+  http.addHeader("Accept", "application/vnd.github+json");
+  http.addHeader("User-Agent", "smolbase-esp32");
+  if (!http.begin(tls, String("https://api.github.com/repos/") + GH_REPO + "/releases/latest"))
+    return "";
+  int code = http.GET();
+  if (code != HTTP_CODE_OK) { http.end(); return ""; }
+  JsonDocument filter;
+  filter["tag_name"] = true;
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, *http.getStreamPtr(),
+                                             DeserializationOption::Filter(filter));
   http.end();
-  return tag;
+  if (err != DeserializationError::Ok) return "";
+  return doc["tag_name"] | String("");
 }
 
 // FreeRTOS task: download firmware, flash, restart.
