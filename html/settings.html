@@ -238,7 +238,21 @@ function wifiPage() {
 }
 
 function updatePage() {
-  return `<div class="field"><label>Image type</label>
+  return `<div class="field">
+    <label>Software update</label>
+    <p class="hint" style="margin-top:0">Checks GitHub for the latest release and downloads it over Wi-Fi — no computer needed.</p>
+    <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap">
+      <button id="ghcheck">Check for updates</button>
+      <span class="mono" style="color:var(--muted)">installed: ${esc(STATUS.fwVersion || "?")}</span>
+    </div>
+    <p class="msg" id="ghmsg"></p>
+    <div id="ghresult" hidden>
+      <p id="ghavail" style="margin:0.5rem 0 0.6rem"></p>
+      <button class="primary" id="ghupdate" hidden></button>
+    </div>
+  </div>
+  <hr style="border:0;border-top:1px solid var(--line);margin:0.5rem 0 1.2rem">
+  <div class="field"><label>Manual image upload</label>
     <label style="color:var(--ink);display:inline-block;margin-right:1.2rem">
       <input type="radio" name="uptarget" value="fw" checked> Firmware</label>
     <label style="color:var(--ink);display:inline-block">
@@ -431,6 +445,67 @@ function render() {
       setMsg(msg, "Upload failed — " + e.message, true);
     }
     fwgo.disabled = false;
+  });
+
+  // GitHub OTA: version check + download-and-flash
+  let _ghTag = null;
+  const ghcheck  = document.getElementById("ghcheck");
+  const ghmsg    = document.getElementById("ghmsg");
+  const ghresult = document.getElementById("ghresult");
+  const ghavail  = document.getElementById("ghavail");
+  const ghupdate = document.getElementById("ghupdate");
+  ghcheck.addEventListener("click", async () => {
+    ghcheck.disabled = true;
+    _ghTag = null;
+    ghresult.hidden = true;
+    setMsg(ghmsg, "Checking…");
+    try {
+      const r = await fetch("/api/update/check");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const j = await r.json();
+      setMsg(ghmsg, "");
+      ghresult.hidden = false;
+      if (j.upToDate) {
+        ghavail.textContent = "Already on the latest release (" + j.current + ").";
+        ghupdate.hidden = true;
+      } else {
+        _ghTag = j.latest;
+        ghavail.innerHTML = "<b>" + esc(j.latest) + "</b> is available — installed: " + esc(j.current);
+        ghupdate.textContent = "Update to " + j.latest;
+        ghupdate.hidden = false;
+      }
+    } catch (e) {
+      setMsg(ghmsg, "Check failed — " + e.message, true);
+    }
+    ghcheck.disabled = false;
+  });
+  ghupdate.addEventListener("click", async () => {
+    if (!_ghTag) return;
+    ghupdate.disabled = true;
+    ghcheck.disabled = true;
+    setMsg(ghmsg, "Downloading and installing " + _ghTag + "… don’t power off.");
+    try {
+      const r = await fetch("/api/update/github", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tag: _ghTag })
+      });
+      if (r.ok) {
+        handoff("Updating", "Installing " + esc(_ghTag) + " — the device is restarting.",
+          "A firmware + filesystem update takes longer than a manual flash — give it ~30 s, then reload.",
+          { label: "Reload this page", href: location.href });
+      } else {
+        let detail = "";
+        try { detail = (await r.json()).error || ""; } catch (_) {}
+        setMsg(ghmsg, "Update failed (HTTP " + r.status + (detail ? "): " + detail : ")"), true);
+        ghupdate.disabled = false;
+        ghcheck.disabled = false;
+      }
+    } catch (e) {
+      setMsg(ghmsg, "Update failed — " + e.message, true);
+      ghupdate.disabled = false;
+      ghcheck.disabled = false;
+    }
   });
 
   // wifi: scan, inline join, forget-into-setup (ticket #30)

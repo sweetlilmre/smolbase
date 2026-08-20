@@ -17,6 +17,7 @@
 #include "ConfigStore.h"
 #include "Events.h"
 #include "Net.h"
+#include "GhUpdate.h"
 #include "Ota.h"
 #include "Secrets.h"
 #include "smolbase_config.h"
@@ -297,8 +298,9 @@ void begin(App& app) {
     return res->send(200, "text/html", RECOVERY_PAGE);
   });
 
-  // --- 2. OTA slot (real upload handler is ticket #18) ---
+  // --- 2. OTA slots ---
   Ota::registerRoutes(httpServer);
+  GhUpdate::registerRoutes(httpServer);
 
   // --- 3. consumer routes ---
   app.registerRoutes(httpServer);
