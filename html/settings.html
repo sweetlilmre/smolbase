@@ -247,8 +247,15 @@ function updatePage() {
     </div>
     <p class="msg" id="ghmsg"></p>
     <div id="ghresult" hidden>
-      <p id="ghavail" style="margin:0.5rem 0 0.6rem"></p>
-      <button class="primary" id="ghupdate" hidden></button>
+      <div id="ghidle">
+        <p id="ghavail" style="margin:0.5rem 0 0.6rem"></p>
+        <button class="primary" id="ghupdate" hidden></button>
+      </div>
+      <div id="ghflashing" hidden>
+        <p id="ghprog-label" style="margin:0.5rem 0 0.3rem">Starting…</p>
+        <progress id="ghprogbar" value="0" max="100" style="width:100%;display:block;margin-bottom:0.4rem"></progress>
+        <p class="hint" id="ghprog-sub" style="margin:0"></p>
+      </div>
     </div>
   </div>
   <hr style="border:0;border-top:1px solid var(--line);margin:0.5rem 0 1.2rem">
@@ -449,15 +456,22 @@ function render() {
 
   // GitHub OTA: version check + download-and-flash
   let _ghTag = null;
-  const ghcheck  = document.getElementById("ghcheck");
-  const ghmsg    = document.getElementById("ghmsg");
-  const ghresult = document.getElementById("ghresult");
-  const ghavail  = document.getElementById("ghavail");
-  const ghupdate = document.getElementById("ghupdate");
+  const ghcheck   = document.getElementById("ghcheck");
+  const ghmsg     = document.getElementById("ghmsg");
+  const ghresult  = document.getElementById("ghresult");
+  const ghidle    = document.getElementById("ghidle");
+  const ghavail   = document.getElementById("ghavail");
+  const ghupdate  = document.getElementById("ghupdate");
+  const ghflash   = document.getElementById("ghflashing");
+  const ghprogbar = document.getElementById("ghprogbar");
+  const ghproglbl = document.getElementById("ghprog-label");
+  const ghprogsub = document.getElementById("ghprog-sub");
   ghcheck.addEventListener("click", async () => {
     ghcheck.disabled = true;
     _ghTag = null;
     ghresult.hidden = true;
+    ghidle.hidden = false;
+    ghflash.hidden = true;
     setMsg(ghmsg, "Checking…");
     try {
       const r = await fetch("/api/update/check");
@@ -481,30 +495,64 @@ function render() {
   });
   ghupdate.addEventListener("click", async () => {
     if (!_ghTag) return;
+    const tag = _ghTag;
     ghupdate.disabled = true;
     ghcheck.disabled = true;
-    setMsg(ghmsg, "Downloading and installing " + _ghTag + "… don’t power off.");
+    setMsg(ghmsg, "");
+    ghidle.hidden = true;
+    ghflash.hidden = false;
+    ghprogbar.value = 0;
+    ghproglbl.textContent = "Connecting to GitHub…";
+    ghprogsub.textContent = "";
     try {
       const r = await fetch("/api/update/github", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tag: _ghTag })
+        body: JSON.stringify({ tag })
       });
-      if (r.ok) {
-        handoff("Updating", "Installing " + esc(_ghTag) + " — the device is restarting.",
-          "A firmware + filesystem update takes longer than a manual flash — give it ~30 s, then reload.",
-          { label: "Reload this page", href: location.href });
-      } else {
+      if (!r.ok) {
         let detail = "";
         try { detail = (await r.json()).error || ""; } catch (_) {}
         setMsg(ghmsg, "Update failed (HTTP " + r.status + (detail ? "): " + detail : ")"), true);
-        ghupdate.disabled = false;
-        ghcheck.disabled = false;
+        ghidle.hidden = false; ghflash.hidden = true;
+        ghupdate.disabled = false; ghcheck.disabled = false;
+        return;
       }
+      // Device accepted — poll progress until done or error
+      const mb = n => (n / 1048576).toFixed(1) + " MB";
+      const poll = setInterval(async () => {
+        try {
+          const p = await (await fetch("/api/update/ghprogress")).json();
+          if (p.state === "downloading") {
+            const pct = p.totalBytes > 0 ? Math.round(p.bytesWritten * 100 / p.totalBytes) : 0;
+            ghprogbar.value = pct;
+            ghproglbl.textContent = "Downloading firmware — " + pct + "%";
+            ghprogsub.textContent = p.totalBytes > 0
+              ? mb(p.bytesWritten) + " / " + mb(p.totalBytes)
+              : mb(p.bytesWritten) + " received";
+          } else if (p.state === "done") {
+            clearInterval(poll);
+            ghprogbar.value = 100;
+            ghproglbl.textContent = "Done — restarting…";
+            ghprogsub.textContent = "";
+            setTimeout(() => handoff(
+              "Updated to " + tag,
+              "The device is restarting with the new firmware.",
+              "Give it ~15 s, then reload.",
+              { label: "Reload this page", href: location.href }
+            ), 1000);
+          } else if (p.state === "error") {
+            clearInterval(poll);
+            setMsg(ghmsg, "Update failed: " + (p.error || "unknown error"), true);
+            ghidle.hidden = false; ghflash.hidden = true;
+            ghupdate.disabled = false; ghcheck.disabled = false;
+          }
+        } catch (_) { /* poll failure is normal while device is rebooting */ }
+      }, 1000);
     } catch (e) {
       setMsg(ghmsg, "Update failed — " + e.message, true);
-      ghupdate.disabled = false;
-      ghcheck.disabled = false;
+      ghidle.hidden = false; ghflash.hidden = true;
+      ghupdate.disabled = false; ghcheck.disabled = false;
     }
   });
 

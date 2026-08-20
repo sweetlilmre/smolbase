@@ -1,9 +1,10 @@
-// GitHub release OTA: version check (HEAD redirect tag detection) and
-// pull-and-flash (firmware then filesystem in one boot, single restart).
-// Decisions: wayfinder map #106, tickets #107/#108/#109/#111.
+// GitHub release OTA: version check and firmware-only flash from public releases.
+// Filesystem is managed separately (see wayfinder map #106).
+// Decisions: wayfinder map #106, tickets #107/#108/#109.
 //
-// GET  /api/update/check   — HEAD redirect trick; returns {current,latest,upToDate}
-// POST /api/update/github  — body {tag}; responds 200, then downloads+flashes+restarts
+// GET  /api/update/check      — HEAD redirect trick; returns {current,latest,upToDate}
+// GET  /api/update/ghprogress — live state for the settings UI polling loop
+// POST /api/update/github     — body {tag}; launches background flash task, responds 200
 #include "GhUpdate.h"
 #include "Events.h"
 #include "Net.h"
@@ -15,27 +16,36 @@
 #include <PsychicHttp.h>
 #include <Update.h>
 #include <esp_crt_bundle.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
-// GitHub repo and asset name prefixes — must match the CI release workflow.
+// GitHub repo and asset prefix — must match the CI release workflow.
 static const char* const GH_REPO      = "sweetlilmre/smolbase";
 static const char* const GH_FW_PREFIX = "smolbase-firmware";
-static const char* const GH_FS_PREFIX = "smolbase-littlefs";
 
 namespace GhUpdate {
 
-// Same BundleClient pattern as WxHttp.cpp / CgmFetch.cpp.
-// IDF 5.5.5 bundle covers both github.com (Sectigo) and
-// objects.githubusercontent.com (DigiCert Global Root G2) — ticket #108.
+// Same BundleClient pattern as WxHttp.cpp — IDF 5.5.5 bundle covers both
+// github.com (Sectigo) and objects.githubusercontent.com (DigiCert G2).
 class BundleClient : public NetworkClientSecure {
 public:
   BundleClient() { attach_ssl_certificate_bundle(sslclient.get(), true); _use_ca_bundle = true; }
 };
 
-// Separate from Ota.cpp's s_inFlight — must not share that latch (#109 caution).
+// Progress updated by the flash task, polled by the progress endpoint.
+// bytesWritten and state are volatile so the compiler doesn't cache them
+// across the task boundary; the ESP32 cache is coherent so no barrier needed.
+struct Progress {
+  enum State : uint8_t { Idle, Downloading, Done, Error };
+  volatile State  state        = Idle;
+  volatile size_t bytesWritten = 0;
+  size_t          totalBytes   = 0;
+  char            errorMsg[80] = {};
+};
+static Progress s_progress;
 static bool s_inFlight = false;
 
-// HEAD redirect trick: github.com/.../releases/latest returns 302 with the
-// tag in the Location URL. Returns "v0.3.2" style tag or "" on failure — #107.
+// HEAD redirect trick — returns "v0.3.2" style tag or "" on failure.
 static String detectLatestTag() {
   BundleClient tls;
   HTTPClient http;
@@ -46,7 +56,7 @@ static String detectLatestTag() {
   int code = http.sendRequest("HEAD");
   String tag;
   if (code == 302) {
-    String loc = http.getLocation(); // ".../releases/tag/v0.3.2"
+    String loc = http.getLocation();
     int idx = loc.lastIndexOf('/');
     if (idx >= 0) tag = loc.substring(idx + 1);
   }
@@ -54,41 +64,97 @@ static String detectLatestTag() {
   return tag;
 }
 
-// Stream a GitHub release asset into the given Update partition.
-// Follows the github.com -> objects.githubusercontent.com redirect automatically.
-// On false the Update state is clean; a second begin() is safe (#109).
-static bool downloadAndFlash(const String& url, int partition) {
+// FreeRTOS task: download firmware, flash, restart.
+// Runs on the network core so it doesn't starve the httpd task and the
+// httpd task can continue serving /api/update/ghprogress polls.
+static void flashTask(void* arg) {
+  char* tagBuf = static_cast<char*>(arg);
+  String tag(tagBuf);
+  free(tagBuf);
+
+  String url = String("https://github.com/") + GH_REPO + "/releases/download/" + tag +
+               "/" + GH_FW_PREFIX + "-" + tag + ".bin";
   Serial.printf("[ghupdate] downloading %s\n", url.c_str());
+
+  auto fail = [](const char* fmt, ...) {
+    char msg[80];
+    va_list ap; va_start(ap, fmt); vsnprintf(msg, sizeof(msg), fmt, ap); va_end(ap);
+    Serial.printf("[ghupdate] failed: %s\n", msg);
+    strlcpy(s_progress.errorMsg, msg, sizeof(s_progress.errorMsg));
+    s_progress.state = Progress::Error;
+    s_inFlight = false;
+  };
+
   BundleClient tls;
-  HTTPClient http;
-  http.setTimeout(60000);
+  HTTPClient   http;
+  http.setTimeout(120000);
   http.setConnectTimeout(15000);
+  // STRICT_FOLLOW_REDIRECTS handles github.com → objects.githubusercontent.com;
+  // the redirect preserves GET and the BundleClient reconnects with the same
+  // cert bundle (confirmed via probe on 2026-08-20).
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+
   if (!http.begin(tls, url)) {
-    Serial.println("[ghupdate] http.begin failed");
-    return false;
+    fail("http.begin failed"); http.end(); vTaskDelete(nullptr); return;
   }
+
   int code = http.GET();
   if (code != HTTP_CODE_OK) {
-    Serial.printf("[ghupdate] HTTP %d\n", code);
-    http.end();
-    return false;
+    fail("HTTP %d", code); http.end(); vTaskDelete(nullptr); return;
   }
-  int contentLen = http.getSize(); // -1 if unknown; Update checks partition fit at end
-  if (!Update.begin(contentLen > 0 ? (size_t)contentLen : UPDATE_SIZE_UNKNOWN, partition)) {
-    Serial.printf("[ghupdate] Update.begin failed: %s\n", Update.errorString());
-    http.end();
-    return false;
+
+  int contentLen = http.getSize();
+  s_progress.totalBytes = contentLen > 0 ? (size_t)contentLen : 0;
+
+  if (!Update.begin(contentLen > 0 ? (size_t)contentLen : UPDATE_SIZE_UNKNOWN, U_FLASH)) {
+    fail("Update.begin: %s", Update.errorString()); http.end(); vTaskDelete(nullptr); return;
   }
-  size_t written = Update.writeStream(*http.getStreamPtr());
+
+  s_progress.state = Progress::Downloading;
+
+  // Chunk loop: keeps s_progress.bytesWritten live for the polling endpoint.
+  NetworkClient* stream = http.getStreamPtr();
+  int remaining = contentLen;
+  size_t written = 0;
+  bool ok = true;
+  uint8_t buf[1024];
+
+  while (http.connected() && (remaining < 0 || remaining > 0)) {
+    int avail = stream->available();
+    if (avail > 0) {
+      int toRead = min(avail, (int)sizeof(buf));
+      if (remaining > 0 && toRead > remaining) toRead = remaining;
+      int rd = stream->readBytes(buf, toRead);
+      if (rd <= 0) break;
+      size_t wr = Update.write(buf, (size_t)rd);
+      written += wr;
+      s_progress.bytesWritten = written;
+      if (wr != (size_t)rd) { ok = false; break; }
+      if (remaining > 0) remaining -= rd;
+    } else {
+      vTaskDelay(pdMS_TO_TICKS(1));
+    }
+  }
   http.end();
-  if (!Update.end(true)) {
-    Serial.printf("[ghupdate] Update.end failed after %u bytes: %s\n",
-                  (unsigned)written, Update.errorString());
-    return false;
+
+  if (!ok) {
+    Update.abort();
+    fail("write error after %u bytes", (unsigned)written);
+    vTaskDelete(nullptr);
+    return;
   }
-  Serial.printf("[ghupdate] flashed %u bytes\n", (unsigned)written);
-  return true;
+  if (!Update.end(true)) {
+    fail("Update.end: %s", Update.errorString());
+    vTaskDelete(nullptr);
+    return;
+  }
+
+  Serial.printf("[ghupdate] firmware flashed: %u bytes\n", (unsigned)written);
+  s_progress.state = Progress::Done;
+  // 1.5 s pause so the browser can poll Done before the device disappears.
+  vTaskDelay(pdMS_TO_TICKS(1500));
+  Net::restartToApply(); // no return
+  vTaskDelete(nullptr);
 }
 
 void registerRoutes(PsychicHttpServer& server) {
@@ -105,10 +171,21 @@ void registerRoutes(PsychicHttpServer& server) {
     return res->send(200, "application/json", out.c_str());
   });
 
+  server.on("/api/update/ghprogress", HTTP_GET, [](PsychicRequest*, PsychicResponse* res) {
+    static const char* const STATES[] = { "idle", "downloading", "done", "error" };
+    char buf[160];
+    snprintf(buf, sizeof(buf),
+             "{\"state\":\"%s\",\"bytesWritten\":%u,\"totalBytes\":%u,\"error\":\"%s\"}",
+             STATES[(int)s_progress.state],
+             (unsigned)s_progress.bytesWritten,
+             (unsigned)s_progress.totalBytes,
+             s_progress.errorMsg);
+    return res->send(200, "application/json", buf);
+  });
+
   server.on("/api/update/github", HTTP_POST, [](PsychicRequest* req, PsychicResponse* res) {
     if (s_inFlight) {
-      return res->send(409, "application/json",
-                       "{\"error\":\"update already in progress\"}");
+      return res->send(409, "application/json", "{\"error\":\"update already in progress\"}");
     }
     JsonDocument doc;
     if (deserializeJson(doc, req->body()) != DeserializationError::Ok) {
@@ -116,45 +193,21 @@ void registerRoutes(PsychicHttpServer& server) {
     }
     String tag = doc["tag"] | String("");
     if (tag.isEmpty() || !tag.startsWith("v")) {
-      return res->send(400, "application/json",
-                       "{\"error\":\"missing or invalid tag\"}");
+      return res->send(400, "application/json", "{\"error\":\"missing or invalid tag\"}");
     }
 
     s_inFlight = true;
-    Events::post(SysEvent::OtaStarting); // apps: stop drawing, free buffers
+    s_progress = {};
+    Events::post(SysEvent::OtaStarting);
 
-    String base  = String("https://github.com/") + GH_REPO + "/releases/download/" + tag + "/";
-    String fwUrl = base + GH_FW_PREFIX + "-" + tag + ".bin";
-    String fsUrl = base + GH_FS_PREFIX + "-" + tag + ".bin";
-    Serial.printf("[ghupdate] updating to %s\n", tag.c_str());
-
-    // Send 200 before blocking on the download — browser calls handoff() and
-    // shows the reload prompt. The response reaches the browser via lwIP while
-    // the httpd task is busy with the downloads; no intermediate flush needed.
-    // On firmware failure (no partition written yet), device stays on old image
-    // and the browser reload finds it healthy.
-    esp_err_t r = res->send(200, "application/json",
-                            ("{\"ok\":true,\"tag\":\"" + tag + "\"}").c_str());
-
-    if (!downloadAndFlash(fwUrl, U_FLASH)) {
-      Serial.println("[ghupdate] firmware failed; staying on old image");
+    char* tagBuf = strdup(tag.c_str());
+    if (!tagBuf || xTaskCreate(flashTask, "ghflash", 16384, tagBuf, 5, nullptr) != pdPASS) {
+      free(tagBuf);
       s_inFlight = false;
-      return r;
+      return res->send(503, "application/json", "{\"error\":\"could not start flash task\"}");
     }
-
-    // Firmware staged in new OTA slot. Unmount LittleFS before rewriting the
-    // data partition — the same guard Ota.cpp applies for ?target=fs uploads.
-    LittleFS.end();
-    if (!downloadAndFlash(fsUrl, U_SPIFFS)) {
-      Serial.println("[ghupdate] fs failed after firmware staged; restarting");
-      // Firmware is committed; FS state is unknown. Restart so the new firmware
-      // boots — it serves the embedded RECOVERY_PAGE if the FS is torn.
-      Net::restartToApply(); // no return
-      return r;
-    }
-
-    Net::restartToApply(); // no return
-    return r;
+    return res->send(200, "application/json",
+                     ("{\"ok\":true,\"tag\":\"" + tag + "\"}").c_str());
   });
 }
 

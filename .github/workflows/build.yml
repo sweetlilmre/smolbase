@@ -50,8 +50,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG=${GITHUB_REF#refs/tags/}
+          cp .pio/build/smolbase/firmware.bin smolbase-firmware-${TAG}.bin
+          cp .pio/build/smolbase/littlefs.bin smolbase-littlefs-${TAG}.bin
           gh release create "$TAG" \
-            ".pio/build/smolbase/firmware.bin#smolbase-firmware-${TAG}.bin" \
-            ".pio/build/smolbase/littlefs.bin#smolbase-littlefs-${TAG}.bin" \
+            "smolbase-firmware-${TAG}.bin" \
+            "smolbase-littlefs-${TAG}.bin" \
             --title "$TAG" \
             --generate-notes
