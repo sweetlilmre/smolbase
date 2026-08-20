@@ -260,6 +260,18 @@ const present = await fetch("/api/secrets").then(r => r.json());
 badge.textContent = present.api_key ? "configured" : "not set";
 ```
 
+**Client-side validation for secrets.** `settings.html` loads `/validators.js` at startup if it exists — a 404 is silently ignored. A per-env `html-{PIOENV}/validators.js` populates `window.SECRET_VALIDATORS`, a map from secret key to a `(value) => errorString | null` function. The Secrets panel checks this map on every Set click and shows the error inline rather than posting to the device. Example:
+
+```js
+// html-gcm/validators.js
+window.SECRET_VALIDATORS["llu_email"] = function(v) {
+  return /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/.test(v.trim())
+    ? null : "Not a valid email address";
+};
+```
+
+The validator runs entirely in the browser — no round-trip, no firmware changes. Drop the file in your `html-{PIOENV}/` directory; `pack_fs.py` picks it up automatically.
+
 **Be honest about the threat model**: this is plain NVS. It protects against
 *accidental exposure* — the settings API, filesystem images, backups of
 `settings.json` — not against an attacker holding the device, who can read
@@ -311,8 +323,7 @@ wins over the same relative path in `html/`. This is how each app ships its
 own `index.html` without touching the shared assets: `html-weatherclock/`
 overrides for the `weatherclock` env, `html-gcm/` for `gcm`, and the base
 `html/` serves the `smolbase` env unchanged (no overlay directory needed).
-The merge is purely at pack time; LittleFS sees one flat `data/w/` tree per
-build.
+The merge is purely at pack time; LittleFS sees one flat `data/w/` tree per build. Beyond `index.html`, per-env directories also carry app-specific assets like `validators.js` (client-side secret validators — see Secrets below).
 
 ## Framebuffer modes
 
