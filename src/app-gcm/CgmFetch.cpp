@@ -385,9 +385,11 @@ void loop() {
             g_current = fetched;
         } else {
             // Keep stale reading; propagate error type from the failed fetch.
-            g_current.error      = true;
-            g_current.loginError = fetched.loginError;
-            g_current.lastOkMs   = fetched.lastOkMs;
+            // noCredentials must be false: a fetch was attempted, so creds exist.
+            g_current.error         = true;
+            g_current.loginError    = fetched.loginError;
+            g_current.noCredentials = false;
+            g_current.lastOkMs      = fetched.lastOkMs;
         }
         g_changedFlag    = true;
         g_fetchInFlight  = false;
@@ -404,7 +406,13 @@ void loop() {
 
     String email = Secrets::get(CgmKeys::EMAIL);
     String pass  = Secrets::get(CgmKeys::PASSWORD);
-    if (email.isEmpty() || pass.isEmpty()) {
+    // Basic sanity: both fields non-empty and email contains '@' with at least
+    // one '.' after it — catches typos before attempting a TLS round-trip.
+    int atPos   = email.indexOf('@');
+    bool credOk = !email.isEmpty() && !pass.isEmpty()
+                  && atPos > 0
+                  && email.indexOf('.', atPos + 1) > atPos + 1;
+    if (!credOk) {
         if (!g_current.noCredentials) {
             g_current.clear();
             g_current.noCredentials = true;
@@ -434,9 +442,14 @@ const GcmData* takeChanged() {
 }
 
 void forceRefresh() {
-    g_loginFailed             = false;  // allow retry after credential change
-    g_current.noCredentials   = false;  // re-check credentials on next loop
-    g_fetchDue                = true;
+    g_loginFailed = false;
+    g_fetchDue    = true;
+    // Transition the screen to "connecting..." immediately rather than keeping
+    // a stale error/noCredentials state visible until the fetch lands.
+    if (g_current.error || g_current.noCredentials) {
+        g_current.clear();
+        g_changedFlag = true;
+    }
 }
 
 } // namespace CgmFetch
