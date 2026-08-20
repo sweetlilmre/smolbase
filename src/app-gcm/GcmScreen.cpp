@@ -162,6 +162,7 @@ void GcmScreen::tick(lgfx::LGFX_Device& gfx) {
     }
     if (overlayUntilMs_ && now >= overlayUntilMs_) {
         overlayUntilMs_ = 0;
+        gfx.fillScreen(C_BLACK); // clear overlay color from inter-band gaps
         dirty_ = true;
     }
     if (overlayUntilMs_) return; // still showing — nothing else to update

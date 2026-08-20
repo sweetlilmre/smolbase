@@ -42,8 +42,8 @@
 <script src="/smolbase.js"></script>
 <script>
 fetch("/api/status").then(r => r.json()).then(s => {
-  document.getElementById("status").textContent =
-    `${s.name}.local · ${s.ip} · ${Math.round(s.heapFree / 1024)} kB heap free`;
+  document.getElementById("status").innerHTML =
+    `<a href="http://${esc(s.name)}.local/">${esc(s.name)}.local</a> · ${esc(s.ip)} · ${Math.round(s.heapFree / 1024)} kB heap free`;
 }).catch(() => document.getElementById("status").textContent = "api unreachable");
 
 // Render a picker for every app-section color setting, and a Behaviour row for
