@@ -7,4 +7,8 @@ class PsychicHttpServer;
 
 namespace GhUpdate {
 void registerRoutes(PsychicHttpServer& server);
+// Call from the Arduino loop(). Runs the download state machine when an OTA
+// was queued by the POST handler. Blocks the loop for the duration of the
+// download — acceptable since the system OTA screen takes over during that time.
+void tick();
 } // namespace GhUpdate

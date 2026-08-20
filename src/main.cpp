@@ -8,6 +8,7 @@
 #include "core/ConfigStore.h"
 #include "core/Display.h"
 #include "core/Events.h"
+#include "core/GhUpdate.h"
 #include "core/Net.h"
 #include "core/Ota.h"
 #include "core/Portal.h"
@@ -70,6 +71,7 @@ void loop() {
   Touch::loop();
   Display::tick();
   AppHost::loop();
+  GhUpdate::tick();
   Ota::tickRollbackGuard(); // confirm a fresh image after healthy uptime (#76)
   delay(2); // yield to the idle task; keeps the WDT fed without busy-spinning
 }
