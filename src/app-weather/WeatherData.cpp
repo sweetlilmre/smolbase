@@ -235,7 +235,7 @@ void fetchTaskFn(void*) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     addSnap("pre");
     dbgAttempts = dbgAttempts + 1;
-    dbgGeoCode = dbgOwmCode = dbgMeteoCode = 0; // 0 = stage not run this cycle
+    dbgGeoCode = 0; dbgOwmCode = 0; dbgMeteoCode = 0; // 0 = stage not run this cycle
     WeatherData::Reading r;
     FetchContext::Geo g = {};
     if (ctx.args.geocode) { geocode(ctx.args, g); addSnap("post-geo"); }
