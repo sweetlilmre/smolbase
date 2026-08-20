@@ -404,7 +404,14 @@ void loop() {
 
     String email = Secrets::get(CgmKeys::EMAIL);
     String pass  = Secrets::get(CgmKeys::PASSWORD);
-    if (email.isEmpty() || pass.isEmpty()) return; // no credentials yet
+    if (email.isEmpty() || pass.isEmpty()) {
+        if (!g_current.noCredentials) {
+            g_current.clear();
+            g_current.noCredentials = true;
+            g_changedFlag = true;
+        }
+        return;
+    }
 
     bool mgdl = (ConfigStore::getString(CgmKeys::UNIT, CgmKeys::DEF_UNIT) == "mgdl");
 
@@ -427,8 +434,9 @@ const GcmData* takeChanged() {
 }
 
 void forceRefresh() {
-    g_loginFailed = false;  // allow retry after credential change
-    g_fetchDue    = true;
+    g_loginFailed             = false;  // allow retry after credential change
+    g_current.noCredentials   = false;  // re-check credentials on next loop
+    g_fetchDue                = true;
 }
 
 } // namespace CgmFetch

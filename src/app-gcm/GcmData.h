@@ -10,7 +10,8 @@ struct GcmData {
     uint8_t sparkCount;
     bool    valid;
     bool    error;
-    bool    loginError;  // auth failed — distinct from transient fetch errors
+    bool    loginError;      // auth failed — distinct from transient fetch errors
+    bool    noCredentials;   // secrets not yet entered — show setup prompt
     bool    mgdl;
     uint32_t lastOkMs;
 
@@ -22,8 +23,9 @@ struct GcmData {
         sparkCount  = 0;
         valid       = false;
         error       = false;
-        loginError  = false;
-        mgdl        = false;
+        loginError    = false;
+        noCredentials = false;
+        mgdl          = false;
         lastOkMs    = 0;
     }
 };
