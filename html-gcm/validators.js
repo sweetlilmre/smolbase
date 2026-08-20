@@ -1,6 +1,6 @@
 // Client-side validators for CGM secrets. Loaded by settings.html into
 // window.SECRET_VALIDATORS before the page renders.
 window.SECRET_VALIDATORS["llu_email"] = function(v) {
-  var at = v.indexOf("@");
-  return (at > 0 && v.indexOf(".", at + 1) > at + 1) ? null : "Not a valid email address";
+  return /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/.test(v.trim())
+    ? null : "Not a valid email address";
 };

@@ -53,10 +53,8 @@
    schema. Return null = valid, return a string = error message shown inline.
    Per-env validators.js may extend SECRET_VALIDATORS for secret fields. */
 const NAMED_VALIDATORS = {
-  email: v => {
-    const at = v.indexOf("@");
-    return at > 0 && v.indexOf(".", at + 1) > at + 1 ? null : "Not a valid email address";
-  },
+  email: v => /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/.test(v.trim())
+    ? null : "Not a valid email address",
   nonblank: v => v.trim() ? null : "Required",
   url: v => /^https?:\/\/\S+/.test(v.trim()) ? null : "Must be a URL starting with http:// or https://",
 };
