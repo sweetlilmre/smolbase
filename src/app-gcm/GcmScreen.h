@@ -12,10 +12,13 @@ public:
 
     void onEnter(lgfx::LGFX_Device& gfx) override;
     void tick(lgfx::LGFX_Device& gfx) override;
+    void onLongPress() override; // show device identity overlay for 5 s
 
 private:
-    bool     dirty_       = true;
-    uint32_t lastTickSec_ = 0;
+    bool     dirty_          = true;
+    uint32_t lastTickSec_    = 0;
+    uint32_t overlayUntilMs_ = 0; // non-zero while identity overlay is visible
+    bool     overlayDirty_   = false;
 
     void drawName(lgfx::LovyanGFX& gfx);
     void drawNotReady(lgfx::LovyanGFX& gfx);
@@ -23,4 +26,5 @@ private:
     void drawArrow(lgfx::LovyanGFX& gfx);
     void drawSpark(lgfx::LovyanGFX& gfx);
     void drawTimestamp(lgfx::LovyanGFX& gfx);
+    void drawOverlay(lgfx::LGFX_Device& gfx);
 };

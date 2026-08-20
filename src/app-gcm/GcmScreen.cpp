@@ -3,6 +3,8 @@
 // no flicker. Each band redraws independently; only the timestamp band redraws
 // every second. Everything else redraws on data change only.
 #include "GcmScreen.h"
+#include "../core/Net.h"
+#include "smolbase_config.h"
 #include <cstdio>
 
 namespace {
@@ -18,6 +20,8 @@ constexpr int SPARK_Y = 142, SPARK_H = 72;  // sparkline
 constexpr int TS_Y    = 218, TS_H    = 20;  // updated-ago counter
 
 constexpr int SCRATCH_H = SPARK_H;          // tallest band; 240×72×2 = 34.6 KB
+
+constexpr uint32_t OVERLAY_MS = 5000; // identity overlay display duration
 
 // RGB888 color constants — LovyanGFX resolves uint32_t as RGB888.
 constexpr uint32_t C_BLACK = 0x000000;
@@ -138,9 +142,30 @@ void GcmScreen::begin() {
 void GcmScreen::onEnter(lgfx::LGFX_Device& gfx) {
     gfx.fillScreen(C_BLACK);
     dirty_ = true;
+    overlayUntilMs_ = 0;
+    overlayDirty_   = false;
+}
+
+void GcmScreen::onLongPress() {
+    overlayUntilMs_ = millis() + OVERLAY_MS;
+    overlayDirty_   = true;
 }
 
 void GcmScreen::tick(lgfx::LGFX_Device& gfx) {
+    uint32_t now = millis();
+
+    // Overlay: show on request; on expiry, force a full normal repaint.
+    if (overlayDirty_) {
+        overlayDirty_ = false;
+        drawOverlay(gfx);
+        return;
+    }
+    if (overlayUntilMs_ && now >= overlayUntilMs_) {
+        overlayUntilMs_ = 0;
+        dirty_ = true;
+    }
+    if (overlayUntilMs_) return; // still showing — nothing else to update
+
     if (dirty_) {
         dirty_ = false;
         drawName(gfx);
@@ -152,9 +177,9 @@ void GcmScreen::tick(lgfx::LGFX_Device& gfx) {
         drawArrow(gfx);
         drawSpark(gfx);
         drawTimestamp(gfx);
-        lastTickSec_ = millis() / 1000;
+        lastTickSec_ = now / 1000;
     } else if (data.valid && data.lastOkMs) {
-        uint32_t nowSec = millis() / 1000;
+        uint32_t nowSec = now / 1000;
         if (nowSec != lastTickSec_) {
             lastTickSec_ = nowSec;
             drawTimestamp(gfx);
@@ -244,4 +269,23 @@ void GcmScreen::drawTimestamp(lgfx::LovyanGFX& gfx) {
     scratch.setTextColor(data.error ? C_RED : C_DGRAY, C_BLACK);
     scratch.drawString(buf, 4, 2);
     pushBand(gfx, TS_Y, TS_H);
+}
+
+// Full-screen identity overlay: hostname, IP, firmware version — same info
+// the weather app's long-press exposes (WeatherScreen::drawClockBand).
+// Paints the entire panel directly so it doesn't depend on scratch height;
+// expires after OVERLAY_MS and the normal GCM content repaints underneath.
+void GcmScreen::drawOverlay(lgfx::LGFX_Device& gfx) {
+    constexpr uint32_t C_OVL_BG = 0x001133;
+    constexpr uint32_t C_CYAN   = 0x99ffff;
+    gfx.fillScreen(C_OVL_BG);
+    gfx.setFont(&lgfx::fonts::Font4);
+    gfx.setTextSize(1);
+    gfx.setTextDatum(lgfx::middle_center);
+    gfx.setTextColor(C_WHITE, C_OVL_BG);
+    gfx.drawString(Net::deviceName(), W / 2, 90);
+    gfx.setTextColor(C_CYAN, C_OVL_BG);
+    gfx.drawString(Net::ip().toString(), W / 2, 120);
+    gfx.setTextColor(C_WHITE, C_OVL_BG);
+    gfx.drawString(SMOLBASE_FW_VERSION, W / 2, 150);
 }
