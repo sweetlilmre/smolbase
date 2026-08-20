@@ -15,6 +15,7 @@
 #include "App.h"
 #include "Clock.h"
 #include "ConfigStore.h"
+#include "Events.h"
 #include "Net.h"
 #include "Ota.h"
 #include "Secrets.h"
@@ -223,6 +224,7 @@ void begin(App& app) {
                          "{\"error\":\"secret store write failed (NVS full?)\"}");
       }
     }
+    Events::post(SysEvent::SettingsChanged);
     return res->send(200, "application/json", "{\"ok\":true}");
   });
 
