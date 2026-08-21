@@ -231,8 +231,11 @@ struct TarEntry {
   size_t size;
 };
 
-// Reads the next header from `tar`. Returns 1 entry, 0 clean end, -1 error.
+// Reads the next FILE entry header from `tar`, silently skipping directory
+// entries (tar -C dir . emits the "./" dir itself as typeflag '5').
+// Returns 1 entry, 0 clean end, -1 error.
 static int readHeader(File& tar, TarEntry& e, char* errBuf, size_t errLen) {
+ nextHeader:
   uint8_t h[512];
   if (tar.read(h, 512) != 512) {
     setErr(errBuf, errLen, "tar: truncated header");
@@ -267,7 +270,7 @@ static int readHeader(File& tar, TarEntry& e, char* errBuf, size_t errLen) {
     return -1;
   }
   char type = (char)h[156];
-  if (type != '0' && type != '\0') {
+  if (type != '0' && type != '\0' && type != '5') {
     setErr(errBuf, errLen, "tar: entry type '%c'", type ? type : '0');
     return -1;
   }
@@ -278,6 +281,14 @@ static int readHeader(File& tar, TarEntry& e, char* errBuf, size_t errLen) {
     if (c == ' ' || c == 0) break;
     if (c < '0' || c > '7') { setErr(errBuf, errLen, "tar: bad size"); return -1; }
     size = size * 8 + (c - '0');
+  }
+  if (type == '5') { // directory entry: skip its (normally zero) content
+    size_t pad = (512 - (size % 512)) % 512;
+    if (size + pad > 0 && !tar.seek(tar.position() + size + pad)) {
+      setErr(errBuf, errLen, "tar: truncated dir entry");
+      return -1;
+    }
+    goto nextHeader;
   }
   // Name: NUL-pad copy (the 100-byte field may legally lack a terminator);
   // strip a leading "./" from `tar -C dir .` style archives.
