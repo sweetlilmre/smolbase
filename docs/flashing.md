@@ -96,6 +96,22 @@ leaves the running firmware untouched.
 One update at a time: a second upload racing an in-flight one is refused with
 HTTP 409.
 
+**Self-update from GitHub releases.** The settings page's Update tab also
+pulls firmware straight from this repo's GitHub releases: **Check** compares
+the running version against the latest release tag (`GET /api/update/check`),
+and **Update** downloads and flashes it with live progress
+(`POST /api/update/github {"tag":"vX.Y.Z"}`, polled via
+`GET /api/update/ghprogress`). Under the hood a Core-0 task runs
+`esp_https_ota` against the release asset
+`<app>-firmware-<tag>.bin` — each app env pulls **its own** asset
+(`SMOLBASE_FW_ASSET_PREFIX` in `platformio.ini`), so a weatherclock device
+never flashes the smolbase image. Firmware only; the filesystem image still
+ships via `POST /api/update?target=fs`. A ~1.7 MB image takes ~25 s on a
+healthy WiFi link. One gap to know about: firmware **v0.3.1 and older**
+cannot verify GitHub's 2026 CDN certificate chain (RSA-4096 hardware limit,
+see ADR 0005) — those devices need one manual `POST /api/update` upload of a
+v0.3.2+ image, after which self-update works again.
+
 **Boot-loop guard.** A firmware that uploads fine but crashes at boot would
 otherwise boot-loop an OTA-only device with no way back in. So a freshly
 flashed image boots *unconfirmed*: the firmware marks itself good only after

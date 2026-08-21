@@ -77,9 +77,17 @@ copy the pattern in `platformio.ini`:
 ```ini
 [env:myapp]
 build_src_filter = +<*> -<app/> -<app-weather/> -<app-gcm/>
+build_flags =
+    ${env.build_flags}
+    ; GitHub self-update pulls this env's own release asset
+    ; (myapp-firmware-<tag>.bin); default is smolbase-firmware.
+    -DSMOLBASE_FW_ASSET_PREFIX=\"myapp-firmware\"
 ```
 
-put your code in `src/app-myapp/`, and build with `pio run -e myapp`. A bare
+put your code in `src/app-myapp/`, and build with `pio run -e myapp`. If you
+release through this repo's CI, add your env to the release step in
+`.github/workflows/build.yml` so a tag ships `myapp-firmware-<tag>.bin` +
+`myapp-littlefs-<tag>.bin` alongside the others. A bare
 `pio run` (and CI) builds **every** env, so no app in the repo can silently
 rot. `src/core/` and `src/main.cpp` always compile; only the app directory
 swaps.

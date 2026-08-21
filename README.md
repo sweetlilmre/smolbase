@@ -21,8 +21,10 @@ and a display stack already working — instead of a blank `setup()`.
 - **NTP + real timezones** — a curated IANA zone list (`html/zones.json`) maps
   to POSIX TZ strings applied with `setenv("TZ")/tzset()`, so DST just works.
 - **OTA updates, firmware and filesystem** — upload from the settings page or
-  `POST /api/update`; dual app partitions, never open the case after the first
-  flash (see [docs/flashing.md](docs/flashing.md)).
+  `POST /api/update`, or let the device **self-update from GitHub releases**
+  (check + one-click flash with progress, per-app release assets); dual app
+  partitions, never open the case after the first flash (see
+  [docs/flashing.md](docs/flashing.md)).
 - **LittleFS gzip assets** — `html/` is packed to gzip-only files at build time
   (`scripts/pack_fs.py`); PsychicHttp serves them with `Content-Encoding: gzip`.
 - **Touch** — the single capacitive pad (GPIO32) is boot-calibrated, debounced,
