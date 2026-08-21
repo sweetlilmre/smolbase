@@ -9,6 +9,7 @@
 // is captured first. Restart happens via Net::restartToApply() AFTER the
 // 200 response is sent (never mid-handler, per the arduino_ota example).
 #include "Ota.h"
+#include "AssetUpdate.h"
 #include "Events.h"
 #include "Net.h"
 #include <LittleFS.h>
@@ -43,6 +44,9 @@ void tickRollbackGuard() {
     esp_ota_mark_app_valid_cancel_rollback();
     Serial.println("[ota] image confirmed healthy after 30 s - rollback armed off");
   }
+  // The image is stable: an asset backup for a *different* version can never
+  // be needed again (only a rollback would want it, and rollback is off).
+  AssetUpdate::onImageConfirmed();
 }
 
 // One request at a time is guaranteed by the single httpd task (no

@@ -1,9 +1,14 @@
-# PlatformIO extra_script: assembles data/w/ from html/ as gzip-only assets.
-# Per-env overlay: the env's custom_app_html directory is merged on top of
-# html/ and takes precedence (same relative path = overlay wins). This lets
-# each app ship its own index.html without touching the shared base assets.
+# PlatformIO extra_script: assembles the env's data dir from html/ as
+# gzip-only assets. Per-env overlay: the env's custom_app_html directory is
+# merged on top of html/ and takes precedence (same relative path = overlay
+# wins). This lets each app ship its own index.html without touching the
+# shared base assets.
 # Only .gz copies ship: PsychicHttp auto-serves name.gz with the correct
 # content-encoding header when name is requested.
+# Each env packs into its OWN data dir (data-<env>/, PROJECT_DATA_DIR is
+# redirected below) so filesystem images and asset tars contain exactly that
+# env's files — the old shared data/ let one env's assets leak into another
+# env's image (wayfinder #124).
 # NB: keep the literal string "coding:"-like patterns out of the first two lines —
 # Python's PEP 263 encoding sniffer reads them and one comment here once broke the build.
 import gzip
@@ -14,7 +19,11 @@ Import("env")  # noqa: F821 — provided by SCons
 PROJECT  = Path(env["PROJECT_DIR"])  # noqa: F821
 BASE_SRC = PROJECT / "html"
 APP_SRC  = PROJECT / env.GetProjectOption("custom_app_html", "")  # noqa: F821
-DST      = PROJECT / "data" / "w"
+DATA_DIR = PROJECT / ("data-" + env["PIOENV"])  # noqa: F821
+DST      = DATA_DIR / "w"
+
+# Point the buildfs target at this env's data dir.
+env.Replace(PROJECT_DATA_DIR=str(DATA_DIR))  # noqa: F821
 
 
 def pack() -> None:
@@ -43,21 +52,12 @@ def pack() -> None:
         src_label = src_file.relative_to(PROJECT)
         print(f"packed {src_label} -> {out.relative_to(PROJECT)} ({out.stat().st_size} B)")
 
-    # Mirror-sync: data/ is gitignored and persists across checkouts, so a
+    # Mirror-sync: data dirs are gitignored and persist across checkouts, so a
     # deleted or renamed source file would otherwise keep shipping its stale
-    # .gz in every locally built filesystem image, forever.
-    # Build the union of files reachable from ALL app html dirs so that one
-    # env's prune pass doesn't delete a gz that belongs to a different env.
-    all_app_srcs = list(PROJECT.glob("src/app-*/html"))
-    union_expected = set(expected)
-    for app_src in all_app_srcs:
-        if app_src == APP_SRC:
-            continue
-        for f in app_src.rglob("*"):
-            if f.is_file():
-                union_expected.add(DST / f.relative_to(app_src).parent / (f.name + ".gz"))
+    # .gz in every locally built filesystem image, forever. The data dir is
+    # per-env, so anything not expected for THIS env is stale by definition.
     for old in DST.rglob("*.gz"):
-        if old not in union_expected:
+        if old not in expected:
             old.unlink()
             print(f"pruned stale {old.relative_to(PROJECT)}")
 

@@ -51,6 +51,15 @@ jobs:
       - name: Build filesystem images (all apps)
         run: pio run -t buildfs
 
+      # Deterministic ustar per env (docs/research/assets-tar-mechanics.md):
+      # stable bytes -> stable GitHub asset digest across rebuilds.
+      - name: Build asset tars
+        run: |
+          for app in smolbase weatherclock gcm; do
+            tar --format=ustar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner                 -cf ".pio/build/${app}/assets.tar" -C "data-${app}/w" .
+            tar -tvf ".pio/build/${app}/assets.tar"
+          done
+
       - name: Upload binaries
         uses: actions/upload-artifact@v7
         with:
@@ -58,6 +67,7 @@ jobs:
           path: |
             .pio/build/*/firmware.bin
             .pio/build/*/littlefs.bin
+            .pio/build/*/assets.tar
           retention-days: 14
 
       - name: Create GitHub release
@@ -70,7 +80,8 @@ jobs:
           for app in smolbase weatherclock gcm; do
             cp ".pio/build/${app}/firmware.bin" "${app}-firmware-${TAG}.bin"
             cp ".pio/build/${app}/littlefs.bin" "${app}-littlefs-${TAG}.bin"
-            assets+=("${app}-firmware-${TAG}.bin" "${app}-littlefs-${TAG}.bin")
+            cp ".pio/build/${app}/assets.tar" "${app}-assets-${TAG}.tar"
+            assets+=("${app}-firmware-${TAG}.bin" "${app}-littlefs-${TAG}.bin" "${app}-assets-${TAG}.tar")
           done
           gh release create "$TAG" "${assets[@]}" \
             --title "$TAG" \

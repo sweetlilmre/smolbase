@@ -480,8 +480,10 @@ function render() {
       setMsg(ghmsg, "");
       ghresult.hidden = false;
       if (j.upToDate) {
+        _ghTag = j.current; // same-tag POST = asset reinstall (no reboot)
         ghavail.textContent = "Already on the latest release (" + j.current + ").";
-        ghupdate.hidden = true;
+        ghupdate.textContent = "Reinstall assets";
+        ghupdate.hidden = false;
       } else {
         _ghTag = j.latest;
         ghavail.innerHTML = "<b>" + esc(j.latest) + "</b> is available — installed: " + esc(j.current);
@@ -496,6 +498,7 @@ function render() {
   ghupdate.addEventListener("click", async () => {
     if (!_ghTag) return;
     const tag = _ghTag;
+    const reinstall = (ghupdate.textContent === "Reinstall assets");
     ghupdate.disabled = true;
     ghcheck.disabled = true;
     setMsg(ghmsg, "");
@@ -524,23 +527,41 @@ function render() {
         try {
           const p = await (await fetch("/api/update/ghprogress")).json();
           if (p.state === "downloading") {
-            const pct = p.totalBytes > 0 ? Math.round(p.bytesWritten * 100 / p.totalBytes) : 0;
-            ghprogbar.value = pct;
-            ghproglbl.textContent = "Downloading firmware — " + pct + "%";
-            ghprogsub.textContent = p.totalBytes > 0
-              ? mb(p.bytesWritten) + " / " + mb(p.totalBytes)
-              : mb(p.bytesWritten) + " received";
+            if (p.phase === "assets") {
+              const pct = p.filesTotal > 0 ? Math.round(p.filesDone * 100 / p.filesTotal) : 0;
+              ghprogbar.value = pct;
+              ghproglbl.textContent = "Updating web assets — " +
+                (p.filesTotal > 0 ? p.filesDone + " / " + p.filesTotal + " files" : "downloading…");
+              ghprogsub.textContent = "";
+            } else {
+              const pct = p.totalBytes > 0 ? Math.round(p.bytesWritten * 100 / p.totalBytes) : 0;
+              ghprogbar.value = pct;
+              ghproglbl.textContent = "Downloading firmware — " + pct + "%";
+              ghprogsub.textContent = p.totalBytes > 0
+                ? mb(p.bytesWritten) + " / " + mb(p.totalBytes)
+                : mb(p.bytesWritten) + " received";
+            }
           } else if (p.state === "done") {
             clearInterval(poll);
             ghprogbar.value = 100;
-            ghproglbl.textContent = "Done — restarting…";
-            ghprogsub.textContent = "";
-            setTimeout(() => handoff(
-              "Updated to " + tag,
-              "The device is restarting with the new firmware.",
-              "Give it ~15 s, then reload.",
-              { label: "Reload this page", href: location.href }
-            ), 1000);
+            if (reinstall) {
+              ghproglbl.textContent = "Assets reinstalled.";
+              ghprogsub.textContent = "";
+              setMsg(ghmsg, "Web assets reinstalled — no restart needed.");
+              setTimeout(() => {
+                ghidle.hidden = false; ghflash.hidden = true;
+                ghupdate.disabled = false; ghcheck.disabled = false;
+              }, 1200);
+            } else {
+              ghproglbl.textContent = "Done — restarting…";
+              ghprogsub.textContent = "";
+              setTimeout(() => handoff(
+                "Updated to " + tag,
+                "The device is restarting with the new firmware and web assets.",
+                "Give it ~15 s, then reload.",
+                { label: "Reload this page", href: location.href }
+              ), 1000);
+            }
           } else if (p.state === "error") {
             clearInterval(poll);
             setMsg(ghmsg, "Update failed: " + (p.error || "unknown error"), true);

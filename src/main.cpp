@@ -4,6 +4,7 @@
 // samples touch, ticks the active screen, and runs the consumer app — nothing else.
 // Core 0 carries WiFi, the httpd task, and the AP-mode DNS pump.
 #include "core/AppHost.h"
+#include "core/AssetUpdate.h"
 #include "core/Clock.h"
 #include "core/ConfigStore.h"
 #include "core/Display.h"
@@ -47,6 +48,9 @@ void setup() {
   Serial.begin(115200);
   Events::begin();
   ConfigStore::begin();
+  // Heal /w before anything serves it: a /w.<ver> backup matching the running
+  // version means we were rolled back (or an update tore) — restore it (#122).
+  AssetUpdate::bootHeal();
   Display::begin();
   Display::setBrightness(ConfigStore::getInt("brightness")); // schema default
   Touch::begin();
