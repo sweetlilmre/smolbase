@@ -1,5 +1,7 @@
 # GhUpdate deep review — architecture, memory anatomy, leanness
 
+> **Outcome (2026-08-21):** the recommendations below fed decision [#117](https://github.com/sweetlilmre/smolbase/issues/117) and were implemented in [#118](https://github.com/sweetlilmre/smolbase/issues/118) — the pipeline moved to raw `esp_https_ota` on the deterministic release URL, so several findings below (header fragility, step-2 redirect codes, the streaming loop) describe code that no longer exists. Two late discoveries sharpened the picture: measurement showed the "flaky" GitHub connects were heap/fragmentation failures, and the field break of 2026-08 was the ESP32 RSA accelerator refusing the new chain's RSA-4096 cross-sign verify (no software fallback in the precompiled libs) — see [#119](https://github.com/sweetlilmre/smolbase/issues/119).
+
 Wayfinder ticket [#113](https://github.com/sweetlilmre/smolbase/issues/113), map [#112](https://github.com/sweetlilmre/smolbase/issues/112). Code under review: `src/core/GhUpdate.{h,cpp}` at commit `2c3599b`, plus its touchpoints (`src/main.cpp:74`, `src/core/Web.cpp:303`, `html/settings.html` GitHub-update section). Companion background: `ghupdate-mission-notes.md` (repo root). This is a code-reading review with a few empirical HTTP checks; on-device numbers are ticket #116's job.
 
 ## Summary of findings
