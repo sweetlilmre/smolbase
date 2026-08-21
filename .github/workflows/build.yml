@@ -26,6 +26,22 @@ jobs:
           path: ~/.platformio
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
 
+      # The hybrid compile (custom_sdkconfig in platformio.ini) rebuilds the
+      # IDF static libs into .pio/build/<env>/esp-idf on the first build
+      # (~15+ min) and skips the rebuild when the hash stamped into
+      # sdkconfig.defaults matches. Cache that state so CI pays the rebuild
+      # once per platformio.ini change, not per run. (.pio also carries
+      # libdeps and the build_cache_dir object cache.) If a build ever looks
+      # stale after a toolchain change, bump the key prefix to bust this.
+      - name: Cache project build state (hybrid IDF libs, libdeps)
+        uses: actions/cache@v4
+        with:
+          path: |
+            .pio
+            sdkconfig.defaults
+            managed_components
+          key: idf-hybrid-v1-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+
       - name: Install PlatformIO Core
         run: pip install platformio
 
