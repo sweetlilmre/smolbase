@@ -135,6 +135,16 @@ static bool downloadImpl(const char* tag) {
     return failOta(m);
   AssetUpdate::sweepStaleStaging();
 
+  // Tar BEFORE firmware: the esp_https_ota handle keeps its HTTP client and
+  // TLS buffers alive until finish/abort, and two TLS contexts never fit on
+  // this heap (#119). Downloading the tar first means its session is fully
+  // closed before the OTA session opens; the fs is still only mutated after
+  // both downloads are complete and verified.
+  strlcpy(s_progress.phase, "assets", sizeof(s_progress.phase));
+  s_progress.state = Progress::Downloading;
+  if (!AssetUpdate::downloadTar(tag, digest, m, sizeof(m)))
+    return failOta(m);
+
   esp_https_ota_handle_t handle = nullptr;
 
   if (!sameVer) {
@@ -171,6 +181,7 @@ static bool downloadImpl(const char* tag) {
     if (err != ESP_OK) {
       snprintf(m, sizeof(m), "begin: %s (heap=%u max=%u)",
                esp_err_to_name(err), ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+      AssetUpdate::sweepStaleStaging();
       return failOta(m);
     }
 
@@ -189,22 +200,18 @@ static bool downloadImpl(const char* tag) {
       snprintf(m, sizeof(m), "perform: %s at %u/%u", esp_err_to_name(err),
                (unsigned)s_progress.bytesWritten, (unsigned)s_progress.totalBytes);
       esp_https_ota_abort(handle);
+      AssetUpdate::sweepStaleStaging();
       return failOta(m);
     }
     if (!esp_https_ota_is_complete_data_received(handle)) {
       esp_https_ota_abort(handle);
+      AssetUpdate::sweepStaleStaging();
       return failOta("incomplete download");
     }
     // Firmware fully staged — NOT finalized until the assets are in place.
   }
 
   strlcpy(s_progress.phase, "assets", sizeof(s_progress.phase));
-  s_progress.state = Progress::Downloading;
-
-  if (!AssetUpdate::downloadTar(tag, digest, m, sizeof(m))) {
-    if (handle) esp_https_ota_abort(handle); // device stays fully on the old version
-    return failOta(m);
-  }
 
   if (sameVer) {
     if (!AssetUpdate::applyTarInPlace(assetProgress, m, sizeof(m)))
