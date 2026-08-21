@@ -4,7 +4,7 @@ Wayfinder maps live on GitHub Issues, label `wayfinder:map`:
 
 - [Smolbase — MVP template firmware for the Small TV Pro (#1)](https://github.com/sweetlilmre/smolbase/issues/1) — complete.
 - [Weather Clock — port the SmolTV-Pro weather dashboard as a second App (#63)](https://github.com/sweetlilmre/smolbase/issues/63) — complete (merged via PR #79); field-finding follow-ups #77/#78/#80 remain open as ordinary tickets.
-- [OTA self-update from GitHub releases (#106)](https://github.com/sweetlilmre/smolbase/issues/106) — feature shipped (firmware-only); map still open.
+- [OTA self-update from GitHub releases (#106)](https://github.com/sweetlilmre/smolbase/issues/106) — complete: firmware-only initially; finished off by maps #112/#121 (closed 2026-08-21).
 - [GhUpdate deep review & memory optimization (#112)](https://github.com/sweetlilmre/smolbase/issues/112) — complete (merged via PR #120): esp_https_ota rewrite, hybrid-compile software-MPI/TLS-buffer fixes, per-env release assets; verified on-device.
 - [Incremental filesystem updates over GitHub OTA (#121)](https://github.com/sweetlilmre/smolbase/issues/121) — complete (merged via PR #125): staged-tar asset updates verified on-device incl. rollback restore; settings survive.
 
