@@ -12,16 +12,16 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: platformio.ini
 
       - name: Cache PlatformIO packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.platformio
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
@@ -34,7 +34,7 @@ jobs:
       # libdeps and the build_cache_dir object cache.) If a build ever looks
       # stale after a toolchain change, bump the key prefix to bust this.
       - name: Cache project build state (hybrid IDF libs, libdeps)
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             .pio
@@ -52,7 +52,7 @@ jobs:
         run: pio run -e smolbase -t buildfs
 
       - name: Upload binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: smolbase-binaries
           path: |
