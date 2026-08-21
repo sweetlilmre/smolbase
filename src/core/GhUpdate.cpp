@@ -19,6 +19,7 @@
 // (heap plateau) before any TLS work, and only one TLS context ever lives at
 // a time (esp_https_ota owns a single client through the redirect).
 #include "GhUpdate.h"
+#include "AssetUpdate.h"
 #include "Events.h"
 #include "Net.h"
 #include "smolbase_config.h"
@@ -55,7 +56,10 @@ struct Progress {
   volatile State  state        = Idle;
   volatile size_t bytesWritten = 0;
   volatile size_t totalBytes   = 0;
-  char            errorMsg[80] = {};
+  volatile int    filesDone    = 0;
+  volatile int    filesTotal   = 0;
+  char            phase[10]    = {};   // "firmware" | "assets"
+  char            errorMsg[96] = {};
 };
 static Progress s_progress;
 static volatile bool s_inFlight = false;
@@ -108,86 +112,134 @@ static void waitForHeapPlateau() {
 }
 
 // All network + flash work; plain function so locals unwind before vTaskDelete.
+// Full-flow design: wayfinder #122 (staged tar, version-named /w backup).
+static void assetProgress(int done, int total) {
+  s_progress.filesDone  = done;
+  s_progress.filesTotal = total;
+}
+
+static bool s_rebootAfter = false;
+
 static bool downloadImpl(const char* tag) {
   waitForHeapPlateau();
 
-  char url[160];
-  snprintf(url, sizeof(url), "https://github.com/%s/releases/download/%s/%s-%s.bin",
-           GH_REPO, tag, GH_FW_PREFIX, tag);
-  Serial.printf("[ghupdate] pulling %s (heap=%u)\n", url, ESP.getFreeHeap());
+  // Same-tag POST = asset reinstall: skip the firmware stage entirely.
+  bool sameVer = (tag[0] == 'v' && strcmp(tag + 1, SMOLBASE_FW_VERSION) == 0);
+  s_rebootAfter = !sameVer;
+  char m[96];
 
-  esp_http_client_config_t http = {};
-  http.url               = url;
-  http.crt_bundle_attach = esp_crt_bundle_attach;
-  http.timeout_ms        = 30000;
-  http.buffer_size       = 4096; // rx buffer; doubles as the OTA upgrade buffer size
-  http.buffer_size_tx    = 2048; // request line must fit the ~1.2 KB CDN redirect URL
-
-  esp_https_ota_config_t ota = {};
-  ota.http_config         = &http;
-  ota.http_client_init_cb = httpClientInitCb;
-  // partial_http_download stays off: its HEAD preflight dies on the 302.
-
-  // A user-initiated OTA implies the running image is functional (it booted,
-  // joined WiFi, and served the UI), so confirm it if the #76 rollback guard
-  // hasn't yet — esp_ota_begin refuses to start while PENDING_VERIFY.
-  const esp_partition_t* running = esp_ota_get_running_partition();
-  esp_ota_img_states_t imgState;
-  if (esp_ota_get_state_partition(running, &imgState) == ESP_OK &&
-      imgState == ESP_OTA_IMG_PENDING_VERIFY) {
-    esp_ota_mark_app_valid_cancel_rollback();
-  }
+  // The release's asset digest gates the tar's content integrity; fetch it
+  // first (one small TLS session, closed before anything else opens).
+  char digest[65];
+  if (!AssetUpdate::fetchAssetDigest(tag, digest, sizeof(digest), m, sizeof(m)))
+    return failOta(m);
+  AssetUpdate::sweepStaleStaging();
 
   esp_https_ota_handle_t handle = nullptr;
-  esp_err_t err = esp_https_ota_begin(&ota, &handle);
-  if (err != ESP_OK) {
-    char m[80];
-    snprintf(m, sizeof(m), "begin: %s (heap=%u max=%u)",
-             esp_err_to_name(err), ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-    return failOta(m);
-  }
 
-  int total = esp_https_ota_get_image_size(handle);
-  s_progress.totalBytes = total > 0 ? (size_t)total : 0;
-  s_progress.state      = Progress::Downloading;
+  if (!sameVer) {
+    strlcpy(s_progress.phase, "firmware", sizeof(s_progress.phase));
 
-  while ((err = esp_https_ota_perform(handle)) == ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
+    char url[160];
+    snprintf(url, sizeof(url), "https://github.com/%s/releases/download/%s/%s-%s.bin",
+             GH_REPO, tag, GH_FW_PREFIX, tag);
+    Serial.printf("[ghupdate] pulling %s (heap=%u)\n", url, ESP.getFreeHeap());
+
+    esp_http_client_config_t http = {};
+    http.url               = url;
+    http.crt_bundle_attach = esp_crt_bundle_attach;
+    http.timeout_ms        = 30000;
+    http.buffer_size       = 4096; // rx buffer; doubles as the OTA upgrade buffer size
+    http.buffer_size_tx    = 2048; // request line must fit the ~1.2 KB CDN redirect URL
+
+    esp_https_ota_config_t ota = {};
+    ota.http_config         = &http;
+    ota.http_client_init_cb = httpClientInitCb;
+    // partial_http_download stays off: its HEAD preflight dies on the 302.
+
+    // A user-initiated OTA implies the running image is functional (it booted,
+    // joined WiFi, and served the UI), so confirm it if the #76 rollback guard
+    // hasn't yet — esp_ota_begin refuses to start while PENDING_VERIFY.
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    esp_ota_img_states_t imgState;
+    if (esp_ota_get_state_partition(running, &imgState) == ESP_OK &&
+        imgState == ESP_OTA_IMG_PENDING_VERIFY) {
+      esp_ota_mark_app_valid_cancel_rollback();
+    }
+
+    esp_err_t err = esp_https_ota_begin(&ota, &handle);
+    if (err != ESP_OK) {
+      snprintf(m, sizeof(m), "begin: %s (heap=%u max=%u)",
+               esp_err_to_name(err), ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+      return failOta(m);
+    }
+
+    int total = esp_https_ota_get_image_size(handle);
+    s_progress.totalBytes = total > 0 ? (size_t)total : 0;
+    s_progress.state      = Progress::Downloading;
+
+    while ((err = esp_https_ota_perform(handle)) == ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
+      int got = esp_https_ota_get_image_len_read(handle);
+      if (got >= 0) s_progress.bytesWritten = (size_t)got;
+    }
     int got = esp_https_ota_get_image_len_read(handle);
     if (got >= 0) s_progress.bytesWritten = (size_t)got;
-  }
-  int got = esp_https_ota_get_image_len_read(handle);
-  if (got >= 0) s_progress.bytesWritten = (size_t)got;
 
-  if (err != ESP_OK) {
-    char m[80];
-    snprintf(m, sizeof(m), "perform: %s at %u/%u", esp_err_to_name(err),
-             (unsigned)s_progress.bytesWritten, (unsigned)s_progress.totalBytes);
-    esp_https_ota_abort(handle);
+    if (err != ESP_OK) {
+      snprintf(m, sizeof(m), "perform: %s at %u/%u", esp_err_to_name(err),
+               (unsigned)s_progress.bytesWritten, (unsigned)s_progress.totalBytes);
+      esp_https_ota_abort(handle);
+      return failOta(m);
+    }
+    if (!esp_https_ota_is_complete_data_received(handle)) {
+      esp_https_ota_abort(handle);
+      return failOta("incomplete download");
+    }
+    // Firmware fully staged — NOT finalized until the assets are in place.
+  }
+
+  strlcpy(s_progress.phase, "assets", sizeof(s_progress.phase));
+  s_progress.state = Progress::Downloading;
+
+  if (!AssetUpdate::downloadTar(tag, digest, m, sizeof(m))) {
+    if (handle) esp_https_ota_abort(handle); // device stays fully on the old version
     return failOta(m);
   }
-  if (!esp_https_ota_is_complete_data_received(handle)) {
-    esp_https_ota_abort(handle);
-    return failOta("incomplete download");
+
+  if (sameVer) {
+    if (!AssetUpdate::applyTarInPlace(assetProgress, m, sizeof(m)))
+      return failOta(m);
+    Serial.println("[ghupdate] assets reinstalled");
+    return true; // no reboot: firmware unchanged
   }
 
-  err = esp_https_ota_finish(handle); // validates and switches the boot partition
+  if (!AssetUpdate::applyTarWithBackup(assetProgress, m, sizeof(m))) {
+    esp_https_ota_abort(handle); // /w already restored by applyTarWithBackup
+    return failOta(m);
+  }
+
+  esp_err_t err = esp_https_ota_finish(handle); // validates and switches the boot partition
   if (err != ESP_OK) {
-    char m[80];
+    // Old firmware keeps running: undo the asset swap now rather than at boot.
+    AssetUpdate::bootHeal();
     snprintf(m, sizeof(m), "finish: %s", esp_err_to_name(err));
     return failOta(m);
   }
 
-  Serial.printf("[ghupdate] flashed %u bytes\n", (unsigned)s_progress.bytesWritten);
+  Serial.printf("[ghupdate] flashed %u bytes + %d asset files\n",
+                (unsigned)s_progress.bytesWritten, s_progress.filesDone);
   return true;
 }
 
 static void downloadTask(void* arg) {
   if (downloadImpl(static_cast<const char*>(arg))) {
-    Serial.println("[ghupdate] done — restarting");
     s_progress.state = Progress::Done;
     s_inFlight = false;
-    vTaskDelay(pdMS_TO_TICKS(3000)); // let the settings page poll the final "done"
-    Net::restartToApply();
+    if (s_rebootAfter) {
+      Serial.println("[ghupdate] done - restarting");
+      vTaskDelay(pdMS_TO_TICKS(3000)); // let the settings page poll the final "done"
+      Net::restartToApply();
+    }
   }
   // On failure, failOta() already set state/errorMsg and cleared s_inFlight.
   vTaskDelete(nullptr);
@@ -209,12 +261,16 @@ void registerRoutes(PsychicHttpServer& server) {
 
   server.on("/api/update/ghprogress", HTTP_GET, [](PsychicRequest*, PsychicResponse* res) {
     static const char* const STATES[] = { "idle", "downloading", "done", "error" };
-    char buf[200];
+    char buf[280];
     snprintf(buf, sizeof(buf),
-             "{\"state\":\"%s\",\"bytesWritten\":%u,\"totalBytes\":%u,\"error\":\"%s\"}",
+             "{\"state\":\"%s\",\"phase\":\"%s\",\"bytesWritten\":%u,\"totalBytes\":%u,"
+             "\"filesDone\":%d,\"filesTotal\":%d,\"error\":\"%s\"}",
              STATES[(int)s_progress.state],
+             s_progress.phase,
              (unsigned)s_progress.bytesWritten,
              (unsigned)s_progress.totalBytes,
+             s_progress.filesDone,
+             s_progress.filesTotal,
              s_progress.errorMsg);
     return res->send(200, "application/json", buf);
   });
