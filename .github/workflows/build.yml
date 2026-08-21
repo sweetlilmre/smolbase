@@ -54,10 +54,10 @@ jobs:
       - name: Upload binaries
         uses: actions/upload-artifact@v7
         with:
-          name: smolbase-binaries
+          name: firmware-binaries
           path: |
-            .pio/build/smolbase/firmware.bin
-            .pio/build/smolbase/littlefs.bin
+            .pio/build/*/firmware.bin
+            .pio/build/*/littlefs.bin
           retention-days: 14
 
       - name: Create GitHub release
@@ -66,10 +66,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG=${GITHUB_REF#refs/tags/}
-          cp .pio/build/smolbase/firmware.bin smolbase-firmware-${TAG}.bin
-          cp .pio/build/smolbase/littlefs.bin smolbase-littlefs-${TAG}.bin
-          gh release create "$TAG" \
-            "smolbase-firmware-${TAG}.bin" \
-            "smolbase-littlefs-${TAG}.bin" \
+          assets=()
+          for app in smolbase weatherclock gcm; do
+            cp ".pio/build/${app}/firmware.bin" "${app}-firmware-${TAG}.bin"
+            cp ".pio/build/${app}/littlefs.bin" "${app}-littlefs-${TAG}.bin"
+            assets+=("${app}-firmware-${TAG}.bin" "${app}-littlefs-${TAG}.bin")
+          done
+          gh release create "$TAG" "${assets[@]}" \
             --title "$TAG" \
             --generate-notes

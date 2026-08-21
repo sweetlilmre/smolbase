@@ -33,8 +33,15 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
-static const char* const GH_REPO      = "sweetlilmre/smolbase";
-static const char* const GH_FW_PREFIX = "smolbase-firmware";
+static const char* const GH_REPO = "sweetlilmre/smolbase";
+
+// Release asset this build self-updates from: <prefix>-<tag>.bin. Each env
+// overrides via build_flags so a weatherclock device never flashes the
+// smolbase image (CI ships one firmware/littlefs pair per env).
+#ifndef SMOLBASE_FW_ASSET_PREFIX
+#define SMOLBASE_FW_ASSET_PREFIX "smolbase-firmware"
+#endif
+static const char* const GH_FW_PREFIX = SMOLBASE_FW_ASSET_PREFIX;
 
 namespace GhUpdate {
 
