@@ -105,9 +105,23 @@ and **Update** downloads and flashes it with live progress
 `esp_https_ota` against the release asset
 `<app>-firmware-<tag>.bin` — each app env pulls **its own** asset
 (`SMOLBASE_FW_ASSET_PREFIX` in `platformio.ini`), so a weatherclock device
-never flashes the smolbase image. Firmware only; the filesystem image still
-ships via `POST /api/update?target=fs`. A ~1.7 MB image takes ~25 s on a
-healthy WiFi link. One gap to know about: firmware **v0.3.1 and older**
+never flashes the smolbase image. A ~1.7 MB image takes ~25 s on a healthy
+WiFi link.
+
+The self-update also carries the **web assets**: the release ships an
+`<app>-assets-<tag>.tar` (the complete gzipped `/w/` set, ~30 KB) which the
+device downloads first — verified against GitHub's per-asset sha256 digest —
+then renames `/w` to a version-named backup and extracts before the firmware
+is finalized, so firmware and assets land together in the one reboot.
+`/config/settings.json` is never touched: **settings survive a self-update**
+(only the full-image `?target=fs` flash resets them). Every failure or
+rollback permutation heals itself: an interrupted update restores the exact
+old asset set at boot, and the backup is discarded once the new image
+survives the 30 s guard. When already up to date, the Update tab offers
+**Reinstall assets** — same tar, applied in place, no reboot. Design and
+verification: wayfinder maps #112/#121, `docs/research/assets-tar-mechanics.md`.
+
+One gap to know about: firmware **v0.3.1 and older**
 cannot verify GitHub's 2026 CDN certificate chain (RSA-4096 hardware limit,
 see ADR 0005) — those devices need one manual `POST /api/update` upload of a
 v0.3.2+ image, after which self-update works again.
