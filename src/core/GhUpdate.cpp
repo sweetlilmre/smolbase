@@ -22,6 +22,7 @@
 #include "AssetUpdate.h"
 #include "Events.h"
 #include "Net.h"
+#include "Platform.h"
 #include "smolbase_config.h"
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
@@ -101,13 +102,13 @@ static esp_err_t httpClientInitCb(esp_http_client_handle_t h) {
 // Wait for the OtaStarting suspension to free the app's memory before TLS:
 // heap must be stable for 500 ms (or 3 s cap). Worth ~15 KB at the handshake.
 static void waitForHeapPlateau() {
-  uint32_t t0 = millis(), stableSince = millis();
-  uint32_t last = ESP.getFreeHeap();
-  while (millis() - t0 < 3000) {
+  uint32_t t0 = Platform::millis(), stableSince = Platform::millis();
+  uint32_t last = Platform::freeHeap();
+  while (Platform::millis() - t0 < 3000) {
     vTaskDelay(pdMS_TO_TICKS(100));
-    uint32_t now = ESP.getFreeHeap();
-    if (now > last + 1024) { last = now; stableSince = millis(); }
-    else if (millis() - stableSince >= 500) break;
+    uint32_t now = Platform::freeHeap();
+    if (now > last + 1024) { last = now; stableSince = Platform::millis(); }
+    else if (Platform::millis() - stableSince >= 500) break;
   }
 }
 
@@ -153,7 +154,7 @@ static bool downloadImpl(const char* tag) {
     char url[160];
     snprintf(url, sizeof(url), "https://github.com/%s/releases/download/%s/%s-%s.bin",
              GH_REPO, tag, GH_FW_PREFIX, tag);
-    Serial.printf("[ghupdate] pulling %s (heap=%u)\n", url, ESP.getFreeHeap());
+    Serial.printf("[ghupdate] pulling %s (heap=%u)\n", url, Platform::freeHeap());
 
     esp_http_client_config_t http = {};
     http.url               = url;
@@ -180,7 +181,7 @@ static bool downloadImpl(const char* tag) {
     esp_err_t err = esp_https_ota_begin(&ota, &handle);
     if (err != ESP_OK) {
       snprintf(m, sizeof(m), "begin: %s (heap=%u max=%u)",
-               esp_err_to_name(err), ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+               esp_err_to_name(err), Platform::freeHeap(), Platform::largestFreeBlock());
       AssetUpdate::sweepStaleStaging();
       return failOta(m);
     }

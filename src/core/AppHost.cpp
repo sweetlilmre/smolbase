@@ -1,4 +1,5 @@
 #include "AppHost.h"
+#include "Platform.h"
 #include "smolbase_config.h"
 #include <Arduino.h>
 
@@ -13,9 +14,9 @@ void setup() { app().setup(); }
 
 void loop() {
 #ifdef SMOLBASE_DEBUG
-  uint32_t t0 = millis();
+  uint32_t t0 = Platform::millis();
   app().loop();
-  uint32_t dt = millis() - t0;
+  uint32_t dt = Platform::millis() - t0;
   if (dt > SMOLBASE_LOOP_BUDGET_MS)
     Serial.printf("[smolbase] app.loop() took %lu ms (budget %d ms)\n", dt, SMOLBASE_LOOP_BUDGET_MS);
 #else

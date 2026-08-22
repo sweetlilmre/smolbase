@@ -1,5 +1,6 @@
 #include "Touch.h"
 #include "Display.h"
+#include "Platform.h"
 #include "smolbase_config.h"
 #include <Arduino.h>
 
@@ -22,7 +23,7 @@ void begin() {
   uint32_t sum = 0;
   for (int i = 0; i < SMOLBASE_TOUCH_CAL_SAMPLES; ++i) {
     sum += touchRead(SMOLBASE_PIN_TOUCH);
-    delay(2);
+    Platform::delayMs(2);
   }
   uint16_t baseline = sum / SMOLBASE_TOUCH_CAL_SAMPLES;
 
@@ -37,7 +38,7 @@ void begin() {
 }
 
 void loop() {
-  uint32_t now = millis();
+  uint32_t now = Platform::millis();
   bool raw = touchRead(SMOLBASE_PIN_TOUCH) < threshold;
 
   // Track how long the raw state has been stable.

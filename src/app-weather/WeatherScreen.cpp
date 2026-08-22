@@ -11,6 +11,7 @@
 #include "WeatherScreen.h"
 #include "../core/ConfigStore.h"
 #include "../core/Net.h"
+#include "../core/Platform.h"
 #include "WeatherData.h"
 #include "WeatherKeys.h"
 #include "assets/wx_assets.h"
@@ -157,19 +158,19 @@ void WeatherScreen::onEnter(lgfx::LGFX_Device& gfx) {
   gfx.fillScreen(col(COL_BLACK));
   weatherDirty = true;
   lastSec = lastDay = -1;
-  lastScrollMs = millis();
+  lastScrollMs = Platform::millis();
 }
 
 void WeatherScreen::onTap() { WeatherData::forceRefresh(); }
 
 void WeatherScreen::onLongPress() {
-  overlayUntilMs = millis() + OVERLAY_MS;
+  overlayUntilMs = Platform::millis() + OVERLAY_MS;
   overlayDirty = true;
 }
 
 void WeatherScreen::tick(lgfx::LGFX_Device& gfx) {
   if (parked) return;
-  uint32_t now = millis();
+  uint32_t now = Platform::millis();
 
   if (weatherDirty) {
     weatherDirty = false;

@@ -2,6 +2,7 @@
 #include "ConfigStore.h"
 #include "Events.h"
 #include "Net.h"
+#include "Platform.h"
 #include "smolbase_config.h"
 #include <Arduino.h>
 #include <atomic>
@@ -88,7 +89,7 @@ void loop() {
     waitMs = 0;
     return;
   }
-  uint32_t now = millis();
+  uint32_t now = Platform::millis();
   if (waitMs == 0) {
     waitMs = now;
     return;

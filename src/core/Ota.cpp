@@ -12,6 +12,7 @@
 #include "AssetUpdate.h"
 #include "Events.h"
 #include "Net.h"
+#include "Platform.h"
 #include <LittleFS.h>
 #include <PsychicHttp.h>
 #include <Update.h>
@@ -37,7 +38,7 @@ static constexpr uint32_t CONFIRM_UPTIME_MS = 30000;
 void tickRollbackGuard() {
   static bool done = false;
   if (done) return;
-  if (millis() < CONFIRM_UPTIME_MS) return;
+  if (Platform::millis() < CONFIRM_UPTIME_MS) return;
 
   const esp_partition_t* running = esp_ota_get_running_partition();
   esp_ota_img_states_t state;
@@ -177,7 +178,7 @@ static esp_err_t onUploadDone(PsychicRequest*, PsychicResponse* res) {
   switch (s_outcome) {
     case Outcome::Ok: {
       esp_err_t r = res->send(200, "application/json", "{\"ok\":true,\"restarting\":true}");
-      Net::restartToApply(); // flushes the response, then ESP.restart(); no return
+      Net::restartToApply(); // flushes the response, then Platform::restart(); no return
       return r;
     }
     case Outcome::Rejected:

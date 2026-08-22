@@ -4,6 +4,7 @@
 // every second. Everything else redraws on data change only.
 #include "GcmScreen.h"
 #include "../core/Net.h"
+#include "../core/Platform.h"
 #include "smolbase_config.h"
 #include <cstdio>
 
@@ -147,12 +148,12 @@ void GcmScreen::onEnter(lgfx::LGFX_Device& gfx) {
 }
 
 void GcmScreen::onLongPress() {
-    overlayUntilMs_ = millis() + OVERLAY_MS;
+    overlayUntilMs_ = Platform::millis() + OVERLAY_MS;
     overlayDirty_   = true;
 }
 
 void GcmScreen::tick(lgfx::LGFX_Device& gfx) {
-    uint32_t now = millis();
+    uint32_t now = Platform::millis();
 
     // Overlay: show on request; on expiry, force a full normal repaint.
     if (overlayDirty_) {
@@ -260,7 +261,7 @@ void GcmScreen::drawSpark(lgfx::LovyanGFX& gfx) {
 
 void GcmScreen::drawTimestamp(lgfx::LovyanGFX& gfx) {
     if (!data.lastOkMs) return;
-    uint32_t ago = (millis() - data.lastOkMs) / 1000;
+    uint32_t ago = (Platform::millis() - data.lastOkMs) / 1000;
     char buf[12];
     if (ago < 3600) snprintf(buf, sizeof(buf), "%lus", (unsigned long)ago);
     else            snprintf(buf, sizeof(buf), "%lum", (unsigned long)(ago / 60));

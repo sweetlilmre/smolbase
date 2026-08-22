@@ -1,5 +1,6 @@
 #include "SystemScreens.h"
 #include "Net.h"
+#include "Platform.h"
 #include "smolbase_config.h"
 
 namespace {
@@ -107,7 +108,7 @@ void WifiJoinScreen::onEnter(lgfx::LGFX_Device& d) {
 // shrinks, so there is nothing to erase), and the countdown line is the one
 // place that clears itself before redrawing — 20 rows at 5 Hz.
 void WifiJoinScreen::tick(lgfx::LGFX_Device& d) {
-  const uint32_t now = millis();
+  const uint32_t now = Platform::millis();
   if (lastPaintMs && now - lastPaintMs < PAINT_MS) return;
   lastPaintMs = now;
 

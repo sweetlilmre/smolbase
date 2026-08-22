@@ -1,6 +1,7 @@
 #include "Net.h"
 #include "ConfigStore.h"
 #include "Events.h"
+#include "Platform.h"
 #include "smolbase_config.h"
 #include <ESPmDNS.h>
 #include <Preferences.h>
@@ -31,7 +32,7 @@ String ssid() { return isUp() ? WiFi.SSID() : String(""); }
 // joined is remembered from begin()'s credential load instead.
 bool isJoining() { return state.load() == State::Connecting; }
 String joiningSsid() { return isJoining() ? joinSsid : String(""); }
-uint32_t joinElapsedMs() { return isJoining() ? millis() - connectStart : 0; }
+uint32_t joinElapsedMs() { return isJoining() ? Platform::millis() - connectStart : 0; }
 
 // mDNS labels: lowercase alnum + dash, no leading/trailing dash, keep it short.
 static String sanitizeHostname(const String& raw) {
@@ -88,8 +89,8 @@ void restartToApply() {
   // but a phone in power-save on a flaky AP link needs an RTO retransmission
   // (~1 s) to actually receive it. Blocking the httpd task here is fine — the
   // device is about to reboot anyway.
-  delay(1500);
-  ESP.restart();
+  Platform::delayMs(1500);
+  Platform::restart();
 }
 
 static void startAp() {
@@ -178,11 +179,11 @@ void begin() {
   WiFi.setAutoReconnect(true);
   WiFi.begin(ssid.c_str(), pass.c_str());
   state.store(State::Connecting);
-  connectStart = millis();
+  connectStart = Platform::millis();
 }
 
 void loop() {
-  if (state.load() == State::Connecting && millis() - connectStart > SMOLBASE_CONNECT_TIMEOUT_MS) {
+  if (state.load() == State::Connecting && Platform::millis() - connectStart > SMOLBASE_CONNECT_TIMEOUT_MS) {
     // Boot-time fallback only: the stored network never answered. CAS parks the
     // state so a GOT_IP landing at this exact moment wins the race cleanly
     // (we see Sta and skip the teardown) instead of being overwritten.
@@ -201,8 +202,8 @@ void loop() {
     MDNS.end();
     mdnsUp = false;
   }
-  if (!mdnsUp && up && millis() - mdnsLastTry > 1000) {
-    mdnsLastTry = millis();
+  if (!mdnsUp && up && Platform::millis() - mdnsLastTry > 1000) {
+    mdnsLastTry = Platform::millis();
     MDNS.end(); // safe when not started; clears any half-dead responder
     if (MDNS.begin(name.c_str())) {
       MDNS.addService("http", "tcp", 80);

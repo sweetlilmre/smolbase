@@ -19,6 +19,7 @@
 #include "Net.h"
 #include "GhUpdate.h"
 #include "Ota.h"
+#include "Platform.h"
 #include "Secrets.h"
 #include "smolbase_config.h"
 #include <ArduinoJson.h>
@@ -129,8 +130,8 @@ void begin(App& app) {
     doc["ip"] = Net::ip().toString();
     doc["apMode"] = Net::inApMode();
     doc["fwVersion"] = SMOLBASE_FW_VERSION;
-    doc["uptimeS"] = millis() / 1000;
-    doc["heapFree"] = ESP.getFreeHeap();
+    doc["uptimeS"] = Platform::millis() / 1000;
+    doc["heapFree"] = Platform::freeHeap();
     doc["timeSynced"] = Clock::isSynced(); // observability for SNTP stalls (#38)
     if (Net::isUp()) {
       doc["rssi"] = Net::rssi();
@@ -163,7 +164,7 @@ void begin(App& app) {
                        "{\"error\":\"failed to store credentials (NVS full?)\"}");
     }
     esp_err_t r = res->send(200, "application/json", "{\"ok\":true,\"restarting\":true}");
-    Net::restartToApply(); // flushes the response, then ESP.restart(); no return
+    Net::restartToApply(); // flushes the response, then Platform::restart(); no return
     return r;
   });
 

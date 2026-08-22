@@ -5,6 +5,7 @@
 #include "../core/Clock.h"
 #include "../core/ConfigStore.h"
 #include "../core/Net.h"
+#include "../core/Platform.h"
 #include "effects/BoingEffect.h"
 #include "effects/Effect.h"
 #include "effects/FireEffect.h"
@@ -101,10 +102,10 @@ void DemoScreen::select(int i, lgfx::LGFX_Sprite& f) {
     if (need != 0) i = CALM_IDX; // wanted memory, could not have it
     fx::releaseScratch();
   }
-  if (entered && i != idx) nameShownMs = millis(); // announce, but not at boot
+  if (entered && i != idx) nameShownMs = Platform::millis(); // announce, but not at boot
   idx = i;
   entered = true;
-  lastFrameMs = millis();
+  lastFrameMs = Platform::millis();
   lastMinute = -1; // force the calm clock to repaint if that is what we landed on
   if (ROSTER[idx].fx) ROSTER[idx].fx->enter(f);
 }
@@ -178,7 +179,7 @@ void DemoScreen::drawIdentity(lgfx::LGFX_Sprite& f) {
                fx::UI_TEXT + 4);
   // "Now showing": one long press is the only way to discover the roster on a
   // device with a single touch pad, so it says what it just switched to.
-  if (nameShownMs && millis() - nameShownMs < NAME_MS)
+  if (nameShownMs && Platform::millis() - nameShownMs < NAME_MS)
     shadowString(f, ROSTER[idx].label, 120, 216, IDX_WHITE);
 }
 
@@ -205,7 +206,7 @@ void DemoScreen::onExit() {
 void DemoScreen::tick(lgfx::LGFX_Device&) {
   auto& f = Display::frame();
   if (entered && ROSTER[idx].fx) {
-    const uint32_t now = millis();
+    const uint32_t now = Platform::millis();
     if (now - lastFrameMs < FRAME_MS) return;
     lastFrameMs += FRAME_MS; // catch-up scheduling holds the average...
     if (now - lastFrameMs >= FRAME_MS) lastFrameMs = now; // ...a long stall resets it
@@ -225,14 +226,14 @@ void DemoScreen::tick(lgfx::LGFX_Device&) {
   // Where the 33 ms goes, once a second. The claim this roster is built on is
   // that an effect fits in what present() leaves over — this is how to check it
   // on real hardware rather than trusting the arithmetic.
-  const uint32_t t0 = micros();
+  const uint32_t t0 = Platform::micros();
   if (Effect* e = ROSTER[idx].fx) e->step(f);
   else f.fillScreen(fx::UI_BLACK);
-  const uint32_t t1 = micros();
+  const uint32_t t1 = Platform::micros();
   drawIdentity(f);
-  const uint32_t t2 = micros();
+  const uint32_t t2 = Platform::micros();
   Display::present();
-  const uint32_t t3 = micros();
+  const uint32_t t3 = Platform::micros();
   static uint32_t lastLog = 0;
   if (t3 - lastLog > 1000000) {
     lastLog = t3;

@@ -28,7 +28,7 @@ uint32_t joinElapsedMs(); // since the attempt started; 0 unless isJoining()
 bool hasCredentials();
 bool saveCredentials(const String& ssid, const String& pass); // false = NVS write failed; then restartToApply()
 void clearCredentials(); // factory reset path
-void restartToApply(); // brief delay (lets the HTTP response flush), then ESP.restart()
+void restartToApply(); // brief delay (lets the HTTP response flush), then Platform::restart()
 
 // WiFi scan for the provisioning portal / settings UI (ticket #13 calls these
 // from the httpd task on core 0 — they touch no main-loop state).

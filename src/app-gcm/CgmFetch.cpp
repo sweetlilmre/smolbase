@@ -5,6 +5,7 @@
 // The task never touches Display or Screen — it writes g_pending, sets
 // g_pendingReady, and waits for the next notify.
 #include "CgmFetch.h"
+#include "../core/Platform.h"
 #include "CgmKeys.h"
 #include "../core/ConfigStore.h"
 #include "../core/Net.h"
@@ -339,7 +340,7 @@ static void runFetch(const FetchArgs& args) {
     result.mgdl        = args.mgdl;
     result.valid       = true;
     result.error       = false;
-    result.lastOkMs    = millis();
+    result.lastOkMs    = Platform::millis();
 
     taskENTER_CRITICAL(&g_mux);
     g_pending      = result;
@@ -398,7 +399,7 @@ void loop() {
     // Schedule next fetch
     uint32_t intervalMs =
         (uint32_t)ConfigStore::getInt(CgmKeys::INTERVAL, CgmKeys::DEF_INTERVAL) * 60000UL;
-    if (!g_fetchDue && (millis() - g_lastFetchMs >= intervalMs))
+    if (!g_fetchDue && (Platform::millis() - g_lastFetchMs >= intervalMs))
         g_fetchDue = true;
 
     // Arm the task — only when idle, network up, credentials present, and not auth-failed.
@@ -431,7 +432,7 @@ void loop() {
 
     g_fetchDue      = false;
     g_fetchInFlight = true;
-    g_lastFetchMs   = millis();
+    g_lastFetchMs   = Platform::millis();
     xTaskNotifyGive(g_task);
 }
 

@@ -9,6 +9,7 @@
 #include "WeatherData.h"
 #include "../core/ConfigStore.h"
 #include "../core/Net.h"
+#include "../core/Platform.h"
 #include "../core/Secrets.h"
 #include "WeatherDebug.h"
 #include "WeatherKeys.h"
@@ -305,7 +306,7 @@ void loop() {
   // Schedule: honored wx_interval (#68 — fixing SmolTV-Pro's ignored w_i).
   uint32_t intervalMs =
       (uint32_t)ConfigStore::getInt(WxKeys::INTERVAL, WxKeys::DEF_INTERVAL_MIN) * 60000UL;
-  if (!fetchDue && millis() - lastFetchMs >= intervalMs) fetchDue = true;
+  if (!fetchDue && Platform::millis() - lastFetchMs >= intervalMs) fetchDue = true;
   // Never arm without a network: the boot cycle otherwise fires pre-WiFi,
   // fails, and (worse) used to burn the geocode latch on a dead link.
   if (!fetchDue || fetchInFlight || !fetchTask || !Net::isUp()) return;
@@ -331,7 +332,7 @@ void loop() {
   if (onFetchBegin) onFetchBegin();
   fetchDue = false;
   fetchInFlight = true;
-  lastFetchMs = millis();
+  lastFetchMs = Platform::millis();
   xTaskNotifyGive(fetchTask);
 }
 
@@ -403,7 +404,7 @@ void WeatherDebug::json(JsonDocument& out) {
   out["geoFor"] = ConfigStore::getString(K_GEO_FOR, "");
   out["lat"] = ConfigStore::getString(K_GEO_LAT, "");
   out["lon"] = ConfigStore::getString(K_GEO_LON, "");
-  out["msSinceFetch"] = millis() - lastFetchMs;
+  out["msSinceFetch"] = Platform::millis() - lastFetchMs;
   out["lastErr"] = (const char*)lastErr;
   // The heap trio that diagnosed the TLS OOM (#74) — cheap, keep: min-ever
   // near zero means a handshake is scraping bottom again (docs/app-weather-memory.md).
