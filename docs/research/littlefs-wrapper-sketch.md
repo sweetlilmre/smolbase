@@ -1,7 +1,7 @@
 # LittleFS wrapper sketch (IDF 6 migration, phase 5)
 
 **Date:** 2026-08-22
-**Status:** Implemented as `spike/idf6/main/sb_fs.h` and **compiling clean on ESP-IDF 6.0.2**. Runtime behaviour is exercised by spike checks 11 and 12, which have not run on hardware yet.
+**Status:** Implemented as `spike/idf6/main/sb_fs.h`, compiling clean on ESP-IDF 6.0.2, and **verified on hardware** — spike checks 11 and 12 both passed on the live device (2026-08-22).
 
 ## Verified since first draft
 
@@ -26,7 +26,7 @@ The two open risks on that: whether joltwallet's own code rejects an empty `base
 | **DRAM remaining** | **110 312** of 180 736 |
 | Image size | 1 057 163 (53% of the 0x220000 slot free) |
 
-Read that carefully before quoting it: 30 720 of the `.bss` figure is the spike's own `scratchData[240*64*2]` band buffer, and "DRAM remaining at link time" is **not** the same measurement as the Arduino build's runtime 96 KB free heap. It is a promising baseline, not a comparison. The comparable number is check 10's runtime reading, which needs the device.
+Read that carefully before quoting it: 30 720 of the `.bss` figure is the spike's own `scratchData[240*64*2]` band buffer, and "DRAM remaining at link time" is **not** the same measurement as a runtime free-heap figure. The runtime numbers came back at 170 100 free / 139 632 min-ever, which works out to roughly **+10 KB** like-for-like against the Arduino `smolbase` env — see `spike/idf6/README.md` for the arithmetic. Smaller than it first looks.
 
 ## What is actually there
 
