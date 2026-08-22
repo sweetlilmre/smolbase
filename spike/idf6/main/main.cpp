@@ -107,6 +107,19 @@ static void report(int idx, State s, const std::string& note = "") {
   drawResults();
 }
 
+// A failing ESP_ERROR_CHECK panics, reboots, and rolls back — the device is
+// safe, but all twelve results are lost. On a bench where each flash needs a
+// human's say-so that is far too expensive, so every fallible call reports and
+// bails out of its own check instead of aborting the run.
+#define SB_TRY(idx, label, expr)                                                    \
+  do {                                                                             \
+    esp_err_t _e = (expr);                                                          \
+    if (_e != ESP_OK) {                                                             \
+      report((idx), State::Fail, std::string(label ": ") + esp_err_to_name(_e));     \
+      return;                                                                       \
+    }                                                                               \
+  } while (0)
+
 static std::string heapLine() {
   char buf[96];
   snprintf(buf, sizeof(buf), "free %u largest %u min %u",
@@ -308,27 +321,48 @@ static void checkSbFs() {
 // still have the results — and a power-cycle rolls back anyway.
 
 static void checkRootMount() {
-  esp_vfs_littlefs_conf_t conf = {};
-  conf.base_path = "";
-  conf.partition_label = "spiffs";
-  conf.format_if_mount_failed = false;
-  conf.dont_mount = false;
-
-  esp_err_t err = esp_vfs_littlefs_register(&conf);
+  if (checks[1].state != State::Pass) {
+    report(11, State::Skip, "fs not mounted");
+    return;
+  }
+  // MUST unmount /lfs first. esp_littlefs guards duplicate mounts by label
+  // ("Partition already used" -> ESP_ERR_INVALID_STATE, esp_littlefs.c:1420),
+  // so registering a second time while /lfs is live would fail on the guard
+  // and prove nothing. The guard is also why this is not a corruption risk:
+  // two concurrent littlefs instances on one partition cannot happen.
+  esp_err_t err = esp_vfs_littlefs_unregister("spiffs");
   if (err != ESP_OK) {
-    // Expected failure modes: ESP_ERR_INVALID_ARG if joltwallet rejects an
-    // empty base_path, or ESP_ERR_INVALID_STATE for the double registration
-    // of the same partition. Either way the answer is "no", and check 2's
-    // mount is untouched.
-    report(11, State::Fail, std::string("register: ") + esp_err_to_name(err));
+    report(11, State::Fail, std::string("unregister /lfs: ") + esp_err_to_name(err));
     return;
   }
 
-  // Does an unprefixed path actually resolve now?
-  bool ok = sb::fs::isDir("/w");
-  esp_vfs_littlefs_unregister(conf.partition_label);
-  report(11, ok ? State::Pass : State::Fail,
-         ok ? "\"/w\" resolves unprefixed" : "mounted but /w not found");
+  esp_vfs_littlefs_conf_t conf = {};
+  conf.base_path = ""; // the experiment
+  conf.partition_label = "spiffs";
+  conf.format_if_mount_failed = false; // never reformat the live volume
+  conf.dont_mount = false;
+
+  err = esp_vfs_littlefs_register(&conf);
+  bool ok = false;
+  std::string note;
+  if (err != ESP_OK) {
+    // Most likely ESP_ERR_INVALID_ARG, if joltwallet rejects an empty
+    // base_path even though the VFS layer would accept it.
+    note = std::string("register \"\": ") + esp_err_to_name(err);
+  } else {
+    ok = sb::fs::isDir("/w"); // does an unprefixed path resolve?
+    note = ok ? "\"/w\" resolves unprefixed" : "mounted but /w not found";
+    esp_vfs_littlefs_unregister(conf.partition_label);
+  }
+
+  // Restore the /lfs mount regardless, so the device is left as we found it.
+  esp_vfs_littlefs_conf_t back = {};
+  back.base_path = "/lfs";
+  back.partition_label = "spiffs";
+  back.format_if_mount_failed = false;
+  if (esp_vfs_littlefs_register(&back) != ESP_OK) note += " (remount failed!)";
+
+  report(11, ok ? State::Pass : State::Fail, note);
 }
 
 // ------------------------------------------------------- 3/4. Display -------
@@ -420,28 +454,52 @@ static void checkTouch() {
     return;
   }
 
-  ESP_ERROR_CHECK(touch_sensor_enable(touchSens));
-  ESP_ERROR_CHECK(touch_sensor_start_continuous_scanning(touchSens));
+  // The software filter is MANDATORY on V1, for a reason that is an upstream
+  // bug rather than a design choice. hw_ver1/touch_version_specific.c:253:
+  //   ESP_RETURN_ON_FALSE_ISR(type == TOUCH_CHAN_DATA_TYPE_SMOOTH &&
+  //                           chan_handle->base->data_filter_fn != NULL, ...)
+  // That guard should read `type != SMOOTH || filter != NULL` — as written it
+  // rejects every RAW read with ESP_ERR_INVALID_STATE, unconditionally. So on
+  // IDF 6.0.2 the only readable type is SMOOTH, and only once a filter exists.
+  // Passing data_filter_fn = NULL installs the driver's default filter
+  // (line 353: `filter_cfg->data_filter_fn ? ... : <default>`), which is what
+  // makes the guard's second clause true.
+  touch_sensor_filter_config_t filterCfg = TOUCH_SENSOR_DEFAULT_FILTER_CONFIG();
+  SB_TRY(4, "config_filter", touch_sensor_config_filter(touchSens, &filterCfg));
+
+  SB_TRY(4, "enable", touch_sensor_enable(touchSens));
+  SB_TRY(4, "start_scan", touch_sensor_start_continuous_scanning(touchSens));
+
+  // Let the filter timer (10 ms interval) populate smooth_data before reading.
+  vTaskDelay(pdMS_TO_TICKS(100));
+
+  // Probe RAW once purely to document the bug empirically in the results.
+  uint32_t rawProbe[TOUCH_SAMPLE_CFG_NUM] = {0};
+  esp_err_t rawErr =
+      touch_channel_read_data(touchChan, TOUCH_CHAN_DATA_TYPE_RAW, rawProbe);
 
   // Same boot calibration as Touch.cpp: average several untouched reads.
   uint32_t sum = 0;
   int got = 0;
+  esp_err_t lastErr = ESP_OK;
   for (int i = 0; i < 16; ++i) {
-    uint32_t raw[1] = {0};
-    if (touch_channel_read_data(touchChan, TOUCH_CHAN_DATA_TYPE_RAW, raw) == ESP_OK && raw[0]) {
-      sum += raw[0];
+    uint32_t sm[TOUCH_SAMPLE_CFG_NUM] = {0};
+    lastErr = touch_channel_read_data(touchChan, TOUCH_CHAN_DATA_TYPE_SMOOTH, sm);
+    if (lastErr == ESP_OK && sm[0]) {
+      sum += sm[0];
       ++got;
     }
-    vTaskDelay(pdMS_TO_TICKS(10));
+    vTaskDelay(pdMS_TO_TICKS(20));
   }
 
   if (!got) {
-    report(4, State::Fail, "reads returned 0");
+    report(4, State::Fail, std::string("smooth reads gave 0, last=") + esp_err_to_name(lastErr));
     return;
   }
   uint32_t baseline = sum / got;
-  char note[80];
-  snprintf(note, sizeof(note), "baseline %u (%d/16 reads)", (unsigned)baseline, got);
+  char note[110];
+  snprintf(note, sizeof(note), "smooth baseline %u (%d/16); RAW=%s (upstream bug)",
+           (unsigned)baseline, got, esp_err_to_name(rawErr));
   // A plausible baseline is the whole question. Touch.cpp treats <200 as
   // implausible for an untouched pad.
   report(4, baseline >= 200 ? State::Pass : State::Fail, note);
@@ -478,26 +536,26 @@ static void checkWifi() {
   }
 
   wifiEvents = xEventGroupCreate();
-  ESP_ERROR_CHECK(esp_netif_init());
-  ESP_ERROR_CHECK(esp_event_loop_create_default());
+  SB_TRY(5, "netif_init", esp_netif_init());
+  SB_TRY(5, "event_loop", esp_event_loop_create_default());
   esp_netif_create_default_wifi_sta();
 
   wifi_init_config_t initCfg = WIFI_INIT_CONFIG_DEFAULT();
-  ESP_ERROR_CHECK(esp_wifi_init(&initCfg));
-  ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
-                                                      wifiEventHandler, nullptr, nullptr));
-  ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
-                                                      wifiEventHandler, nullptr, nullptr));
+  SB_TRY(5, "wifi_init", esp_wifi_init(&initCfg));
+  SB_TRY(5, "reg_wifi_ev", esp_event_handler_instance_register(
+                               WIFI_EVENT, ESP_EVENT_ANY_ID, wifiEventHandler, nullptr, nullptr));
+  SB_TRY(5, "reg_ip_ev", esp_event_handler_instance_register(
+                             IP_EVENT, IP_EVENT_STA_GOT_IP, wifiEventHandler, nullptr, nullptr));
 
   wifi_config_t staCfg = {};
   snprintf((char*)staCfg.sta.ssid, sizeof(staCfg.sta.ssid), "%s", wifiSsid.c_str());
   snprintf((char*)staCfg.sta.password, sizeof(staCfg.sta.password), "%s", wifiPass.c_str());
 
-  ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-  ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &staCfg));
+  SB_TRY(5, "set_mode", esp_wifi_set_mode(WIFI_MODE_STA));
+  SB_TRY(5, "set_config", esp_wifi_set_config(WIFI_IF_STA, &staCfg));
   // Credentials live in our own NVS namespace; do not let esp_wifi keep a copy.
-  ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
-  ESP_ERROR_CHECK(esp_wifi_start());
+  SB_TRY(5, "set_storage", esp_wifi_set_storage(WIFI_STORAGE_RAM));
+  SB_TRY(5, "wifi_start", esp_wifi_start());
 
   // SMOLBASE_CONNECT_TIMEOUT_MS
   EventBits_t bits = xEventGroupWaitBits(wifiEvents, WIFI_GOT_IP | WIFI_FAILED, pdFALSE,
@@ -530,7 +588,8 @@ struct FetchResult {
   uint32_t heapFloor = 0;
 };
 
-static FetchResult tlsFetch(const char* url, int maxBytes, bool followRedirect) {
+static FetchResult tlsFetch(const char* url, int maxBytes, bool followRedirect,
+                            char* sink = nullptr, size_t sinkLen = 0) {
   FetchResult r;
   esp_http_client_config_t cfg = {};
   cfg.url = url;
@@ -561,9 +620,16 @@ static FetchResult tlsFetch(const char* url, int maxBytes, bool followRedirect) 
 
   if (r.err == ESP_OK && r.status == 200) {
     char buf[512];
+    size_t sinkUsed = 0;
+    if (sink && sinkLen) sink[0] = '\0';
     while (r.bytesRead < maxBytes) {
       int n = esp_http_client_read(c, buf, sizeof(buf));
       if (n <= 0) break;
+      if (sink && sinkUsed + (size_t)n + 1 < sinkLen) {
+        memcpy(sink + sinkUsed, buf, n);
+        sinkUsed += n;
+        sink[sinkUsed] = '\0';
+      }
       r.bytesRead += n;
       uint32_t now = esp_get_free_heap_size();
       if (now < r.heapFloor) r.heapFloor = now;
@@ -584,8 +650,17 @@ static void checkTlsApi() {
     return;
   }
   std::string url = std::string("https://api.github.com/repos/") + GH_REPO + "/releases/latest";
-  FetchResult r = tlsFetch(url.c_str(), 4096, false);
+  // Capture the body so check 8 can build a URL for an asset that actually
+  // exists. "tag_name" appears early in the GitHub release JSON.
+  static char body[2048];
+  FetchResult r = tlsFetch(url.c_str(), sizeof(body) - 1, false, body, sizeof(body));
   tlsHeapFloor = r.heapFloor;
+
+  if (const char* p = strstr(body, "\"tag_name\":\"")) {
+    p += strlen("\"tag_name\":\"");
+    const char* e = strchr(p, '"');
+    if (e && e > p) releaseTag.assign(p, e - p);
+  }
 
   char note[80];
   snprintf(note, sizeof(note), "http %d, %d B, floor %u", r.status, r.bytesRead,
@@ -599,20 +674,26 @@ static void checkTlsCdn() {
     report(7, State::Skip, "api fetch failed");
     return;
   }
-  // The deterministic release URL shape GhUpdate uses. The tag does not need to
-  // resolve to a real asset for the TLS question — a 404 from the CDN still
-  // means the RSA-4096 chain verified, which is the whole point. Anything below
-  // 200 (a transport/TLS error) is the failure we care about.
-  std::string url =
-      std::string("https://github.com/") + GH_REPO + "/releases/latest/download/smolbase-firmware.bin";
+  if (releaseTag.empty()) {
+    report(7, State::Skip, "no tag_name parsed");
+    return;
+  }
+  // The asset URL shape GhUpdate builds: <prefix>-<tag>.bin. Getting this WRONG
+  // is how the first run of this check produced a false pass — a bare
+  // "smolbase-firmware.bin" 404s at github.com and never redirects, so the
+  // handshake that succeeded was github.com's, not the CDN's. Nothing below
+  // status 200 WITH bytes read proves the RSA-4096 chain verified.
+  std::string url = std::string("https://github.com/") + GH_REPO + "/releases/download/" +
+                    releaseTag + "/smolbase-firmware-" + releaseTag + ".bin";
   FetchResult r = tlsFetch(url.c_str(), 8192, true);
   if (r.heapFloor < tlsHeapFloor) tlsHeapFloor = r.heapFloor;
 
-  char note[96];
-  snprintf(note, sizeof(note), "http %d, %d B, floor %u", r.status, r.bytesRead,
-           (unsigned)r.heapFloor);
-  // ESP_OK from open() means the TLS handshake completed against the CDN.
-  report(7, r.err == ESP_OK && r.status > 0 ? State::Pass : State::Fail, note);
+  char note[128];
+  snprintf(note, sizeof(note), "%s http %d, %d B, floor %u", releaseTag.c_str(), r.status,
+           r.bytesRead, (unsigned)r.heapFloor);
+  // 200 AND bytes: the redirect to the CDN was followed and its chain verified.
+  report(7, r.err == ESP_OK && r.status == 200 && r.bytesRead > 0 ? State::Pass : State::Fail,
+         note);
 }
 
 // ------------------------------------------------- 9. PsychicHttp native ----
@@ -703,9 +784,9 @@ extern "C" void app_main() {
   // safety note at the top of this file.
   while (true) {
     if (touchChan) {
-      uint32_t raw[1] = {0};
-      if (touch_channel_read_data(touchChan, TOUCH_CHAN_DATA_TYPE_RAW, raw) == ESP_OK)
-        ESP_LOGI(TAG, "touch raw %u | %s", (unsigned)raw[0], heapLine().c_str());
+      uint32_t sm[TOUCH_SAMPLE_CFG_NUM] = {0};
+      if (touch_channel_read_data(touchChan, TOUCH_CHAN_DATA_TYPE_SMOOTH, sm) == ESP_OK)
+        ESP_LOGI(TAG, "touch smooth %u | %s", (unsigned)sm[0], heapLine().c_str());
     }
     vTaskDelay(pdMS_TO_TICKS(2000));
   }

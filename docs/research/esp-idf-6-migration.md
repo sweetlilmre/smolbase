@@ -1,7 +1,7 @@
 # Migrating smolbase to native ESP-IDF 6 (dropping Arduino)
 
 **Date:** 2026-08-22
-**Status:** Assessment / plan. No decision taken. Phase 0's desk verification is done (see below); the Phase 0 spike is scaffolded in `spike/idf6/` but has never been compiled.
+**Status:** Assessment / plan. No decision taken. Phase 0 is done: desk verification, a spike that builds on IDF 6.0.2, and one OTA run on the live device. 11 of 12 checks passed; one of those passes was false (see below) and needs a second run.
 **Scope:** Replace the `framework = arduino` pioarduino build (arduino-esp32 3.3.11 / ESP-IDF 5.5.5) with a native ESP-IDF 6.x CMake project, on the same hardware (GeekMagic Small TV Pro, ESP32-D0WD, no PSRAM, 8 MB flash) and the same partition layout.
 
 ## TL;DR
@@ -12,7 +12,7 @@ Estimated effort: **12–18 focused working days**, deliverable as ~8 independen
 
 The single strongest argument for doing it: **ADR 0005 dissolves.** The hybrid-compile hack exists only because pioarduino ships *precompiled* IDF static libraries, so the mbedTLS knobs that keep GitHub OTA alive (`CONFIG_MBEDTLS_LARGE_KEY_SOFTWARE_MPI` and friends) can only be changed by recompiling those libs locally — a 15-minute rebuild, a fragile CI cache key, and a PowerShell-only build on Windows. Under native IDF every line is compiled from source and those knobs are three ordinary lines in `sdkconfig.defaults`.
 
-**Phase 0 update (2026-08-22):** the paper half of Phase 0 is done and **every documentary risk came back clean** — including the touch driver, which was the one flagged here as potentially disqualifying. See [Phase 0 findings](#phase-0-findings-desk-verification) below. What remains unproven is whether it all compiles and runs, which needs an ESP-IDF 6 install; the spike is written and waiting in [`spike/idf6/`](../../spike/idf6/).
+**Phase 0 update (2026-08-22):** done, on hardware. Every documentary risk came back clean, the spike builds on IDF 6.0.2, and one OTA run on the live device passed 11 of 12 checks — with SPI DMA measured at 1.3% over the theoretical bus floor. Two things did not survive contact: **the RSA-4096 CDN chain is still unverified** (check 8 passed on a 404 that never reached the CDN), and **the heap argument is roughly 10 KB rather than the "meaningful recovery" claimed below**. Neither blocks the migration; the first needs a second spike run, the second demotes an argument. See [Phase 0 findings](#phase-0-findings-desk-verification).
 
 ## Why IDF 6 means dropping Arduino
 
@@ -23,7 +23,7 @@ Not a preference — a constraint. arduino-esp32 3.x is built on ESP-IDF 5.x, an
 | Gain | Detail |
 |---|---|
 | **ADR 0005 dies** | `custom_sdkconfig` hybrid compile → plain `sdkconfig.defaults`. No ~15 min IDF-lib rebuild on every build-config change, no `idf-hybrid-v1` CI cache key to bust, no "must run `pio` from PowerShell because `idf_tools.py` refuses git-bash" footgun. |
-| **Heap headroom** | The binding constraint on this chip is RAM, not flash (96 KB free, 37 KB TLS floor today). Dropping the Arduino core removes `String`/`Print`/`Stream`, the Arduino event-loop plumbing, `HardwareSerial`, the Arduino `WiFi`/`Network` object graph, and the BT stubs the core links in. Expect a meaningful static-RAM and flash recovery — worth measuring in the Phase 0 spike, not worth predicting here. |
+| **Heap headroom** | **Measured, and weaker than this row originally claimed.** The spike's like-for-like gain over the Arduino `smolbase` env is roughly **10 KB** (see `spike/idf6/README.md` for the arithmetic — the raw +36.5 KB delta is mostly a static-buffer difference, not a framework saving). Dropping the Arduino core does remove `String`/`Print`/`Stream`, the Arduino event-loop plumbing, `HardwareSerial` and the `WiFi`/`Network` object graph, but on this evidence the recovery is single-digit-KB, not transformative. Treat heap as a minor argument, not a headline. (The "96 KB free / 37 KB TLS floor" figure quoted earlier is the *weatherclock* env; the device measured here runs `smolbase` at 133 560 bytes free.) |
 | **Full Kconfig reach** | mbedTLS ciphersuite/curve trimming, lwIP socket and buffer tuning, `CONFIG_COMPILER_OPTIMIZATION_SIZE`, per-component log levels, task stack sizing. Today most of these are either baked into the precompiled libs or reachable only through the hybrid rebuild. |
 | **No single-maintainer fork in the critical path** | The platform pin is a community fork's release ZIP. Native IDF is upstream Espressif. |
 | **Better tooling** | IDF emits `compile_commands.json` natively for the real build, which should end the "IDE diagnostics are noise, `pio run` is the arbiter" situation. `idf.py size-components` / `size-files` give real per-component footprint numbers we currently cannot get. |
@@ -34,7 +34,7 @@ Not a preference — a constraint. arduino-esp32 3.x is built on ESP-IDF 5.x, an
 - ~~**Template-consumer breakage.**~~ **Mispriced — corrected 2026-08-22.** This repo is a template, but there are no downstream forks yet, so there is no contract to break and nobody to migrate. The build-system change and the `String` → `std::string` change on `ConfigStore`/`Net`/`Secrets` cost nothing outside this repo today. `docs/building-your-app.md` still needs rewriting, but because it documents PlatformIO and `pio run` — not because anyone's code breaks. **This inverts into the strongest timing argument in the document: the migration is free of consumer cost exactly once, and that window is open now.** Every fork taken before the migration converts this line item back into a real cost.
 - **The one-click PlatformIO/VSCode flow** is replaced by the ESP-IDF extension + `idf.py`. Different, not worse, but it is a re-learn and a docs rewrite (`docs/flashing.md`, `AGENTS.md`).
 - **`pio run` as the single arbiter** goes away; CI, the build-log tee convention, and the multi-env smoke build all need re-expressing in CMake/`idf.py` terms.
-- **Unproven combinations.** LovyanGFX-on-IDF-6-on-classic-ESP32 is well-evidenced on paper (see Phase 0 findings) but nobody has compiled it here yet. The touch driver is documented as supported; the panel and its DMA path are the remaining unknowns.
+- ~~**Unproven combinations.**~~ **Retired.** LovyanGFX-on-IDF-6-on-classic-ESP32 compiles with zero warnings, initialises this ST7789V, and sustains the ADR 0004 band push at 6180 µs against a ~6100 µs bus floor. The touch driver supports the chip (controller, channel, enable and scan-start all succeed) but has an upstream read-path bug — see Phase 0 findings.
 
 ## Dependency audit
 
@@ -159,6 +159,27 @@ Done 2026-08-22 against primary sources: the ESP-IDF v6.0.2 programming guide an
 **Storage is quieter than feared.** The v6.0 storage changes are concentrated in FATFS and the UART/USB-serial VFS shims. Relevant to us: the legacy `esp_vfs_register`/`esp_vfs_t` API is *deprecated, not removed* (the `esp_vfs_fs_ops_t` form is preferred), and `esp_vfs_console` was renamed `esp_stdio`. Neither touches `esp_vfs_littlefs_register`. `joltwallet/littlefs` 1.22.3 — the version already vendored in `managed_components/` — documents IDF 5.x and 6.0 usage.
 
 **Net effect on the estimate:** unchanged at 12–18 days. Nothing got harder; the touch item shrank from "possibly disqualifying" to "a morning".
+
+### Hardware results (run 1, 2026-08-22)
+
+The spike built clean on IDF 6.0.2 and was flashed OTA to the live device. Full table and caveats in [`spike/idf6/README.md`](../../spike/idf6/README.md). **11 of 12 checks passed, but one of those passes was false and it is the one that matters most.**
+
+Confirmed on hardware:
+
+- **SPI DMA is intact.** The ADR 0004 band push measured **6180 µs against a ~6100 µs theoretical bus floor** — 1.3% over. Open question 3's runtime half is answered.
+- **A root mount works.** `esp_vfs_littlefs_register` with `base_path = ""` mounts, and `"/w"` resolves unprefixed. Every existing path constant can stay byte-identical; no prefixing layer, no second path namespace.
+- **Arduino-written NVS credentials read back** via raw `nvs_get_str`. Fielded devices need no re-provisioning.
+- **PsychicHttp native mode serves requests**, and `sb_fs.h`'s RAII handle round-trips ArduinoJson on-device.
+- **LovyanGFX, PsychicHttp and littlefs compile with zero warnings** and link into a 1.03 MB image, 52% of the OTA slot free.
+
+Two corrections:
+
+- **The RSA-4096 CDN chain is still unverified.** Check 8 passed on a `404` that came from github.com, not the CDN — the asset URL was wrong, so no redirect was ever followed and the chain that verified was the ordinary one. `CONFIG_MBEDTLS_LARGE_KEY_SOFTWARE_MPI` therefore remains untested, and it is the load-bearing claim behind retiring ADR 0005. Fixed in the spike; needs run 2.
+- **`VSPI_HOST` is removed in IDF 6.** `Display.cpp:22` uses it; `SPI3_HOST` is the same peripheral on classic ESP32, so a rename. Found by the compiler, not by reading.
+
+One upstream defect worth knowing before costing `Touch.cpp`: in 6.0.2, `hw_ver1/touch_version_specific.c:253` guards reads with `type == TOUCH_CHAN_DATA_TYPE_SMOOTH && filter != NULL` where it means `type != SMOOTH || filter != NULL`, so **`RAW` reads are unconditionally rejected** on ESP32 V1. The controller, channel, enable and scan-start calls all succeed — the chip is supported, the read path is buggy. `Touch.cpp` must configure the software filter and read `SMOOTH`. That is still "a morning", but it is a morning plus a workaround comment.
+
+Also worth noting as a small tax across 20 000 lines: IDF builds with `-Werror=missing-field-initializers` and `-Werror=format=`, which the Arduino build does not enforce.
 
 ## Open questions — what is still open
 

@@ -75,17 +75,50 @@ Everything in this directory is written and ready; none of it has been compiled.
 
 ## Results
 
-Fill this in as checks come back. Empty means not yet run.
+**Run 1 — flashed to 10.0.0.32 (fw 0.3.3 → spike), IDF v6.0.2, 2026-08-22.**
 
 | # | Check | Result | Notes |
 |---|---|---|---|
-| 1 | NVS creds | | |
-| 2 | LittleFS `/w` | | |
-| 3 | Panel init | | |
-| 4 | Band push (DMA) | | |
-| 5 | Touch T9 | | |
-| 6 | WiFi join | | |
-| 7 | TLS api.github.com | | |
-| 8 | TLS CDN RSA-4096 | | |
-| 9 | PsychicHttp native | | |
-| 10 | Footprint | | |
+| 1 | NVS creds | **PASS** | ssid len 14, pass present — Arduino `Preferences` strings read by raw `nvs_get_str`. Fielded devices need no re-provisioning. |
+| 2 | LittleFS `/w` | **PASS** | 6 files in `/w`, 2 dirs at `/`, 56/3776 KB. Non-zero dir count also proves `d_type` is populated. |
+| 3 | Panel init | **PASS** | 240x240 |
+| 4 | Band push (DMA) | **PASS** | **6180 µs/band against a ~6100 µs theoretical bus floor — 1.3% over.** SPI DMA at 40 MHz is intact. |
+| 5 | Touch T9 | **FAIL → diagnosed** | "reads returned 0". Upstream IDF bug, not a driver limitation — see below. Fixed, awaiting run 2. |
+| 6 | WiFi join | **PASS** | 10.0.0.32, rssi -54 |
+| 7 | TLS api.github.com | **PASS** | http 200, 4096 B, heap floor 147 656 |
+| 8 | TLS CDN RSA-4096 | **FALSE PASS** | Reported PASS on `http 404`. The URL was wrong, so it never reached the CDN — see below. **The #119 / ADR 0005 claim remains unverified.** |
+| 9 | PsychicHttp native | **PASS** | Serving; these results were read through it |
+| 10 | Footprint | **PASS** | free 170 100, largest 110 592, min-ever 139 632, TLS floor 147 656, main task 6400 B stack free of 8192 |
+| 11 | sb_fs wrapper | **PASS** | 24 B ArduinoJson round-trip straight through the RAII handle; path ops correct in both directions |
+| 12 | Root mount | **PASS** | **`"/w"` resolves unprefixed** — the path problem dissolves |
+
+### Check 8 was a false pass — the important one
+
+The URL used was `/releases/latest/download/smolbase-firmware.bin`, but the real asset is `smolbase-firmware-v0.3.3.bin`. So the 404 came from **github.com**, which never issued a redirect: the handshake that succeeded was github.com's ordinary chain, not the Fastly CDN chain cross-signed by RSA-4096 ISRG Root X1. The pass condition (`status > 0`) accepted it.
+
+**Nothing here yet proves `CONFIG_MBEDTLS_LARGE_KEY_SOFTWARE_MPI` works** — which is the single load-bearing claim behind retiring ADR 0005. Run 2 parses `tag_name` from the API response, builds the real asset URL, and requires `200` **with bytes read**.
+
+### Check 5 is an upstream ESP-IDF bug
+
+`components/esp_driver_touch_sens/hw_ver1/touch_version_specific.c:253`:
+
+```c
+ESP_RETURN_ON_FALSE_ISR(type == TOUCH_CHAN_DATA_TYPE_SMOOTH && chan_handle->base->data_filter_fn != NULL,
+                        ESP_ERR_INVALID_STATE, TAG, "The software filter has not configured");
+```
+
+The condition should be `type != SMOOTH || filter != NULL`. As written it rejects **every** `TOUCH_CHAN_DATA_TYPE_RAW` read with `ESP_ERR_INVALID_STATE`, unconditionally, on ESP32 V1 in 6.0.2.
+
+Reassuringly, `touch_sensor_new_controller`, `new_channel`, `enable` and `start_continuous_scanning` all succeeded — the driver does support this chip, and only the read was wrong. The workaround is to call `touch_sensor_config_filter()` (passing `data_filter_fn = NULL` installs the driver's own default at line 353, satisfying the guard's second clause) and read `TOUCH_CHAN_DATA_TYPE_SMOOTH`. Worth reporting upstream.
+
+### Heap: read this before quoting it
+
+| | Bytes |
+|---|---:|
+| Arduino `smolbase` env, measured on this device | 133 560 free |
+| Spike | 170 100 free (min-ever 139 632) |
+| Raw delta | +36 540 |
+| Less the static difference (57 600 framebuffer vs 30 720 band scratch) | −26 880 |
+| **Like-for-like** | **≈ +9 700** |
+
+So roughly **10 KB**, not the "meaningful recovery" the migration doc implied — and the spike is not running an app, has no settings registry, no `Clock`, no `AssetUpdate`, and never started mDNS, so even that is an order of magnitude rather than a measurement. The heap-headroom argument for migrating is weaker than claimed. The other three arguments are unaffected.
