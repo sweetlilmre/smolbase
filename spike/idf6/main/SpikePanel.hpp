@@ -26,7 +26,11 @@ public:
   SpikePanel() {
     {
       auto cfg = _bus.config();
-      cfg.spi_host = VSPI_HOST;
+      // MIGRATION FINDING: Display.cpp uses VSPI_HOST, which IDF 6 removed
+      // ("was not declared in this scope; did you mean 'SPI3_HOST'?"). On
+      // classic ESP32, VSPI is SPI3, so this is a rename, not a behaviour
+      // change — but Display.cpp needs the same edit.
+      cfg.spi_host = SPI3_HOST;
       cfg.spi_mode = 3; // CS tied to GND: ST7789 samples on a mode-3 clock
       cfg.freq_write = SPIKE_SPI_HZ;
       cfg.freq_read = 16000000; // unused (no MISO), harmless

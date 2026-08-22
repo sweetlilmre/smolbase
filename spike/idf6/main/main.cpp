@@ -36,6 +36,7 @@
 #include <PsychicHttp.h>
 
 #include "SpikePanel.hpp"
+#include "sb_fs.h"
 
 static const char* TAG = "spike";
 
@@ -45,14 +46,18 @@ enum class State { Pending, Pass, Fail, Skip };
 
 struct Check {
   const char* name;
-  State state = State::Pending;
+  State state;
   std::string note;
+  // Explicit ctor rather than aggregate init: IDF builds with
+  // -Werror=missing-field-initializers, so `{"name"}` is a hard error.
+  explicit Check(const char* n) : name(n), state(State::Pending), note() {}
 };
 
 static Check checks[] = {
-    {"1 nvs creds"},   {"2 littlefs /w"}, {"3 panel init"}, {"4 band dma"},
-    {"5 touch t9"},    {"6 wifi join"},   {"7 tls api"},    {"8 tls cdn rsa4096"},
-    {"9 psychic idf"}, {"10 footprint"},
+    Check("1 nvs creds"),   Check("2 littlefs /w"),     Check("3 panel init"),
+    Check("4 band dma"),    Check("5 touch t9"),        Check("6 wifi join"),
+    Check("7 tls api"),     Check("8 tls cdn rsa4096"), Check("9 psychic idf"),
+    Check("10 footprint"),  Check("11 sb_fs wrapper"),  Check("12 root mount"),
 };
 static constexpr int CHECK_COUNT = sizeof(checks) / sizeof(checks[0]);
 
@@ -77,16 +82,18 @@ static void drawResults() {
   panel.setTextSize(1);
   panel.setCursor(2, 2);
   panel.printf("IDF %s\n", esp_get_idf_version());
+  // 12 rows at an 18 px pitch from y=12: last row lands at 210, its note at
+  // 219 — inside 240. Do not add rows without re-checking this.
   for (int i = 0; i < CHECK_COUNT; ++i) {
     uint16_t c = 0xFFFF;                              // white  = pending
     if (checks[i].state == State::Pass) c = 0x07E0;   // green
     if (checks[i].state == State::Fail) c = 0xF800;   // red
     if (checks[i].state == State::Skip) c = 0x7BEF;   // grey
     panel.setTextColor(c, 0x0000);
-    panel.setCursor(2, 16 + i * 20);
+    panel.setCursor(2, 12 + i * 18);
     panel.printf("%-4s %s", stateStr(checks[i].state), checks[i].name);
     if (!checks[i].note.empty()) {
-      panel.setCursor(2, 16 + i * 20 + 9);
+      panel.setCursor(2, 12 + i * 18 + 9);
       panel.setTextColor(0x8410, 0x0000);
       panel.printf("     %.28s", checks[i].note.c_str());
     }
@@ -176,16 +183,152 @@ static void checkLittlefs() {
   size_t total = 0, used = 0;
   esp_littlefs_info(conf.partition_label, &total, &used);
 
+  // Walked with sb::fs::Dir — this is the wrapper's directory iterator under
+  // test, and it also proves esp_littlefs populates d_type (the isDirectory()
+  // question from the sketch): if d_type were DT_UNKNOWN, dirsAtRoot would be 0
+  // even though /w demonstrably exists.
   int files = 0;
-  if (DIR* d = opendir("/lfs/w")) {
-    while (readdir(d)) ++files;
-    closedir(d);
+  sb::fs::Dir w("/lfs/w");
+  sb::fs::Dir::Entry e;
+  while (w.next(e)) {
+    if (!e.isDir) ++files;
+  }
+
+  int dirsAtRoot = 0;
+  sb::fs::Dir root("/lfs");
+  while (root.next(e)) {
+    if (e.isDir) ++dirsAtRoot;
+  }
+
+  char note[90];
+  snprintf(note, sizeof(note), "%d files /w, %d dirs /, %u/%u KB", files, dirsAtRoot,
+           (unsigned)(used / 1024), (unsigned)(total / 1024));
+  report(1, files > 0 && dirsAtRoot > 0 ? State::Pass : State::Fail, note);
+}
+
+// -------------------------------------------- 11. sb_fs wrapper -------------
+// Exercises every part of sb_fs.h against the live volume: path ops (bool
+// sense), the RAII File, and ArduinoJson streaming straight through the handle
+// — the concept-detection question from the sketch, which is really a
+// compile-time claim that this makes a runtime one too.
+//
+// Confined to /lfs/.sbfs_test* — it never touches /w or /config.
+
+static void checkSbFs() {
+  if (checks[1].state != State::Pass) {
+    report(10, State::Skip, "fs not mounted");
+    return;
+  }
+  const char* kTmp = "/lfs/.sbfs_test";
+  const char* kDst = "/lfs/.sbfs_test2";
+  sb::fs::remove(kTmp); // clean slate; false here is fine (may not exist)
+  sb::fs::remove(kDst);
+
+  // --- RAII File + ArduinoJson writer concept ---
+  {
+    sb::fs::File f(kTmp, "w");
+    if (!f) {
+      report(10, State::Fail, "open for write failed");
+      return;
+    }
+    JsonDocument doc;
+    doc["hello"] = "sb_fs";
+    doc["n"] = 42;
+    if (serializeJson(doc, f) == 0) { // <- the concept claim, at runtime
+      report(10, State::Fail, "serializeJson wrote 0");
+      return;
+    }
+  } // closes here, by scope, with no explicit close() — the whole point
+
+  // --- ArduinoJson reader concept + size() ---
+  long sz = -1;
+  {
+    sb::fs::File f(kTmp, "r");
+    if (!f) {
+      report(10, State::Fail, "reopen failed");
+      return;
+    }
+    sz = f.size();
+    JsonDocument doc;
+    if (deserializeJson(doc, f) != DeserializationError::Ok ||
+        doc["n"].as<int>() != 42) {
+      report(10, State::Fail, "roundtrip mismatch");
+      return;
+    }
+  }
+
+  // --- Path ops, checking the bool sense is right way round ---
+  if (!sb::fs::exists(kTmp)) {
+    report(10, State::Fail, "exists() false on real file");
+    return;
+  }
+  if (!sb::fs::rename(kTmp, kDst)) {
+    report(10, State::Fail, "rename returned false");
+    return;
+  }
+  if (sb::fs::exists(kTmp) || !sb::fs::exists(kDst)) {
+    report(10, State::Fail, "rename did not move it");
+    return;
+  }
+  // mkdir must be a no-op on an existing dir (the Web.cpp:267 dependency).
+  if (!sb::fs::mkdir("/lfs/w")) {
+    report(10, State::Fail, "mkdir on existing dir returned false");
+    return;
+  }
+  // ...and remove() must report failure honestly on something absent.
+  if (sb::fs::remove("/lfs/.no_such_file")) {
+    report(10, State::Fail, "remove() true on missing file");
+    return;
+  }
+  if (!sb::fs::remove(kDst)) {
+    report(10, State::Fail, "remove returned false");
+    return;
+  }
+  if (sb::fs::exists(kDst)) {
+    report(10, State::Fail, "remove left the file");
+    return;
   }
 
   char note[80];
-  snprintf(note, sizeof(note), "%d entries in /w, %u/%u KB", files,
-           (unsigned)(used / 1024), (unsigned)(total / 1024));
-  report(1, files > 0 ? State::Pass : State::Fail, note);
+  snprintf(note, sizeof(note), "json %ld B roundtrip, path ops ok", sz);
+  report(10, State::Pass, note);
+}
+
+// ------------------------------------------- 12. root mount -----------------
+// From components/vfs/vfs.c: `if (base_path_len != 0 && !is_path_prefix_valid(
+// ...))` — a zero-length base_path skips prefix validation, so mounting at "/"
+// is legal as far as the VFS is concerned. If it also works in practice, the
+// sketch's whole path problem dissolves: every existing constant ("/w",
+// "/config/settings.json") stays byte-identical and there is no second path
+// namespace to collide with PsychicHttp.
+//
+// Deliberately LAST: it registers a filesystem as the catch-all prefix, which
+// could plausibly shadow the console's /dev/uart paths. Everything else has
+// already reported to the panel and HTTP by now, so if this bricks the run we
+// still have the results — and a power-cycle rolls back anyway.
+
+static void checkRootMount() {
+  esp_vfs_littlefs_conf_t conf = {};
+  conf.base_path = "";
+  conf.partition_label = "spiffs";
+  conf.format_if_mount_failed = false;
+  conf.dont_mount = false;
+
+  esp_err_t err = esp_vfs_littlefs_register(&conf);
+  if (err != ESP_OK) {
+    // Expected failure modes: ESP_ERR_INVALID_ARG if joltwallet rejects an
+    // empty base_path, or ESP_ERR_INVALID_STATE for the double registration
+    // of the same partition. Either way the answer is "no", and check 2's
+    // mount is untouched.
+    report(11, State::Fail, std::string("register: ") + esp_err_to_name(err));
+    return;
+  }
+
+  // Does an unprefixed path actually resolve now?
+  bool ok = sb::fs::isDir("/w");
+  esp_vfs_littlefs_unregister(conf.partition_label);
+  report(11, ok ? State::Pass : State::Fail,
+         ok ? "\"/w\" resolves unprefixed" : "mounted but /w not found");
 }
 
 // ------------------------------------------------------- 3/4. Display -------
@@ -197,7 +340,9 @@ static void checkPanel() {
   panelUp = true;
 
   char note[64];
-  snprintf(note, sizeof(note), "%dx%d", panel.width(), panel.height());
+  // width()/height() are int32_t (long int here), so cast — IDF builds with
+  // -Werror=format=.
+  snprintf(note, sizeof(note), "%dx%d", (int)panel.width(), (int)panel.height());
   if (panel.width() != 240 || panel.height() != 240) {
     report(2, State::Fail, note);
     return;
@@ -221,9 +366,11 @@ static void checkBandPush() {
   }
   scratch.setColorDepth(16);
   scratch.setBuffer(scratchData, BAND_W, BAND_H, 16); // static — no heap sprite
+  // Fill the backing store directly: the timed part below is pushSprite, and a
+  // raw fill keeps this setup off any LovyanGFX API we have not verified yet.
+  auto* px = reinterpret_cast<uint16_t*>(scratchData);
   for (int y = 0; y < BAND_H; ++y)
-    for (int x = 0; x < BAND_W; ++x)
-      scratch.writePixel(x, y, (uint16_t)((x << 5) ^ (y << 11)));
+    for (int x = 0; x < BAND_W; ++x) px[y * BAND_W + x] = (uint16_t)((x << 5) ^ (y << 11));
 
   const int reps = 20;
   int64_t t0 = esp_timer_get_time();
@@ -527,7 +674,8 @@ extern "C" void app_main() {
 
   checkNvsCreds();
   checkLittlefs();
-  checkPanel();     // panel comes up here; the two results above appear now
+  checkSbFs();      // depends on check 2's mount; safe, confined to /lfs/.sbfs_test*
+  checkPanel();     // panel comes up here; the three results above appear now
   checkBandPush();
   checkTouch();
   checkWifi();
@@ -536,6 +684,9 @@ extern "C" void app_main() {
   checkPsychic();
 
   report(9, State::Pass, heapLine());
+
+  // Last, and deliberately so — see the note on checkRootMount.
+  checkRootMount();
   ESP_LOGI(TAG, "main task stack high water: %u",
            (unsigned)uxTaskGetStackHighWaterMark(nullptr));
 
