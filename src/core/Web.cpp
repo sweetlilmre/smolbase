@@ -220,7 +220,7 @@ void begin(App& app) {
     for (JsonPairConst kv : doc.as<JsonObjectConst>()) {
       bool ok = kv.value().isNull()
                     ? Secrets::clear(kv.key().c_str())
-                    : Secrets::set(kv.key().c_str(), kv.value().as<String>());
+                    : Secrets::set(kv.key().c_str(), kv.value().as<std::string>());
       if (!ok) {
         return res->send(500, "application/json",
                          "{\"error\":\"secret store write failed (NVS full?)\"}");

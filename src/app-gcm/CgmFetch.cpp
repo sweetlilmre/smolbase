@@ -405,14 +405,20 @@ void loop() {
     // Arm the task — only when idle, network up, credentials present, and not auth-failed.
     if (!g_fetchDue || g_fetchInFlight || g_loginFailed || !g_task || !Net::isUp()) return;
 
-    String email = Secrets::get(CgmKeys::EMAIL);
-    String pass  = Secrets::get(CgmKeys::PASSWORD);
+    std::string email = Secrets::get(CgmKeys::EMAIL);
+    std::string pass  = Secrets::get(CgmKeys::PASSWORD);
     // Basic sanity: both fields non-empty and email contains '@' with at least
     // one '.' after it — catches typos before attempting a TLS round-trip.
-    int atPos   = email.indexOf('@');
-    bool credOk = !email.isEmpty() && !pass.isEmpty()
-                  && atPos > 0
-                  && email.indexOf('.', atPos + 1) > atPos + 1;
+    // std::string::find returns npos, not -1, so the absent case cannot be
+    // folded into the signed-index arithmetic Arduino String allowed here.
+    // Semantics preserved exactly: '@' not first, and a '.' at least two
+    // positions after it (i.e. a non-empty label between them).
+    const size_t atPos = email.find('@');
+    const size_t dotPos =
+        atPos == std::string::npos ? std::string::npos : email.find('.', atPos + 1);
+    bool credOk = !email.empty() && !pass.empty()
+                  && atPos != std::string::npos && atPos > 0
+                  && dotPos != std::string::npos && dotPos > atPos + 1;
     if (!credOk) {
         if (!g_current.noCredentials) {
             g_current.clear();
