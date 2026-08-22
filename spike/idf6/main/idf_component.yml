@@ -11,7 +11,7 @@ dependencies:
   # git at the version we have pinned.
   psychichttp:
     git: https://github.com/hoeken/PsychicHttp.git
-    version: "v3.1.2"
+    version: "3.1.2" # upstream tags carry no "v" prefix
 
   # PsychicHttp's README: on native IDF, ArduinoJson must be declared by the
   # *project*, not inherited from PsychicHttp.

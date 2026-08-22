@@ -31,7 +31,7 @@ Not a preference — a constraint. arduino-esp32 3.x is built on ESP-IDF 5.x, an
 
 ## What we lose / pay for
 
-- **Template-consumer breakage.** This repo is a template. Every downstream fork inherits the build-system change and the `String` → `std::string` API change on `ConfigStore`/`Net`/`Secrets`. This is a major-version event and `docs/building-your-app.md` needs a rewrite, not an edit.
+- ~~**Template-consumer breakage.**~~ **Mispriced — corrected 2026-08-22.** This repo is a template, but there are no downstream forks yet, so there is no contract to break and nobody to migrate. The build-system change and the `String` → `std::string` change on `ConfigStore`/`Net`/`Secrets` cost nothing outside this repo today. `docs/building-your-app.md` still needs rewriting, but because it documents PlatformIO and `pio run` — not because anyone's code breaks. **This inverts into the strongest timing argument in the document: the migration is free of consumer cost exactly once, and that window is open now.** Every fork taken before the migration converts this line item back into a real cost.
 - **The one-click PlatformIO/VSCode flow** is replaced by the ESP-IDF extension + `idf.py`. Different, not worse, but it is a re-learn and a docs rewrite (`docs/flashing.md`, `AGENTS.md`).
 - **`pio run` as the single arbiter** goes away; CI, the build-log tee convention, and the multi-env smoke build all need re-expressing in CMake/`idf.py` terms.
 - **Unproven combinations.** LovyanGFX-on-IDF-6-on-classic-ESP32 is well-evidenced on paper (see Phase 0 findings) but nobody has compiled it here yet. The touch driver is documented as supported; the panel and its DMA path are the remaining unknowns.
@@ -64,7 +64,7 @@ Counts are grep call-sites across `src/` + `include/`, current `main`.
 | `millis()` / `micros()` / `delay()` | 39 | `esp_timer_get_time()` / `vTaskDelay` | Everywhere, incl. all five effects | **Do not hand-edit 39 sites.** Add three inline functions to `smolbase_config.h` (or a tiny `compat.h`) and the diff is one file. |
 | `touchRead()` | 2 | ESP32 touch-sensor driver | `Touch.cpp` | Small code, **unverified API** — see Open questions. |
 | `ESP.getFreeHeap()` / `ESP.restart()` / `ESP.getMaxAllocHeap()` | 6 | `esp_get_free_heap_size()`, `esp_restart()`, `heap_caps_get_largest_free_block()` | `Web.cpp`, `Net.cpp`, `GhUpdate.cpp` | Trivial. |
-| `IPAddress` | 3 | `esp_ip4_addr_t` + `esp_ip4addr_ntoa`, or a tiny local struct | `Net.h` public API | `Net::ip()` is public API — either change the return type or return a string. Consumer-visible. |
+| `IPAddress` | 3 | `esp_ip4_addr_t` + `esp_ip4addr_ntoa` | `Net.h` | `Net::ip()`'s return type just changes. No consumers to protect. Trivial. |
 | `setup()` / `loop()` | 1 | `app_main()` + `xTaskCreatePinnedToCore` on core 1 | `main.cpp` | Small but load-bearing: **pick the stack size deliberately.** Arduino's `loopTask` gave us an implicit 8 KB, and the effects plus the LovyanGFX sprite paths have been running inside that budget. Start at 8 KB and watch the high-water mark. |
 
 Explicitly *not* a problem: no `pinMode`/`digitalWrite`/`analogRead`/`Wire` anywhere, one `random()`, no `map`/`constrain`. The GPIO surface is entirely inside LovyanGFX and the touch pad.
@@ -104,6 +104,24 @@ The bad news is a real gap in `Ota::tickRollbackGuard()` (`src/core/Ota.cpp:35`)
 
 **Fix this before the first IDF-6 OTA:** gate `esp_ota_mark_app_valid_cancel_rollback()` on `Net::isUp()` (or better, on the first successfully served HTTP request), with a timeout that lets the rollback actually fire. This is a small, independently useful change to the *current* Arduino firmware and should ship as its own PR well ahead of the migration.
 
+## Scope decisions (2026-08-22)
+
+Settled, so they stop being relitigated:
+
+**No dual-target build.** One source tree building on both frameworks via `#ifdef ARDUINO` is technically viable at this scale — PsychicHttp and LovyanGFX both do it — and it would let the heap delta be A/B'd on identical source. Rejected anyway: it means carrying dual-target complexity permanently and never being able to delete the Arduino path, which was the point. The per-phase revert path below is sufficient insurance.
+
+**No Arduino compatibility layer beyond leaf primitives.** The reason is that smolbase already has its shims: `Net`, `ConfigStore`, `Ota`, `Portal`, `Display`, `Secrets`. Every large Arduino dependency is already confined to one file — `WiFi.*` (28 sites), `Preferences` (6) and `ESPmDNS` (6) live only in `Net.cpp`; `Update.*` (24) only in `Ota.cpp`; `DNSServer` (4) only in `Portal.cpp`. Emulating those APIs would put a second abstraction underneath the first, wrapping an interface with exactly one caller. Rewriting each module's insides while keeping its namespace is the same work with less surface. What *is* in scope:
+
+- **`compat.h` for leaf calls** — `millis`/`micros`/`delay` (39 sites) and the `ESP.*` helpers (6). Stateless, no lifecycle, and the shim is thinner than what it wraps. That is the test these pass and the object APIs fail.
+- **One HTTP helper**, replacing the four duplicated `BundleClient : NetworkClientSecure` subclasses. Framed as deduplication, which the codebase wants regardless of framework — not as compatibility.
+- **Possibly a thin RAII file handle** over POSIX for the 58 `LittleFS` sites across four consumers. Judgment call; PsychicHttp solved the same problem for itself in ~40 lines. An owning handle, not an `fs::FS` clone.
+
+Explicitly rejected: emulating `String`, `WiFi`, `Update`, `Preferences`, `HTTPClient`, or `fs::FS`. `String` is the one that would actively hurt — it is the fragmentation-generating type with a silent allocation-failure mode, on the chip where heap is the binding constraint, and shedding it is one of the migration's actual wins.
+
+**No consumer-contract protection.** No downstream forks exist. Signatures change where changing them is cleaner.
+
+Note that none of this weakens the staging below. The phases exist because **this bench has no serial flasher**, so every step must be independently flashable and revertible — a constraint that has nothing to do with API stability.
+
 ## Suggested staging
 
 The key insight: **most of the Arduino decoupling can happen while still on Arduino**, because the IDF APIs are all available under arduino-esp32 (it *is* an IDF project). Each phase below lands on `main`, gets OTA-flashed, and gets verified on the real device before the next one starts. Only the last code phase flips the framework, and by then almost nothing depends on Arduino.
@@ -113,12 +131,12 @@ The key insight: **most of the Arduino decoupling can happen while still on Ardu
 | **0. Spike** | Throwaway IDF 6 project: LovyanGFX brings up the panel, read the touch pad, `esp_wifi` joins, `esp_http_client` does a TLS fetch of a GitHub release asset with the RSA-4096 chain and the three mbedTLS knobs set in plain `sdkconfig`. Then throw it away. | IDF 6 | **~80% of the total risk**, for 1–2 days. Do not skip this. |
 | **1. Rollback guard** | Gate image-confirm on network-up. | Arduino | The one-way-door brick. |
 | **2. `compat.h`** | `millis`/`micros`/`delayMs` inlines over `esp_timer`/`vTaskDelay`; `Serial.*` → `ESP_LOGx`; `ESP.*` → `esp_*`. | Arduino | 63 call sites, zero behaviour change. |
-| **3. `std::string`** | Module by module, public APIs last. Arduino `String` and `std::string` coexist happily, so this can be split further. | Arduino | The 138-site mechanical grind, de-risked and reviewable. |
+| **3. `std::string`** | Module by module, signatures changed freely as we go — with no consumers there is no reason to save the public APIs for last. Arduino `String` and `std::string` coexist happily, so this can be split as finely as review comfort wants. | Arduino | The 138-site mechanical grind, de-risked and reviewable. |
 | **4. HTTP unification** | All four `HTTPClient`/`BundleClient` sites onto `esp_http_client`, sharing one helper. | Arduino | TLS behaviour — verified on-device against the real weather/GCM/GitHub endpoints while the old stack is one revert away. Net LOC reduction. |
 | **5. Storage** | `LittleFS`/`FS.h` → POSIX plus `esp_vfs_littlefs`; `Preferences` → `nvs`; `Update.h` → `esp_ota_ops` plus explicit partition writes. | Arduino | The scariest I/O paths (asset heal, OTA, settings) proven before the framework moves. |
 | **6. Network** | `WiFi`/`ESPmDNS`/`DNSServer` → `esp_wifi` + `esp_netif` + `esp_event` + `mdns` + vendored `dns_server`. | Arduino | The biggest rewrite, still with a working revert path. |
 | **7. Build system** | CMake project, per-app selection, asset pipeline, sdkconfig, CI, `idf.py` docs. | **IDF 6** | The flip. `main.cpp` becomes `app_main`; `Web.cpp`/`Ota.cpp` take PsychicHttp's native-mode signatures; `Touch.cpp` takes the new driver; the `<Arduino.h>` includes are deleted. |
-| **8. Docs and version** | `AGENTS.md`, `README.md`, `docs/building-your-app.md`, `docs/flashing.md`, a new ADR for the framework decision, ADR 0005 marked superseded, major version bump. | IDF 6 | Template consumers. |
+| **8. Docs and version** | `AGENTS.md`, `README.md`, `docs/building-your-app.md`, `docs/flashing.md`, a new ADR for the framework decision, ADR 0005 marked superseded, version bump. | IDF 6 | The docs describe a build system that no longer exists — that, not compatibility, is what makes this phase mandatory. |
 
 Phases 1–6 are each individually valuable even if the migration is later abandoned: they remove duplication, unify the HTTP stack, and close a real brick risk.
 

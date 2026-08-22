@@ -205,22 +205,29 @@ static void checkPanel() {
   report(2, State::Pass, note);
 }
 
-// ADR 0004's hot path: a static 240x64 RGB565 band scratch pushed straight to
-// the panel. This is what actually exercises SPI DMA at 40 MHz. If DMA silently
-// fell back to polled writes under IDF 6, the timing here is where it shows.
-static uint16_t bandScratch[240 * 64];
+// ADR 0004's hot path, mirrored from WeatherScreen.cpp: a static 240x64 RGB565
+// sprite bound with setBuffer (no heap sprite) and pushed with pushSprite. This
+// is what actually exercises SPI DMA at 40 MHz. If DMA silently fell back to
+// polled writes under IDF 6, the timing here is where it shows.
+static constexpr int BAND_W = 240;
+static constexpr int BAND_H = 64;
+static uint8_t scratchData[BAND_W * BAND_H * 2];
+static lgfx::LGFX_Sprite scratch;
 
 static void checkBandPush() {
   if (!panelUp) {
     report(3, State::Skip, "panel down");
     return;
   }
-  for (int y = 0; y < 64; ++y)
-    for (int x = 0; x < 240; ++x) bandScratch[y * 240 + x] = (uint16_t)((x << 5) ^ (y << 11));
+  scratch.setColorDepth(16);
+  scratch.setBuffer(scratchData, BAND_W, BAND_H, 16); // static — no heap sprite
+  for (int y = 0; y < BAND_H; ++y)
+    for (int x = 0; x < BAND_W; ++x)
+      scratch.writePixel(x, y, (uint16_t)((x << 5) ^ (y << 11)));
 
   const int reps = 20;
   int64_t t0 = esp_timer_get_time();
-  for (int i = 0; i < reps; ++i) panel.pushImage(0, 176, 240, 64, bandScratch);
+  for (int i = 0; i < reps; ++i) scratch.pushSprite(&panel, 0, 176);
   panel.waitDMA();
   int64_t us = (esp_timer_get_time() - t0) / reps;
 
@@ -240,14 +247,14 @@ static touch_channel_handle_t touchChan = nullptr;
 static constexpr int TOUCH_CHAN_ID = 9; // T9 == GPIO32
 
 static void checkTouch() {
-  // NOTE: the macro arguments and the TOUCH_VOLT_LIM_* enum spellings below are
-  // taken from the v6.0 docs' example, not from a compiled header. Expect the
-  // first build to correct them — that is fine, the question is whether the
-  // driver supports this chip at all, not whether I guessed the enum names.
-  touch_sensor_sample_config_t sample[1] = {
-      TOUCH_SENSOR_V1_DEFAULT_SAMPLE_CONFIG(1, TOUCH_VOLT_LIM_L_0V5, TOUCH_VOLT_LIM_H_2V2),
+  // Values taken from IDF 6.0.2's own V1 test app
+  // (components/esp_driver_touch_sens/test_apps/touch_sens/main/
+  // test_touch_sens_common.cpp): 5.0 ms charge, 0V5 low / 1V7 high. Note V1
+  // takes a float duration in ms, and its high limit is 1V7, not V2's 2V2.
+  touch_sensor_sample_config_t sample[TOUCH_SAMPLE_CFG_NUM] = {
+      TOUCH_SENSOR_V1_DEFAULT_SAMPLE_CONFIG(5.0, TOUCH_VOLT_LIM_L_0V5, TOUCH_VOLT_LIM_H_1V7),
   };
-  touch_sensor_config_t sensCfg = TOUCH_SENSOR_DEFAULT_BASIC_CONFIG(1, sample);
+  touch_sensor_config_t sensCfg = TOUCH_SENSOR_DEFAULT_BASIC_CONFIG(TOUCH_SAMPLE_CFG_NUM, sample);
 
   esp_err_t err = touch_sensor_new_controller(&sensCfg, &touchSens);
   if (err != ESP_OK) {
