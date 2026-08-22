@@ -4,7 +4,7 @@ Throwaway. This directory exists to answer yes/no questions from [docs/research/
 
 ## What it proves
 
-Ten checks, in this order (order matters — see *Getting results out*):
+Twelve checks, in this order (order matters — see *Getting results out*):
 
 | # | Check | Retires |
 |---|---|---|
@@ -18,6 +18,8 @@ Ten checks, in this order (order matters — see *Getting results out*):
 | 8 | TLS: follow the release-asset 302 to the CDN and read 8 KB | **The RSA-4096 chain (#119)** with the mbedTLS knobs set in plain `sdkconfig` — the whole ADR 0005 thesis |
 | 9 | PsychicHttp in native (non-Arduino) mode: serve the results as JSON | Open question 4 |
 | 10 | Footprint: free heap, largest block, min-ever, TLS floor, task high-water | Open question 5 |
+| 11 | `sb_fs.h`: path ops, RAII `File`, ArduinoJson through the handle | The wrapper design in `littlefs-wrapper-sketch.md` |
+| 12 | Root mount at `base_path = ""`, then `stat("/w")` | Whether the path constants have to change at all |
 
 ## Getting results out
 
@@ -58,12 +60,13 @@ idf.py build
 curl -X POST http://<device-ip>/api/update -F file=@build/idf6_spike.bin
 # device reboots into the spike; watch the panel, then:
 curl http://<device-ip>/
-# when done, power-cycle to roll back to the real firmware
+# to get back to the real firmware (no physical access needed):
+curl -X POST http://<device-ip>/restart
 ```
 
-## Install (needs your say-so — see the note in the session)
+## Install
 
-ESP-IDF 6.0 is a multi-GB toolchain install from Espressif's official distribution. It is the vendor SDK for hardware this project already targets, but it is still a software install on a company device, so it is your call and your command to run:
+ESP-IDF 6.0 is a multi-GB toolchain install from Espressif's official distribution. Installed at `~/esp/esp-idf` (v6.0.2) for this spike:
 
 ```powershell
 git clone -b v6.0.2 --recursive https://github.com/espressif/esp-idf.git $HOME\esp\esp-idf
@@ -71,7 +74,7 @@ git clone -b v6.0.2 --recursive https://github.com/espressif/esp-idf.git $HOME\e
 & $HOME\esp\esp-idf\export.ps1
 ```
 
-Everything in this directory is written and ready; none of it has been compiled. Treat every file here as unverified until `idf.py build` has run once.
+Build cost, measured: ~25 s for a one-file edit, 177 s for a clean rebuild with warm ccache (~10 min cold). `IDF_CCACHE_ENABLE=1` is already set by `export.ps1`.
 
 ## Results
 
