@@ -1,0 +1,18 @@
+dependencies:
+  idf: ">=6.0"
+
+  # LittleFS on the live `spiffs` partition (check 2). 1.22.3 is the version
+  # already vendored in the repo root's managed_components/.
+  joltwallet/littlefs: "^1.22.3"
+
+  # PsychicHttp in native (non-Arduino) mode — check 9, and the channel the
+  # results come out of. Upstream ships CMakeLists.txt + idf_component.yml, but
+  # the PlatformIO tarball we build against today strips them, so take it from
+  # git at the version we have pinned.
+  psychichttp:
+    git: https://github.com/hoeken/PsychicHttp.git
+    version: "v3.1.2"
+
+  # PsychicHttp's README: on native IDF, ArduinoJson must be declared by the
+  # *project*, not inherited from PsychicHttp.
+  bblanchon/arduinojson: "^7.4.3"
