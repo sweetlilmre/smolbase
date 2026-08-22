@@ -443,10 +443,17 @@ static void checkTouch() {
     return;
   }
 
-  // Absolute threshold, mirroring Touch.cpp: we calibrate below, so start with
-  // the in-code default (SMOLBASE_TOUCH_DEFAULT_THRESHOLD).
+  // Run 2 lesson: do NOT zero-initialise this struct. charge_speed = 0 is a
+  // real enum value (the slowest), not "unset", so a `= {}` config leaves the
+  // pad effectively uncharged and every measurement reads 0 — which the
+  // software filter then faithfully smooths into more zeros. Values below are
+  // the driver's own V1 test app
+  // (test_apps/touch_sens/main/test_touch_sens_common.cpp:31).
   touch_channel_config_t chanCfg = {};
-  chanCfg.abs_active_thresh[0] = 300;
+  chanCfg.abs_active_thresh[0] = 300; // Touch.cpp's SMOLBASE_TOUCH_DEFAULT_THRESHOLD
+  chanCfg.charge_speed = TOUCH_CHARGE_SPEED_7;
+  chanCfg.init_charge_volt = TOUCH_INIT_CHARGE_VOLT_DEFAULT;
+  chanCfg.group = TOUCH_CHAN_TRIG_GROUP_BOTH;
 
   err = touch_sensor_new_channel(touchSens, TOUCH_CHAN_ID, &chanCfg, &touchChan);
   if (err != ESP_OK) {
@@ -493,7 +500,8 @@ static void checkTouch() {
   }
 
   if (!got) {
-    report(4, State::Fail, std::string("smooth reads gave 0, last=") + esp_err_to_name(lastErr));
+    report(4, State::Fail, std::string("smooth 0, last=") + esp_err_to_name(lastErr) +
+                               ", RAW=" + esp_err_to_name(rawErr));
     return;
   }
   uint32_t baseline = sum / got;
@@ -611,8 +619,16 @@ static FetchResult tlsFetch(const char* url, int maxBytes, bool followRedirect,
     uint32_t now = esp_get_free_heap_size();
     if (now < r.heapFloor) r.heapFloor = now;
 
-    if (followRedirect && (r.status == 301 || r.status == 302 || r.status == 307)) {
+    if (followRedirect &&
+        (r.status == 301 || r.status == 302 || r.status == 307 || r.status == 308)) {
+      // Run 2 lesson: with the manual open/fetch_headers/read pattern,
+      // esp_http_client does NOT follow redirects for you, and
+      // set_redirection() alone is not enough — the current request must be
+      // CLOSED before re-opening against the new URL. Without the close the
+      // second open() fails and the status stays 302, which is exactly how
+      // run 2 reported "302, 0 B".
       esp_http_client_set_redirection(c);
+      esp_http_client_close(c);
       continue;
     }
     break;
@@ -643,6 +659,20 @@ static FetchResult tlsFetch(const char* url, int maxBytes, bool followRedirect,
 
 static uint32_t tlsHeapFloor = 0;
 static std::string releaseTag;
+
+// Check 8 uses perform() rather than the manual read loop, so bytes and the
+// heap floor are sampled from the event stream instead.
+static int s_cdnBytes = 0;
+static uint32_t s_cdnFloor = 0;
+
+static esp_err_t cdnEvent(esp_http_client_event_t* e) {
+  if (e->event_id == HTTP_EVENT_ON_DATA) {
+    s_cdnBytes += e->data_len;
+    uint32_t now = esp_get_free_heap_size();
+    if (now < s_cdnFloor) s_cdnFloor = now;
+  }
+  return ESP_OK;
+}
 
 static void checkTlsApi() {
   if (checks[5].state != State::Pass) {
@@ -678,22 +708,62 @@ static void checkTlsCdn() {
     report(7, State::Skip, "no tag_name parsed");
     return;
   }
-  // The asset URL shape GhUpdate builds: <prefix>-<tag>.bin. Getting this WRONG
-  // is how the first run of this check produced a false pass — a bare
-  // "smolbase-firmware.bin" 404s at github.com and never redirects, so the
-  // handshake that succeeded was github.com's, not the CDN's. Nothing below
-  // status 200 WITH bytes read proves the RSA-4096 chain verified.
+  // Third attempt at this check. Attempt 1 used a nonexistent asset name and
+  // "passed" on github.com's own 404. Attempt 2 hand-drove the 302 with
+  // set_redirection() + close() and still reported 302, twice. Hand-driving
+  // redirects across a host change is evidently not worth debugging here, so
+  // this uses esp_http_client_perform(), which follows redirects itself — the
+  // same path esp_https_ota relies on, and what GhUpdate.cpp:8 already
+  // documents as working ("esp_http_client follows the 302 to the CDN
+  // natively").
+  //
+  // A Range header keeps it to 8 KB instead of pulling the whole 1.7 MB asset.
+  // The CDN answers a range request with 206.
   std::string url = std::string("https://github.com/") + GH_REPO + "/releases/download/" +
                     releaseTag + "/smolbase-firmware-" + releaseTag + ".bin";
-  FetchResult r = tlsFetch(url.c_str(), 8192, true);
-  if (r.heapFloor < tlsHeapFloor) tlsHeapFloor = r.heapFloor;
 
-  char note[128];
-  snprintf(note, sizeof(note), "%s http %d, %d B, floor %u", releaseTag.c_str(), r.status,
-           r.bytesRead, (unsigned)r.heapFloor);
-  // 200 AND bytes: the redirect to the CDN was followed and its chain verified.
-  report(7, r.err == ESP_OK && r.status == 200 && r.bytesRead > 0 ? State::Pass : State::Fail,
-         note);
+  s_cdnBytes = 0;
+  s_cdnFloor = esp_get_free_heap_size();
+
+  esp_http_client_config_t cfg = {};
+  cfg.url = url.c_str();
+  cfg.crt_bundle_attach = esp_crt_bundle_attach;
+  cfg.timeout_ms = 20000;
+  cfg.event_handler = cdnEvent;
+  cfg.max_redirection_count = 5; // github.com -> objects.githubusercontent.com
+  // disable_auto_redirect deliberately left false.
+  //
+  // THE ACTUAL FIX, and it was in this repo the whole time — GhUpdate.cpp:163
+  // and AssetUpdate.cpp:149 both carry the comment "request line must fit the
+  // ~1.2 KB CDN redirect URL". esp_http_client's default buffer_size_tx is
+  // 512 bytes, and GitHub's signed CDN URL is ~1.2 KB, so the *redirected*
+  // request line does not fit and perform() fails with ESP_FAIL while the
+  // status stays 302. Nothing to do with redirect logic.
+  cfg.buffer_size = 2048;
+  cfg.buffer_size_tx = 2048;
+
+  esp_http_client_handle_t c = esp_http_client_init(&cfg);
+  if (!c) {
+    report(7, State::Fail, "client_init failed");
+    return;
+  }
+  esp_http_client_set_header(c, "User-Agent", "smolbase-idf6-spike");
+  esp_http_client_set_header(c, "Range", "bytes=0-8191");
+
+  esp_err_t err = esp_http_client_perform(c);
+  int status = esp_http_client_get_status_code(c);
+  esp_http_client_cleanup(c);
+
+  if (s_cdnFloor < tlsHeapFloor) tlsHeapFloor = s_cdnFloor;
+
+  char note[140];
+  snprintf(note, sizeof(note), "%s http %d, %d B, floor %u, err=%s", releaseTag.c_str(), status,
+           s_cdnBytes, (unsigned)s_cdnFloor, esp_err_to_name(err));
+  // 200/206 WITH bytes: the redirect was followed and the CDN's chain — the
+  // one cross-signed by RSA-4096 ISRG Root X1 — verified. That is the whole
+  // ADR 0005 / #119 question.
+  bool ok = err == ESP_OK && (status == 200 || status == 206) && s_cdnBytes > 0;
+  report(7, ok ? State::Pass : State::Fail, note);
 }
 
 // ------------------------------------------------- 9. PsychicHttp native ----
