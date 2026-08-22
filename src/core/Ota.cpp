@@ -27,25 +27,46 @@ extern "C" bool verifyRollbackLater() { return true; }
 
 namespace Ota {
 
-// Healthy-uptime bar for confirming a fresh image. 30 s covers the boot
-// path (app setup, first paints, WiFi join) with margin, while staying
-// short enough that a same-session follow-up OTA is never blocked on it.
+// Minimum uptime before a fresh image may be confirmed. 30 s covers the boot
+// path (app setup, first paints, WiFi join) with margin, while staying short
+// enough that a same-session follow-up OTA is never blocked on it. This is a
+// FLOOR, not the whole test — see tickRollbackGuard, which also requires the
+// device to be reachable.
 static constexpr uint32_t CONFIRM_UPTIME_MS = 30000;
 
 void tickRollbackGuard() {
   static bool done = false;
   if (done) return;
   if (millis() < CONFIRM_UPTIME_MS) return;
-  done = true;
+
   const esp_partition_t* running = esp_ota_get_running_partition();
   esp_ota_img_states_t state;
-  if (esp_ota_get_state_partition(running, &state) == ESP_OK &&
-      state == ESP_OTA_IMG_PENDING_VERIFY) {
+  const bool pending = esp_ota_get_state_partition(running, &state) == ESP_OK &&
+                       state == ESP_OTA_IMG_PENDING_VERIFY;
+
+  if (pending) {
+    // Uptime alone is NOT evidence of health on a device with no serial
+    // flasher. An image that boots, paints, and then never reaches the network
+    // is unreachable — and confirming it cancels the rollback that was the only
+    // way back. Require that the device is actually REACHABLE: either the STA
+    // link is up, or AP mode is raised (a device waiting to be provisioned is
+    // working correctly, and its portal is reachable).
+    //
+    // Deliberately keeps retrying instead of deciding once. A device that is
+    // mid-reconnect at the 30 s mark is healthy, and a single-shot check would
+    // strand it on a false rollback. If neither state is ever reached the image
+    // simply stays PENDING_VERIFY and the next reset rolls it back, which is
+    // the correct outcome for a firmware that cannot be talked to.
+    if (!Net::isUp() && !Net::inApMode()) return;
     esp_ota_mark_app_valid_cancel_rollback();
-    Serial.println("[ota] image confirmed healthy after 30 s - rollback armed off");
+    Serial.println("[ota] image confirmed - device reachable, rollback armed off");
   }
+
+  done = true;
   // The image is stable: an asset backup for a *different* version can never
   // be needed again (only a rollback would want it, and rollback is off).
+  // Gated behind the reachability check above for the same reason — while a
+  // rollback is still possible, the previous version's assets must survive.
   AssetUpdate::onImageConfirmed();
 }
 
