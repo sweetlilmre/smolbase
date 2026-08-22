@@ -28,11 +28,11 @@ constexpr const char* K_GEO_LON  = "wx_lon";
 constexpr const char* K_GEO_NAME = "wx_geo_name";
 constexpr const char* K_GEO_CC   = "wx_geo_cc";
 // Registered keys and their defaults come from WeatherKeys.h (#98).
-String geoTriedFor;
+std::string geoTriedFor;
 // The city value as of the last settings pass: onSettingsChanged compares
 // against this — ONLY a city change refetches (#68 Q4); every other save
 // re-renders from cache with no network traffic.
-String lastCity;
+std::string lastCity;
 
 // ---- cross-task handoff -----------------------------------------------------
 // The fetch task writes `pending` under `ctx.mux` and flips pendingReady;
@@ -312,9 +312,9 @@ void loop() {
   if (!fetchDue || fetchInFlight || !fetchTask || !Net::isUp()) return;
 
   // Arm the task: all policy reads happen here, on core 1.
-  String city = ConfigStore::getString(WxKeys::CITY, WxKeys::DEF_CITY);
+  std::string city = ConfigStore::getString(WxKeys::CITY, WxKeys::DEF_CITY);
   if (!city.length()) return;
-  String cachedFor = ConfigStore::getString(K_GEO_FOR, "");
+  std::string cachedFor = ConfigStore::getString(K_GEO_FOR, "");
   bool haveCoords = cachedFor == city && ConfigStore::getString(K_GEO_LAT, "").length();
   bool isName = !isdigit((unsigned char)city[0]);
   // One geocode attempt per distinct city value (RAM latch; reboot retries).
@@ -349,7 +349,7 @@ void onSettingsChanged() {
   // saw, not the geocode cache — so switching back to a cached city still
   // refetches, a re-saved failed geocode gets its fresh attempt, and unit/
   // colour saves never touch the network.
-  String city = ConfigStore::getString(WxKeys::CITY, WxKeys::DEF_CITY);
+  std::string city = ConfigStore::getString(WxKeys::CITY, WxKeys::DEF_CITY);
   if (city != lastCity) {
     lastCity = city;
     geoTriedFor = "";

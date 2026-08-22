@@ -131,7 +131,9 @@ static void onWiFiEvent(WiFiEvent_t event) {
 
 // Effective device name: the sanitized "hostname" setting, else smolbase-XXXX.
 static String computeName() {
-  String n = sanitizeHostname(ConfigStore::getString("hostname", ""));
+  // .c_str() bridges to sanitizeHostname's String parameter until Net's
+  // own surface converts in phase 3c.
+  String n = sanitizeHostname(ConfigStore::getString("hostname", "").c_str());
   if (!n.isEmpty()) return n;
   // esp_read_mac works before any netif exists; WiFi.macAddress() at this
   // point returns without writing the buffer (verified in the installed core),

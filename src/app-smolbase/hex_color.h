@@ -3,9 +3,11 @@
 // <input type="color"> speaks (registerColor, ticket #58), so the web side
 // needs no conversion — parsing happens once per repaint, here.
 #pragma once
-#include <Arduino.h>
+#include <cstdint>
+#include <cstdlib>
+#include <string>
 
-inline uint32_t hexRgb(const String& s, uint32_t fallback) {
+inline uint32_t hexRgb(const std::string& s, uint32_t fallback) {
   if (s.length() == 7 && s[0] == '#') {
     char* end;
     long v = strtol(s.c_str() + 1, &end, 16);

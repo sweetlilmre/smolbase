@@ -62,12 +62,12 @@ void sync() {
   // online): configTzTime stops any running SNTP session, re-applies TZ via
   // setenv/tzset, sets the servers, and restarts SNTP. Default sync interval
   // (1h) is kept.
-  String ntp = ConfigStore::getString("ntp"); // defaults live in the settings schema
-  String tz = ConfigStore::getString("tz");
+  std::string ntp = ConfigStore::getString("ntp"); // defaults live in the settings schema
+  std::string tz = ConfigStore::getString("tz");
 
   // Skip the stop/restart churn (and the NTP-pool hammering) when nothing
   // that SNTP consumes actually changed — every settings save lands here.
-  if (kicked && ntp.equals(ntpBufs[bufSel]) && tz.equals(tzBufs[bufSel])) return;
+  if (kicked && ntp == ntpBufs[bufSel] && tz == tzBufs[bufSel]) return;
   kicked = true;
 
   // Write into the inactive pair, then flip: the live session never sees a
@@ -101,7 +101,7 @@ void loop() {
 }
 
 void applyTimezone() {
-  String tz = ConfigStore::getString("tz");
+  std::string tz = ConfigStore::getString("tz");
   setenv("TZ", tz.c_str(), 1);
   tzset();
 }

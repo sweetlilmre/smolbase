@@ -44,7 +44,7 @@ static SettingDef* addEntry(SettingSection s, SettingType t, const char* key, co
 
 // A Choice setting's label persists under this derived key (ADR 0002) —
 // "tz" stores the POSIX value, "tz_name" the IANA label the user picked.
-static String labelKey(const char* key) { return String(key) + "_name"; }
+static std::string labelKey(const char* key) { return std::string(key) + "_name"; }
 
 // "#RRGGBB", case-insensitive — the exact format <input type="color"> emits.
 static bool isHexColor(const char* s) {
@@ -245,7 +245,7 @@ bool applyJson(JsonObjectConst src) {
           if (lv.is<const char*>()) nl = lv.as<const char*>();
         }
         if (!nl) break; // not in the catalog / label missing: ignored
-        String lk = labelKey(d.key);
+        std::string lk = labelKey(d.key);
         const char* curV = doc[d.key] | d.defStr;
         const char* curL = doc[lk] | d.defLabel;
         if (strcmp(curV, nv) != 0 || strcmp(curL, nl) != 0) {
@@ -293,9 +293,14 @@ bool begin() {
 
 // ---- Typed access ----
 
-String getString(const char* key, const char* def) {
+std::string getString(const char* key, const char* def) {
   Guard g;
-  return String(doc[key] | def); // copy: safe after the lock is released
+  // Arduino String tolerated a null char*; std::string(nullptr) is UB. defStr
+  // is never null in practice (addEntry seeds it to "" and registerString
+  // guards), but this is the kind of latent difference that only bites in the
+  // field, so make it explicit.
+  const char* v = doc[key] | def;
+  return v ? std::string(v) : std::string(); // copy: safe after the lock is released
 }
 int32_t getInt(const char* key, int32_t def) {
   Guard g;
@@ -306,9 +311,9 @@ bool getBool(const char* key, bool def) {
   return doc[key] | def;
 }
 
-String getString(const char* key) {
+std::string getString(const char* key) {
   const SettingDef* d = findSetting(key);
-  return getString(key, d ? d->defStr : "");
+  return getString(key, (d && d->defStr) ? d->defStr : "");
 }
 int32_t getInt(const char* key) {
   const SettingDef* d = findSetting(key);
@@ -326,7 +331,7 @@ bool getBool(const char* key) {
   return getBool(key, d ? d->defBool : false);
 }
 
-void setString(const char* key, const String& v) { Guard g; doc[key] = v; }
+void setString(const char* key, const std::string& v) { Guard g; doc[key] = v; }
 void setInt(const char* key, int32_t v) { Guard g; doc[key] = v; }
 void setBool(const char* key, bool v) { Guard g; doc[key] = v; }
 

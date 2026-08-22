@@ -48,7 +48,7 @@ constexpr int CALM_IDX = ROSTER_N - 1; // the fx == nullptr entry, last by conve
 // never drift.
 SettingChoice choices[ROSTER_N];
 
-int rosterIndexOf(const String& value) {
+int rosterIndexOf(const std::string& value) {
   for (int i = 0; i < ROSTER_N; ++i)
     if (value == ROSTER[i].value) return i;
   return -1;

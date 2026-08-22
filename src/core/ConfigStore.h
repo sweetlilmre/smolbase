@@ -14,8 +14,9 @@
 // server starts) — typically from App::setup(). Getters/setters/schemaToJson/
 // applyJson are mutex-guarded and safe from the httpd task.
 #pragma once
-#include <Arduino.h>
 #include <ArduinoJson.h>
+#include <cstdint>
+#include <string>
 
 enum class SettingType : uint8_t { String, Int, Bool, Choice, Color };
 enum class SettingSection : uint8_t { System, App };
@@ -102,13 +103,13 @@ bool applyJson(JsonObjectConst src);
 
 // ---- Typed access. Explicit-default overloads for unregistered/raw keys; ----
 // ---- single-argument overloads fall back to the registered schema default. ----
-String getString(const char* key, const char* def);
+std::string getString(const char* key, const char* def);
 int32_t getInt(const char* key, int32_t def);
 bool getBool(const char* key, bool def);
-String getString(const char* key); // "" if key unregistered
+std::string getString(const char* key); // "" if key unregistered
 int32_t getInt(const char* key);   // 0 if key unregistered
 bool getBool(const char* key);     // false if key unregistered
-void setString(const char* key, const String& v);
+void setString(const char* key, const std::string& v);
 void setInt(const char* key, int32_t v);
 void setBool(const char* key, bool v);
 

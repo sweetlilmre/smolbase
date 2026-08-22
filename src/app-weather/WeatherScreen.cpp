@@ -69,7 +69,7 @@ void pushBand(lgfx::LovyanGFX& gfx, int y, int h) {
 }
 
 // #RRGGBB → 0xRRGGBB (settings store the picker string; bad input = default).
-uint32_t hexRgb(const String& s, uint32_t def) {
+uint32_t hexRgb(const std::string& s, uint32_t def) {
   if (s.length() != 7 || s[0] != '#') return def;
   char* end;
   uint32_t v = strtoul(s.c_str() + 1, &end, 16);
@@ -216,8 +216,8 @@ void WeatherScreen::tick(lgfx::LGFX_Device& gfx) {
 void WeatherScreen::drawWeather(lgfx::LovyanGFX& gfx) {
   const WeatherData::Reading& r = cachedReading;
 
-  String city = nickname.length() ? nickname : String(r.city);
-  if (!city.length()) city = ConfigStore::getString(WxKeys::CITY, WxKeys::DEF_CITY);
+  std::string city = nickname.length() ? nickname : std::string(r.city);
+  if (city.empty()) city = ConfigStore::getString(WxKeys::CITY, WxKeys::DEF_CITY);
 
   // Top band, 72 rows > the 64-row scratch: compose twice, content shifted up
   // by the pass offset, and push each slice clipped (ADR 0004). Rasterizing
@@ -230,13 +230,15 @@ void WeatherScreen::drawWeather(lgfx::LovyanGFX& gfx) {
     // City centered, country code inline in amber.
     scratch.setTextDatum(lgfx::top_left);
     scratch.setFont(&fCity.font);
-    int cw = scratch.textWidth(city);
+    // LovyanGFX takes const char* (or Arduino String), never std::string —
+    // .c_str() at the draw boundary is the permanent pattern here.
+    int cw = scratch.textWidth(city.c_str());
     scratch.setFont(&fBadge.font);
     int ccw = r.country[0] ? scratch.textWidth(r.country) + 6 : 0;
     int x0 = (W - cw - ccw) / 2;
     scratch.setFont(&fCity.font);
     scratch.setTextColor(col(COL_WHITE), col(COL_BLACK));
-    scratch.drawString(city, x0, CITY_Y - yOff);
+    scratch.drawString(city.c_str(), x0, CITY_Y - yOff);
     if (ccw) {
       scratch.setFont(&fBadge.font);
       scratch.setTextColor(col(COL_AMBER), col(COL_BLACK));
