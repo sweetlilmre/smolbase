@@ -737,6 +737,22 @@ static void checkPsychic() {
     return res->send(200, "application/json", out.c_str());
   });
 
+  // Remote recovery. Run 1 shipped without this and it cost a physical power
+  // cycle: the spike serves no /api/update, so once it is running there is no
+  // way back to the real firmware without touching the hardware.
+  //
+  // A restart route — NOT an update route — is the right primitive here. This
+  // image is permanently ESP_OTA_IMG_PENDING_VERIFY, so esp_restart() makes the
+  // bootloader roll back to the real firmware, and its /api/update takes over
+  // from there. An update route on the spike would instead write into the slot
+  // holding that firmware and destroy the rollback target.
+  server.on("/restart", HTTP_POST, [](PsychicRequest*, PsychicResponse* res) -> esp_err_t {
+    res->send(200, "application/json", "{\"restarting\":true,\"rollback\":true}");
+    vTaskDelay(pdMS_TO_TICKS(500)); // let the response flush
+    esp_restart();
+    return ESP_OK; // unreachable
+  });
+
   esp_err_t err = server.start();
   if (err != ESP_OK) {
     report(8, State::Fail, std::string("start: ") + esp_err_to_name(err));

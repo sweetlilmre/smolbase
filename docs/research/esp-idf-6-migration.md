@@ -177,7 +177,38 @@ Two corrections:
 - **The RSA-4096 CDN chain is still unverified.** Check 8 passed on a `404` that came from github.com, not the CDN — the asset URL was wrong, so no redirect was ever followed and the chain that verified was the ordinary one. `CONFIG_MBEDTLS_LARGE_KEY_SOFTWARE_MPI` therefore remains untested, and it is the load-bearing claim behind retiring ADR 0005. Fixed in the spike; needs run 2.
 - **`VSPI_HOST` is removed in IDF 6.** `Display.cpp:22` uses it; `SPI3_HOST` is the same peripheral on classic ESP32, so a rename. Found by the compiler, not by reading.
 
-One upstream defect worth knowing before costing `Touch.cpp`: in 6.0.2, `hw_ver1/touch_version_specific.c:253` guards reads with `type == TOUCH_CHAN_DATA_TYPE_SMOOTH && filter != NULL` where it means `type != SMOOTH || filter != NULL`, so **`RAW` reads are unconditionally rejected** on ESP32 V1. The controller, channel, enable and scan-start calls all succeed — the chip is supported, the read path is buggy. `Touch.cpp` must configure the software filter and read `SMOOTH`. That is still "a morning", but it is a morning plus a workaround comment.
+### TRACKED: touch RAW reads are broken in v6.0.2, fixed after the tag
+
+**Action: move the IDF pin to `release/v6.0` HEAD or wait for v6.0.3, then drop the workaround.**
+
+In v6.0.2, `components/esp_driver_touch_sens/hw_ver1/touch_version_specific.c:253` reads:
+
+```c
+ESP_RETURN_ON_FALSE_ISR(type == TOUCH_CHAN_DATA_TYPE_SMOOTH && chan_handle->base->data_filter_fn != NULL,
+                        ESP_ERR_INVALID_STATE, TAG, "The software filter has not configured");
+```
+
+`ESP_RETURN_ON_FALSE_ISR` returns the error when the condition is **false**, so a `TOUCH_CHAN_DATA_TYPE_RAW` read (type != SMOOTH) is rejected unconditionally. The guard exists only in `hw_ver1` — `hw_ver2` and `hw_ver3` have no equivalent — and `touch_channel_read_data` in the common layer just forwards, so nothing intercepts it.
+
+**This was already reported and fixed upstream** — [espressif/esp-idf#18811](https://github.com/espressif/esp-idf/issues/18811) (IDFGH-17938), raised 2026-07-09, confirmed by an Espressif engineer the next day ("I've confirmed the issue and will fix it"), closed Done 2026-07-10. The fix is the expected inversion:
+
+| ref | guard |
+|---|---|
+| `master` | `type != SMOOTH \|\| filter != NULL` — fixed |
+| `release/v6.0` HEAD | `type != SMOOTH \|\| filter != NULL` — fixed, backported |
+| **`v6.0.2` (what Phase 0 used)** | `type == SMOOTH && filter != NULL` — buggy |
+
+So this is not a live upstream defect and **not something to report** — it is a stale patch pin. The fix landed on `release/v6.0` after the v6.0.2 tag and should appear in v6.0.3.
+
+Consequences for `Touch.cpp`:
+
+- On a fixed IDF, `RAW` reads work and `Touch.cpp` ports nearly verbatim — it reads raw values, averages 16 of them for a baseline, and compares against an absolute threshold, which is exactly what `TOUCH_CHAN_DATA_TYPE_RAW` gives.
+- On v6.0.2 specifically, the workaround is `touch_sensor_config_filter()` (passing `data_filter_fn = NULL` installs the driver's default at line 353, satisfying the guard's second clause) and reading `TOUCH_CHAN_DATA_TYPE_SMOOTH`. The spike does this so it can measure the pad at all.
+- Either way the chip is supported: `new_controller`, `new_channel`, `enable` and `start_continuous_scanning` all succeed on v6.0.2.
+
+Estimate unchanged — still "a morning" — but pin the IDF deliberately.
+
+**Process note for me:** I first presented this as an undiscovered defect worth reporting upstream. It was already found, confirmed and fixed. A `gh search issues --repo espressif/esp-idf` before making the claim would have caught that in one command, and reading an unfamiliar SDK's source is exactly the situation where "surely someone hit this already" deserves a search rather than a conclusion.
 
 Also worth noting as a small tax across 20 000 lines: IDF builds with `-Werror=missing-field-initializers` and `-Werror=format=`, which the Arduino build does not enforce.
 
