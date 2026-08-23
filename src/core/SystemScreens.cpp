@@ -44,7 +44,7 @@ void ApInfoScreen::onEnter(lgfx::LGFX_Device& d) {
   d.drawRoundRect(14, 92, 212, 40, 8, accent);
   d.setFont(&fonts::FreeSansBold12pt7b);
   d.setTextColor(TFT_WHITE);
-  d.drawString(Net::deviceName(), 120, 112);
+  d.drawString(Net::deviceName().c_str(), 120, 112);
 
   // Step 2: open the captive portal
   d.setFont(&fonts::FreeSans9pt7b);
@@ -91,17 +91,17 @@ void WifiJoinScreen::onEnter(lgfx::LGFX_Device& d) {
   // The SSID is user data of arbitrary length: drop a size if it would run past
   // the box, and let LovyanGFX clip anything still too long for the panel.
   d.drawRoundRect(14, 92, 212, 40, 8, accent);
-  const String ssid = Net::joiningSsid();
+  const std::string ssid = Net::joiningSsid();
   d.setFont(&fonts::FreeSansBold12pt7b);
-  if (d.textWidth(ssid) > 196) d.setFont(&fonts::FreeSansBold9pt7b);
+  if (d.textWidth(ssid.c_str()) > 196) d.setFont(&fonts::FreeSansBold9pt7b);
   d.setTextColor(TFT_WHITE);
-  d.drawString(ssid, 120, 112);
+  d.drawString(ssid.c_str(), 120, 112);
 
   d.drawRoundRect(BAR_X, BAR_Y, BAR_W, BAR_H, 3, dim);
 
   d.setFont(&fonts::FreeSansBold9pt7b);
   d.setTextColor(accent);
-  d.drawString(Net::deviceName(), 120, 214);
+  d.drawString(Net::deviceName().c_str(), 120, 214);
 }
 
 // Only the bar and the countdown move. The bar grows by a sliver (it never

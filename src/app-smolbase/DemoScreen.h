@@ -26,7 +26,7 @@ class DemoScreen : public Screen {
   void select(int i, lgfx::LGFX_Sprite& f);
   bool calmDue() const;
   void drawIdentity(lgfx::LGFX_Sprite& f);
-  static void shadowString(lgfx::LGFX_Sprite& f, const String& s, int x, int y,
+  static void shadowString(lgfx::LGFX_Sprite& f, const char* s, int x, int y,
                            uint8_t idx);
 
 public:

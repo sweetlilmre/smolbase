@@ -286,7 +286,7 @@ void GcmScreen::drawOverlay(lgfx::LGFX_Device& gfx) {
     gfx.setTextSize(1);
     gfx.setTextDatum(lgfx::middle_center);
     gfx.setTextColor(C_WHITE, C_OVL_BG);
-    gfx.drawString(Net::deviceName(), W / 2, 90);
+    gfx.drawString(Net::deviceName().c_str(), W / 2, 90);
     gfx.setTextColor(C_CYAN, C_OVL_BG);
     gfx.drawString(Net::ip().toString(), W / 2, 120);
     gfx.setTextColor(C_WHITE, C_OVL_BG);

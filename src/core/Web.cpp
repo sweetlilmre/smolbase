@@ -159,7 +159,7 @@ void begin(App& app) {
         doc["ssid"].as<String>().isEmpty()) {
       return res->send(400, "application/json", "{\"error\":\"expected {ssid,pass}\"}");
     }
-    if (!Net::saveCredentials(doc["ssid"].as<String>(), doc["pass"] | String(""))) {
+    if (!Net::saveCredentials(doc["ssid"].as<std::string>(), doc["pass"].as<std::string>())) {
       return res->send(500, "application/json",
                        "{\"error\":\"failed to store credentials (NVS full?)\"}");
     }

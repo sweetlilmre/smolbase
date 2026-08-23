@@ -136,7 +136,7 @@ bool DemoScreen::calmDue() const {
   return t.tm_min != lastMinute || colonNow != colonOn;
 }
 
-void DemoScreen::shadowString(lgfx::LGFX_Sprite& f, const String& s, int x, int y,
+void DemoScreen::shadowString(lgfx::LGFX_Sprite& f, const char* s, int x, int y,
                               uint8_t idx) {
   f.setTextColor(fx::UI_BLACK);
   f.drawString(s, x + 2, y + 2);
@@ -174,8 +174,8 @@ void DemoScreen::drawIdentity(lgfx::LGFX_Sprite& f) {
   }
   f.setFont(&fonts::FreeSans9pt7b);
   f.setTextDatum(lgfx::middle_center);
-  shadowString(f, Net::deviceName() + ".local", 120, 160, fx::UI_TEXT + 3);
-  shadowString(f, Net::isUp() ? Net::ip().toString() : "connecting...", 120, 185,
+  shadowString(f, (Net::deviceName() + ".local").c_str(), 120, 160, fx::UI_TEXT + 3);
+  shadowString(f, Net::isUp() ? Net::ip().toString().c_str() : "connecting...", 120, 185,
                fx::UI_TEXT + 4);
   // "Now showing": one long press is the only way to discover the roster on a
   // device with a single touch pad, so it says what it just switched to.

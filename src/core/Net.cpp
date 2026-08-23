@@ -18,25 +18,27 @@ enum class State : uint8_t { Idle, Connecting, Sta, Ap };
 // Written by the WiFi event task (core 0) and the main loop (core 1).
 static std::atomic<State> state{State::Idle};
 static uint32_t connectStart = 0;
-static String name;
-static String joinSsid; // the network begin() is trying; for the boot join screen
+static std::string name;
+static std::string joinSsid; // the network begin() is trying; for the boot join screen
 
-String deviceName() { return name; }
+std::string deviceName() { return name; }
 bool isUp() { return state.load() == State::Sta && WiFi.isConnected(); }
 bool inApMode() { return state.load() == State::Ap; }
 IPAddress ip() { return inApMode() ? WiFi.softAPIP() : WiFi.localIP(); }
 int32_t rssi() { return isUp() ? WiFi.RSSI() : 0; }
-String ssid() { return isUp() ? WiFi.SSID() : String(""); }
+// WiFi.SSID() is still an Arduino String until phase 6 replaces the WiFi
+// object wholesale; .c_str() is the boundary until then.
+std::string ssid() { return isUp() ? std::string(WiFi.SSID().c_str()) : std::string(); }
 
 // WiFi.SSID() is empty while the link is still coming up, so the name being
 // joined is remembered from begin()'s credential load instead.
 bool isJoining() { return state.load() == State::Connecting; }
-String joiningSsid() { return isJoining() ? joinSsid : String(""); }
+std::string joiningSsid() { return isJoining() ? joinSsid : std::string(); }
 uint32_t joinElapsedMs() { return isJoining() ? Platform::millis() - connectStart : 0; }
 
 // mDNS labels: lowercase alnum + dash, no leading/trailing dash, keep it short.
-static String sanitizeHostname(const String& raw) {
-  String out;
+static std::string sanitizeHostname(const std::string& raw) {
+  std::string out;
   for (size_t i = 0; i < raw.length(); ++i) {
     char c = raw[i];
     if (isalnum(static_cast<unsigned char>(c))) {
@@ -45,34 +47,35 @@ static String sanitizeHostname(const String& raw) {
       if (out.length() && out[out.length() - 1] != '-') out += '-';
     } // anything else is dropped
   }
-  if (out.length() > 32) out.remove(32);
-  while (out.length() && out[out.length() - 1] == '-') out.remove(out.length() - 1);
-  while (out.length() && out[0] == '-') out.remove(0, 1);
+  if (out.length() > 32) out.resize(32);
+  while (!out.empty() && out.back() == '-') out.pop_back();
+  while (!out.empty() && out.front() == '-') out.erase(0, 1);
   return out;
 }
 
-static void loadCreds(String& ssid, String& pass) {
+static void loadCreds(std::string& ssid, std::string& pass) {
   Preferences p;
   p.begin("smolbase", true);
-  ssid = p.getString("ssid", "");
-  pass = p.getString("pass", "");
+  // Preferences is Arduino; it converts to nvs_* in phase 5.
+  ssid = p.getString("ssid", "").c_str();
+  pass = p.getString("pass", "").c_str();
   p.end();
 }
 
 bool hasCredentials() {
-  String s, p;
+  std::string s, p;
   loadCreds(s, p);
   return s.length() > 0;
 }
 
-bool saveCredentials(const String& ssid, const String& pass) {
+bool saveCredentials(const std::string& ssid, const std::string& pass) {
   // putString returns bytes written; 0 = failure (e.g. NVS full of the old
   // firmware's namespaces). Surfacing this matters: a silent failure here looks
   // like an unexplained provisioning loop to the user.
   Preferences p;
   if (!p.begin("smolbase", false)) return false;
-  bool ok = p.putString("ssid", ssid) == ssid.length() &&
-            p.putString("pass", pass) == pass.length();
+  bool ok = p.putString("ssid", ssid.c_str()) == ssid.length() &&
+            p.putString("pass", pass.c_str()) == pass.length();
   p.end();
   return ok;
 }
@@ -130,11 +133,9 @@ static void onWiFiEvent(WiFiEvent_t event) {
 }
 
 // Effective device name: the sanitized "hostname" setting, else smolbase-XXXX.
-static String computeName() {
-  // .c_str() bridges to sanitizeHostname's String parameter until Net's
-  // own surface converts in phase 3c.
-  String n = sanitizeHostname(ConfigStore::getString("hostname", "").c_str());
-  if (!n.isEmpty()) return n;
+static std::string computeName() {
+  std::string n = sanitizeHostname(ConfigStore::getString("hostname", ""));
+  if (!n.empty()) return n;
   // esp_read_mac works before any netif exists; WiFi.macAddress() at this
   // point returns without writing the buffer (verified in the installed core),
   // which made the identity suffix uninitialized-stack garbage.
@@ -142,7 +143,7 @@ static String computeName() {
   esp_read_mac(mac, ESP_MAC_WIFI_STA);
   char suffix[5];
   snprintf(suffix, sizeof(suffix), "%02x%02x", mac[4], mac[5]);
-  return String(SMOLBASE_NAME_PREFIX "-") + suffix;
+  return std::string(SMOLBASE_NAME_PREFIX "-") + suffix;
 }
 
 // mDNS lifecycle state — owned by the main loop (loop()/applyHostname() only).
@@ -153,7 +154,7 @@ void applyHostname() {
   // Called on SettingsChanged (main loop). A changed name re-registers mDNS
   // immediately; the DHCP hostname and AP SSID pick it up on the next
   // reconnect/boot (changing those live would mean bouncing the link).
-  String next = computeName();
+  std::string next = computeName();
   if (next == name) return;
   name = next;
   WiFi.setHostname(name.c_str());
@@ -169,9 +170,9 @@ void begin() {
   WiFi.onEvent(onWiFiEvent);
   WiFi.persistent(false); // creds live in our own NVS namespace, single source of truth
 
-  String ssid, pass;
+  std::string ssid, pass;
   loadCreds(ssid, pass);
-  if (ssid.isEmpty()) {
+  if (ssid.empty()) {
     startAp();
     return;
   }
@@ -235,15 +236,15 @@ void scanResultsJson(JsonDocument& out) {
     return;
   }
   struct Hit {
-    String ssid;
+    std::string ssid;
     int32_t rssi;
     bool secure;
   };
   std::vector<Hit> hits;
   hits.reserve(n);
   for (int16_t i = 0; i < n; ++i) {
-    String ssid = WiFi.SSID(i);
-    if (ssid.isEmpty()) continue; // hidden networks are unjoinable from the portal
+    std::string ssid = WiFi.SSID(i).c_str();
+    if (ssid.empty()) continue; // hidden networks are unjoinable from the portal
     int32_t rssi = WiFi.RSSI(i);
     bool secure = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
     bool merged = false;
