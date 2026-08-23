@@ -18,6 +18,20 @@
 //    (abs_active_thresh = benchmark * (1 - coeff)). Porting the old absolute
 //    margin across would have left it silently far too small to ever trigger.
 //
+// 3. THE DEFAULT FILTER ADDS LAG, AND IT IS FELT. SMOOTH is not a raw read:
+//    the driver's default is a first-order IIR (smooth = 1/2 raw + 1/2 last)
+//    stepped on a 10 ms esp_timer. A real press only crosses the threshold
+//    after a step or two, and because a tap is emitted on RELEASE the same lag
+//    is paid again on the way up — roughly doubling the contact time a quick
+//    tap needs versus Arduino's direct touchRead(). Reported from actual use:
+//    quick taps were being missed.
+//
+//    RAW cannot be read (note 1), but the guard only requires that SOME filter
+//    is installed — so we install a PASS-THROUGH one. SMOOTH then tracks the
+//    hardware with no IIR settling, and the 10 ms cadence drops to
+//    SMOLBASE_TOUCH_FILTER_MS. Noise immunity comes from the debounce window,
+//    which is where it belonged anyway.
+//
 // The driver's own active-threshold callbacks are unused: thresholding happens
 // here so the debounce / tap / long-press logic stays exactly as it was.
 #include "Touch.h"
@@ -44,6 +58,14 @@ static uint32_t rawSince = 0;
 static bool down = false;
 static uint32_t downAt = 0;
 static bool longFired = false;
+
+// Pass-through: return the current sample untouched, so SMOOTH == the hardware
+// reading. See header note 3 — the default IIR's settling time was being felt
+// as missed quick taps.
+static uint32_t passThroughFilter(touch_channel_handle_t, const touch_sw_filter_data_t* d,
+                                  void*) {
+  return d->curr_input;
+}
 
 // False when the driver has nothing for us (filter not yet warm, or the
 // controller failed to start). Callers must not read that as "not pressed" —
@@ -79,8 +101,11 @@ void begin() {
   if (touch_sensor_new_channel(sens, SMOLBASE_TOUCH_CHANNEL, &chanCfg, &chan) != ESP_OK) return;
 
   // Mandatory, not optional: without a filter every read is rejected (header
-  // note 1). A null data_filter_fn installs the driver's default.
+  // note 1). But the DEFAULT filter is an IIR whose lag is felt on quick taps,
+  // so install a pass-through instead and sample it faster (note 3).
   touch_sensor_filter_config_t filter = TOUCH_SENSOR_DEFAULT_FILTER_CONFIG();
+  filter.interval_ms = SMOLBASE_TOUCH_FILTER_MS;
+  filter.data_filter_fn = passThroughFilter;
   if (touch_sensor_config_filter(sens, &filter) != ESP_OK) return;
 
   if (touch_sensor_enable(sens) != ESP_OK) return;

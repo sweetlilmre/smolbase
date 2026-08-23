@@ -55,19 +55,39 @@
 // V1 sample config: charge duration in ms (float). The driver's own test app
 // uses 5.0 for this hardware revision.
 #define SMOLBASE_TOUCH_CHARGE_MS 5.0f
-// The software filter runs on a 10 ms timer; wait at least this long after
-// starting the scan before the first read, or calibration samples come back 0.
+// How often the driver's software filter samples the pad. The filter is a
+// PASS-THROUGH (see Touch.cpp note 3), so this is pure sampling cadence and
+// sets the floor on how fast an edge can be seen. 10 ms is the driver default;
+// 5 ms halves the edge latency at negligible cost, which matters because a
+// quick tap must be seen on BOTH edges before onTap fires.
+#define SMOLBASE_TOUCH_FILTER_MS 5
+// Wait at least this long after starting the scan before the first read, or
+// calibration samples come back 0.
 #define SMOLBASE_TOUCH_SETTLE_MS 100
 // Boot calibration: average this many samples with the pad untouched, spaced
-// far enough apart that the 10 ms filter has moved on between reads.
+// far enough apart that the sampler has moved on between reads.
 #define SMOLBASE_TOUCH_CAL_SAMPLES 16
 #define SMOLBASE_TOUCH_CAL_GAP_MS 20
 // Pressed when the reading falls this far BELOW the measured baseline, as a
 // PERCENTAGE of it. A percentage rather than an absolute count because the
 // driver's value scale is nothing like Arduino touchRead()'s (~1600 vs a few
-// hundred on this pad), so an absolute margin does not survive the port. Tune
-// against the live baseline, which /api/status reports as touchBaseline.
-#define SMOLBASE_TOUCH_DELTA_PCT 15
+// hundred on this pad), so an absolute margin does not survive the port.
+//
+// Calibrated from measurement, not guessed. On this device:
+//   untouched  1605-1608  (noise +/-3, ~0.2%)
+//   held       1262-1277  (a 20.4-21.4% drop)
+// 10% puts the threshold at ~1445, almost exactly midway between the two —
+// ~160 counts clear of the untouched level (53x the observed noise, so false
+// presses are implausible) and ~168 clear of a held reading, which leaves room
+// for a lighter or drier touch than the one measured. 15% was the first guess
+// and worked for a firm press, but sat close enough to the held level to risk
+// missing a light one — and this pad is the device's ONLY input, so a missed
+// touch is worse than a rare spurious one that the debounce would filter.
+//
+// /api/status reports touchBaseline / touchThreshold / touchNow for re-tuning.
+// Caveat: calibration is single-shot at boot (as it was under Arduino), so a
+// tighter margin also leaves less headroom for baseline drift.
+#define SMOLBASE_TOUCH_DELTA_PCT 10
 // An edge (press or release) must hold this long before it is believed.
 #define SMOLBASE_TOUCH_DEBOUNCE_MS 30
 // Held at least this long = long-press (fires once while held); shorter = tap on release.
