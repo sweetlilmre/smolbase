@@ -134,6 +134,10 @@ void begin(App& app) {
     doc["uptimeS"] = Platform::millis() / 1000;
     doc["heapFree"] = Platform::freeHeap();
     doc["timeSynced"] = Clock::isSynced(); // observability for SNTP stalls (#38)
+    // The 8-bit-accessible figure, which heapFree does not show: byte-buffer
+    // allocations (TLS included) can only come from this pool, and it runs
+    // ~52 KB below heapFree on this chip. #119 was a failure of THIS number.
+    doc["heapFree8Bit"] = Platform::freeHeap8Bit();
     if (Net::isUp()) {
       doc["rssi"] = Net::rssi();
       doc["ssid"] = Net::ssid(); // which network we're on (#39)

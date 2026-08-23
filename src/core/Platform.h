@@ -35,12 +35,27 @@ inline uint32_t micros() { return (uint32_t)esp_timer_get_time(); }
 // A 0 ms sleep still yields one tick.
 inline void delayMs(uint32_t ms) { vTaskDelay(pdMS_TO_TICKS(ms ? ms : 1)); }
 
-// Free heap in bytes (Arduino: ESP.getFreeHeap()).
-inline uint32_t freeHeap() { return esp_get_free_heap_size(); }
+// Free heap in bytes. MALLOC_CAP_INTERNAL deliberately, to match exactly what
+// ESP.getFreeHeap() reported before this header existed:
+//
+//   Arduino: heap_caps_get_free_size(MALLOC_CAP_INTERNAL)
+//   esp_get_free_heap_size(): MALLOC_CAP_DEFAULT (8-bit-accessible only)
+//
+// The difference is ~52 KB on this chip — the IRAM-leftover heap region, which
+// MALLOC_CAP_INTERNAL counts but which cannot serve a byte-buffer malloc. Using
+// esp_get_free_heap_size() here silently rebased every heap figure the project
+// has ever recorded, including the #119 "MPI allocation failure at ~48 KB free"
+// threshold. Keep this comparable; use freeHeap8Bit() when the question is
+// whether a byte buffer will actually fit.
+inline uint32_t freeHeap() { return heap_caps_get_free_size(MALLOC_CAP_INTERNAL); }
+
+// Free heap that can serve ordinary byte buffers — the honest number for
+// "will this TLS handshake fit". Lower than freeHeap() by the IRAM region.
+inline uint32_t freeHeap8Bit() { return heap_caps_get_free_size(MALLOC_CAP_8BIT); }
 
 // Largest single allocation still possible (Arduino: ESP.getMaxAllocHeap()).
 // This, not freeHeap(), is what a TLS handshake actually needs.
-inline uint32_t largestFreeBlock() { return heap_caps_get_largest_free_block(MALLOC_CAP_8BIT); }
+inline uint32_t largestFreeBlock() { return heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL); }
 
 // Lowest freeHeap() seen since boot.
 inline uint32_t minFreeHeap() { return esp_get_minimum_free_heap_size(); }
