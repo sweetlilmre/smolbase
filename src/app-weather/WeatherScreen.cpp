@@ -100,20 +100,29 @@ const WxIcon& conditionIcon(uint8_t code) {
 
 // Display formatting (SmolTV-Pro's exact output constants). Unit prefs are
 // passed in from the cached bundle — no ConfigStore read at render time.
-String fmtTemp(float c, const WeatherScreen::Units& u) {
-  if (u.temp == "F") return String((int)lroundf(c * 1.8f + 32)) + "\xC2\xB0" "F";
-  return String((int)lroundf(c)) + "\xC2\xB0" "C";
+// Arduino's String(float, decimals) constructor has no std::string equivalent,
+// so these are snprintf rather than a type swap. "%.2f" reproduces
+// String(x, 2) exactly; the parity constants are unchanged.
+std::string fmtTemp(float c, const WeatherScreen::Units& u) {
+  char b[16];
+  if (u.temp == "F") snprintf(b, sizeof(b), "%d" "\xC2\xB0" "F", (int)lroundf(c * 1.8f + 32));
+  else snprintf(b, sizeof(b), "%d" "\xC2\xB0" "C", (int)lroundf(c));
+  return b;
 }
-String fmtWind(float ms, const WeatherScreen::Units& u) {
-  if (u.wind == "kmh") return String(ms * 3.6f, 2) + " km/h";
-  if (u.wind == "mph") return String(ms * 2.2367f, 2) + " mile/h"; // parity constant
-  return String(ms, 2) + " m/s";
+std::string fmtWind(float ms, const WeatherScreen::Units& u) {
+  char b[24];
+  if (u.wind == "kmh") snprintf(b, sizeof(b), "%.2f km/h", ms * 3.6f);
+  else if (u.wind == "mph") snprintf(b, sizeof(b), "%.2f mile/h", ms * 2.2367f); // parity constant
+  else snprintf(b, sizeof(b), "%.2f m/s", ms);
+  return b;
 }
-String fmtPress(int hpa, const WeatherScreen::Units& u) {
-  if (u.press == "kpa") return String(hpa / 10) + " kPa";
-  if (u.press == "mmhg") return String((int)lroundf(hpa * 0.75f)) + " mmHg"; // parity constant
-  if (u.press == "inhg") return String((int)lroundf(hpa * 0.0295300425f)) + " inHg";
-  return String(hpa) + " hPa";
+std::string fmtPress(int hpa, const WeatherScreen::Units& u) {
+  char b[20];
+  if (u.press == "kpa") snprintf(b, sizeof(b), "%d kPa", hpa / 10);
+  else if (u.press == "mmhg") snprintf(b, sizeof(b), "%d mmHg", (int)lroundf(hpa * 0.75f)); // parity constant
+  else if (u.press == "inhg") snprintf(b, sizeof(b), "%d inHg", (int)lroundf(hpa * 0.0295300425f));
+  else snprintf(b, sizeof(b), "%d hPa", hpa);
+  return b;
 }
 
 } // namespace
@@ -276,8 +285,8 @@ void WeatherScreen::drawWeather(lgfx::LovyanGFX& gfx) {
   bar(152, r.humidity / 100.0f, COL_BADGE_BG);
   scratch.setFont(&fText.font);
   scratch.setTextColor(col(COL_WHITE), col(COL_BLACK));
-  scratch.drawString(r.valid ? fmtTemp(r.tempC, units) : "--", 88, 11);
-  scratch.drawString(r.valid ? String(r.humidity) + "%" : "--", 206, 11);
+  scratch.drawString(r.valid ? fmtTemp(r.tempC, units).c_str() : "--", 88, 11);
+  scratch.drawString(r.valid ? (std::to_string(r.humidity) + "%").c_str() : "--", 206, 11);
   pushBand(gfx, GAUGE_Y, GAUGE_H);
 }
 
@@ -289,7 +298,7 @@ void WeatherScreen::drawMarquee(lgfx::LovyanGFX& gfx, int scrollPx) {
     return;
   }
   struct Seg {
-    String text;
+    std::string text;
     uint32_t color;
   };
   const Seg segs[] = {
@@ -303,7 +312,7 @@ void WeatherScreen::drawMarquee(lgfx::LovyanGFX& gfx, int scrollPx) {
   scratch.setFont(&fMarq.font);
   scratch.setTextDatum(lgfx::top_left);
   int lineW = 0;
-  for (const Seg& s : segs) lineW += scratch.textWidth(s.text);
+  for (const Seg& s : segs) lineW += scratch.textWidth(s.text.c_str());
   if (lineW <= 0) return;
   marqX -= scrollPx;
   while (marqX <= -lineW) marqX += lineW;
@@ -312,8 +321,8 @@ void WeatherScreen::drawMarquee(lgfx::LovyanGFX& gfx, int scrollPx) {
     int tx = x;
     for (const Seg& s : segs) {
       scratch.setTextColor(col(s.color), col(COL_BLACK));
-      scratch.drawString(s.text, tx, 2);
-      tx += scratch.textWidth(s.text);
+      scratch.drawString(s.text.c_str(), tx, 2);
+      tx += scratch.textWidth(s.text.c_str());
     }
   }
   pushBand(gfx, MARQ_Y, MARQ_H);

@@ -132,7 +132,7 @@ void WifiJoinScreen::tick(lgfx::LGFX_Device& d) {
   d.setFont(&fonts::FreeSans9pt7b);
   d.setTextDatum(lgfx::middle_center);
   d.setTextColor(d.color888(DIM[0], DIM[1], DIM[2]));
-  d.drawString("Wi-Fi Setup in " + String(secs) + "s", 120, NOTE_Y);
+  d.drawString(("Wi-Fi Setup in " + std::to_string(secs) + "s").c_str(), 120, NOTE_Y);
 }
 
 WifiJoinScreen& wifiJoinScreen() {
