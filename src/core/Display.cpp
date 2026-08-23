@@ -1,6 +1,5 @@
 #include "Display.h"
 #include "smolbase_config.h"
-#include <Arduino.h>
 
 #define LGFX_USE_V1
 #include <LovyanGFX.hpp>

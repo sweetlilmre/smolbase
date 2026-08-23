@@ -4,7 +4,6 @@
 #include "Net.h"
 #include "Platform.h"
 #include "smolbase_config.h"
-#include <Arduino.h>
 #include <atomic>
 #include <esp_sntp.h>
 #include <cstdio>

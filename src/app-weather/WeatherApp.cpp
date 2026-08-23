@@ -10,7 +10,6 @@
 #include "WeatherDebug.h"
 #include "WeatherKeys.h"
 #include "WeatherScreen.h"
-#include <Arduino.h>
 #include <PsychicHttp.h>
 
 namespace {

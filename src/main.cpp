@@ -16,7 +16,6 @@
 #include "core/SystemScreens.h"
 #include "core/Touch.h"
 #include "core/Web.h"
-#include <Arduino.h>
 
 static void onSysEvent(SysEvent e) {
   switch (e) {

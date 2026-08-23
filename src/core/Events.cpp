@@ -1,5 +1,6 @@
 #include "Events.h"
-#include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
 #include <cstdio>
 
 namespace Events {

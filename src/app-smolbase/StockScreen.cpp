@@ -3,7 +3,6 @@
 #include "../core/ConfigStore.h"
 #include "../core/Net.h"
 #include "hex_color.h"
-#include <Arduino.h>
 #include <ctime>
 
 void StockScreen::loadColors() {

@@ -1,7 +1,6 @@
 #include "AppHost.h"
 #include "Platform.h"
 #include "smolbase_config.h"
-#include <Arduino.h>
 #include <cstdio>
 
 namespace AppHost {

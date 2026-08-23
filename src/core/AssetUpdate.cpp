@@ -8,7 +8,6 @@
 #include "Fs.h"
 #include "Http.h"
 #include "smolbase_config.h"
-#include <Arduino.h>
 #include <ArduinoJson.h>
 #include <FS.h>
 #include <esp_crt_bundle.h>

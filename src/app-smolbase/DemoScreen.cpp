@@ -13,7 +13,6 @@
 #include "effects/RotozoomEffect.h"
 #include "effects/TunnelEffect.h"
 #include "hex_color.h"
-#include <Arduino.h>
 #include <ctime>
 #include <cstdio>
 

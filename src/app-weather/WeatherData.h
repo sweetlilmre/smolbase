@@ -12,7 +12,7 @@
 // Define SMOLBASE_WEATHER_HTTP=1 to drop everything to plain HTTP — the
 // researched last-resort switch (see the scheme fork in WeatherData.cpp).
 #pragma once
-#include <Arduino.h>
+#include <cstdint>
 #include <functional>
 
 namespace WeatherData {
