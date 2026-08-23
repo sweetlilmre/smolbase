@@ -34,7 +34,9 @@ void restartToApply(); // brief delay (lets the HTTP response flush), then Platf
 // from the httpd task on core 0 — they touch no main-loop state).
 void scanNetworks(); // kick an async scan; in AP mode flips to AP_STA so the AP stays up
 // Fills {status:"scanning"|"done", networks:[{ssid,rssi,secure}]} — deduplicated
-// by SSID (strongest wins), sorted by RSSI descending. A failed/never-started
-// scan is auto-restarted and reported as "scanning".
+// by SSID (strongest wins), sorted by RSSI descending. A failed, never-started
+// or timed-out scan is auto-restarted and reported as "scanning", so a polling
+// client always converges on a result rather than a dead end. The records are
+// collected when the driver signals SCAN_DONE, not when this is called.
 void scanResultsJson(JsonDocument& out);
 } // namespace Net

@@ -206,17 +206,70 @@ static bool mdnsStart(const char* host) {
 
 // ---- scan state ----
 // esp_wifi's scan is fire-and-forget with a completion EVENT, where Arduino's
-// scanComplete() polled a count. scanDone is set by the event; the results are
-// cached on first read because esp_wifi_scan_get_ap_records consumes them.
+// scanComplete() polled a count.
+//
+// The results are collected IN the SCAN_DONE handler, which is what
+// arduino-esp32 did (WiFiScanClass::_scanDone calls get_ap_num + get_ap_records
+// immediately) and what the first version of this port did NOT: it set a flag
+// and left the fetch to the next HTTP poll, up to 2500 ms later. Deferring it
+// leaves the results sitting in the driver across an arbitrary window in which
+// anything touching WiFi state can clear them, and the symptom is a scan that
+// reports "done" with zero networks — which the portal renders as "No networks
+// found. Try a rescan.", a dead end a user has to know to press a button out of.
+//
+// scanHits is published by the event task and read by the httpd task. No mutex:
+// the handler fills it and THEN stores scanDone (release), and the reader only
+// touches it after loading scanDone true (acquire). std::atomic<bool> gives
+// those orderings by default.
 static std::atomic<bool> scanDone{false};
 static std::atomic<bool> scanRunning{false};
-static bool scanCached = false;
+static uint32_t scanStartedMs = 0;
+// Arduino's scanComplete() failed a scan that had not completed within its
+// timeout, and the caller re-kicked. Without an equivalent, a SCAN_DONE that
+// never arrives leaves the portal on "Scanning..." forever.
+static constexpr uint32_t kScanTimeoutMs = 15000;
 struct Hit {
   std::string ssid;
   int32_t rssi;
   bool secure;
 };
 static std::vector<Hit> scanHits;
+
+// Drain the driver's results into scanHits: dedupe by SSID (strongest wins),
+// drop hidden networks (unjoinable from the portal), sort by RSSI descending.
+// Runs on the event task.
+static void collectScanResults() {
+  uint16_t n = 0;
+  esp_wifi_scan_get_ap_num(&n);
+  scanHits.clear();
+  if (n) {
+    std::vector<wifi_ap_record_t> recs(n);
+    if (esp_wifi_scan_get_ap_records(&n, recs.data()) == ESP_OK) {
+      for (uint16_t i = 0; i < n; ++i) {
+        std::string s(reinterpret_cast<const char*>(recs[i].ssid));
+        if (s.empty()) continue; // hidden networks are unjoinable from the portal
+        const int32_t r = recs[i].rssi;
+        const bool secure = recs[i].authmode != WIFI_AUTH_OPEN;
+        bool merged = false;
+        for (auto& h : scanHits) {
+          if (h.ssid == s) { // dedupe multi-AP SSIDs, strongest signal wins
+            if (r > h.rssi) {
+              h.rssi = r;
+              h.secure = secure;
+            }
+            merged = true;
+            break;
+          }
+        }
+        if (!merged) scanHits.push_back({s, r, secure});
+      }
+    }
+  }
+  std::sort(scanHits.begin(), scanHits.end(),
+            [](const Hit& a, const Hit& b) { return a.rssi > b.rssi; });
+  printf("[net] scan done: %u record(s) -> %u network(s)\n", (unsigned)n,
+         (unsigned)scanHits.size());
+}
 
 static void startAp() {
   // Mode change is legal while the driver is running, which is the case when we
@@ -256,6 +309,10 @@ static void onWifiEvent(void*, esp_event_base_t, int32_t id, void*) {
       break;
     }
     case WIFI_EVENT_SCAN_DONE:
+      // Collect BEFORE publishing the flag: the reader treats scanDone as
+      // "scanHits is ready". See the note at the scan state above for why this
+      // does not wait for the next poll.
+      collectScanResults();
       scanDone.store(true);
       break;
     default:
@@ -357,7 +414,7 @@ void loop() {
 
 // ---- WiFi scan (called from the httpd task, core 0) ----
 
-void scanNetworks() {
+static void startScan() {
   // Scanning needs the STA interface. In AP mode flip to AP_STA — the softAP
   // interface stays up throughout; we deliberately never flip back, since the
   // provisioning flow ends in restartToApply() anyway.
@@ -368,8 +425,17 @@ void scanNetworks() {
     esp_wifi_start(); // no-op when running; needed if only the AP was up
   }
   scanDone.store(false);
-  scanCached = false;
+  scanStartedMs = Platform::millis();
+  // Explicit scan times rather than a zero-filled struct. Arduino passed
+  // active min/max per channel (100/300 ms); leaving them 0 asks esp_wifi for
+  // its own defaults, which is a different scan and not one we ever measured.
+  // scan_type stays ACTIVE, which enum 0 happens to be — stated because
+  // "zero-initialised IDF config struct" is exactly how the touch driver's
+  // charge_speed went wrong.
   wifi_scan_config_t sc = {};
+  sc.scan_type = WIFI_SCAN_TYPE_ACTIVE;
+  sc.scan_time.active.min = 100;
+  sc.scan_time.active.max = 300;
   if (esp_wifi_scan_start(&sc, false /*async*/) != ESP_OK) {
     scanRunning.store(false);
     return;
@@ -377,64 +443,40 @@ void scanNetworks() {
   scanRunning.store(true);
 }
 
+void scanNetworks() { startScan(); }
+
 void scanResultsJson(JsonDocument& out) {
-  if (scanRunning.load() && !scanDone.load()) {
-    out["status"] = "scanning";
-    out["networks"].to<JsonArray>();
+  // scanDone first: it means the event task has filled scanHits, and it stays
+  // true until the next startScan(), so repeated polls answer from the same
+  // list. That is the behaviour the portal's polling loop expects, and it no
+  // longer depends on this function racing the driver for the records.
+  if (scanDone.load()) {
+    out["status"] = "done";
+    JsonArray arr = out["networks"].to<JsonArray>();
+    for (const auto& h : scanHits) {
+      JsonObject o = arr.add<JsonObject>();
+      o["ssid"] = h.ssid;
+      o["rssi"] = h.rssi;
+      o["secure"] = h.secure;
+    }
     return;
   }
-  if (!scanRunning.load() && !scanCached) {
+
+  if (scanRunning.load()) {
+    // Still going — unless it has been going too long. Arduino's scanComplete()
+    // failed a scan past its timeout and our caller re-kicked it; without an
+    // equivalent, a SCAN_DONE that never arrives parks the portal on
+    // "Scanning..." for as long as the page is open.
+    if (Platform::millis() - scanStartedMs > kScanTimeoutMs) {
+      printf("[net] scan timed out after %u ms; restarting\n", (unsigned)kScanTimeoutMs);
+      startScan();
+    }
+  } else {
     // Never started, or the start failed — kick one so polling self-heals.
     scanNetworks();
-    out["status"] = "scanning";
-    out["networks"].to<JsonArray>();
-    return;
   }
-
-  // esp_wifi_scan_get_ap_records CONSUMES the driver's results, so the first
-  // poll after a scan caches them. Repeated polls then stay "done" until a new
-  // scan, which is the behaviour the portal's polling loop expects.
-  if (!scanCached) {
-    scanRunning.store(false);
-    uint16_t n = 0;
-    esp_wifi_scan_get_ap_num(&n);
-    scanHits.clear();
-    if (n) {
-      std::vector<wifi_ap_record_t> recs(n);
-      if (esp_wifi_scan_get_ap_records(&n, recs.data()) == ESP_OK) {
-        for (uint16_t i = 0; i < n; ++i) {
-          std::string s(reinterpret_cast<const char*>(recs[i].ssid));
-          if (s.empty()) continue; // hidden networks are unjoinable from the portal
-          const int32_t r = recs[i].rssi;
-          const bool secure = recs[i].authmode != WIFI_AUTH_OPEN;
-          bool merged = false;
-          for (auto& h : scanHits) {
-            if (h.ssid == s) { // dedupe multi-AP SSIDs, strongest signal wins
-              if (r > h.rssi) {
-                h.rssi = r;
-                h.secure = secure;
-              }
-              merged = true;
-              break;
-            }
-          }
-          if (!merged) scanHits.push_back({s, r, secure});
-        }
-      }
-    }
-    std::sort(scanHits.begin(), scanHits.end(),
-              [](const Hit& a, const Hit& b) { return a.rssi > b.rssi; });
-    scanCached = true;
-  }
-
-  out["status"] = "done";
-  JsonArray arr = out["networks"].to<JsonArray>();
-  for (const auto& h : scanHits) {
-    JsonObject o = arr.add<JsonObject>();
-    o["ssid"] = h.ssid;
-    o["rssi"] = h.rssi;
-    o["secure"] = h.secure;
-  }
+  out["status"] = "scanning";
+  out["networks"].to<JsonArray>();
 }
 
 } // namespace Net
