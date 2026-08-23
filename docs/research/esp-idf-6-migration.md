@@ -138,8 +138,10 @@ are one, and heap is at parity with main (134,088 vs 135,264).
 | 5a. `Preferences` to `nvs_*` | done, on device (fielded credentials survived) |
 | 5b-5c. `core/Fs`, POSIX file I/O | done, on device (settings persisted across reboot) |
 | 5d. `Update.h` to `esp_ota_ops` / `esp_partition` | done, on device (both fw and fs targets) |
-| 6. Network (`esp_wifi`) | next |
-| 7. Build system to IDF 6 | pending |
+| 6a. mDNS to the `mdns` component | done (mDNS resolution itself untested — no resolver on this dev host) |
+| 6b. Own captive-DNS responder | done, compile-verified (AP path untested) |
+| 6c. WiFi to `esp_wifi`/`esp_netif`/`esp_event` | done, on device — joined, scan+cache correct, SNTP synced |
+| 7. Build system to IDF 6 | next |
 | 8. Docs and version | pending |
 
 Things the on-device checks caught that the compiler could not:
