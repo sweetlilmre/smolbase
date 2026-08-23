@@ -122,6 +122,44 @@ Explicitly rejected: emulating `String`, `WiFi`, `Update`, `Preferences`, `HTTPC
 
 Note that none of this weakens the staging below. The phases exist because **this bench has no serial flasher**, so every step must be independently flashable and revertible — a constraint that has nothing to do with API stability.
 
+## Progress (branch `idf6-migration`)
+
+Phases 1-5 are done and **verified on the device**, 26 commits, all three envs
+green throughout. `String` is down from 138 sites to 31 (the rest are pinned to
+PsychicHttp's Arduino mode until phase 7), the four duplicated TLS transports
+are one, and heap is at parity with main (134,088 vs 135,264).
+
+| Phase | State |
+|---|---|
+| 1. Rollback guard gated on reachability | done, on device |
+| 2. `Platform.h` (49 leaf calls) | done, on device |
+| 3a-3d. `std::string` sweep | done, on device |
+| 4a-4c. `core/Http`, four transports to one | done, on device (TLS to api.github.com verified) |
+| 5a. `Preferences` to `nvs_*` | done, on device (fielded credentials survived) |
+| 5b-5c. `core/Fs`, POSIX file I/O | done, on device (settings persisted across reboot) |
+| 5d. `Update.h` to `esp_ota_ops` / `esp_partition` | done, on device (both fw and fs targets) |
+| 6. Network (`esp_wifi`) | next |
+| 7. Build system to IDF 6 | pending |
+| 8. Docs and version | pending |
+
+Things the on-device checks caught that the compiler could not:
+
+- **`esp_ota_begin` refuses to start while the running image is
+  PENDING_VERIFY.** Arduino's `Update.h` had no such constraint, so flashing
+  twice inside 30 s failed outright. `GhUpdate.cpp` already handled it; the port
+  did not carry it over. Found by flashing twice in a row on purpose.
+- **`ESP.getFreeHeap()` is `MALLOC_CAP_INTERNAL`, not
+  `esp_get_free_heap_size()`.** Phase 2 swapped one for the other and silently
+  rebased every heap figure the project reports by ~52 KB - the IRAM-leftover
+  region, which cannot serve a byte buffer. Cost a long false hunt for a
+  regression that did not exist. `/api/status` now also reports
+  `heapFree8Bit`, which is the pool #119 actually ran out of.
+- **The fs OTA target needed its erase strategy preserved deliberately.**
+  `esp_ota` has no data-partition equivalent, and erasing 3.8 MB up front would
+  block ~20 s and trip the task watchdog, so it erases one sector ahead of the
+  write front. Verified by writing a real 3.87 MB image: 26.3 s, no trip,
+  volume intact.
+
 ## Suggested staging
 
 The key insight: **most of the Arduino decoupling can happen while still on Arduino**, because the IDF APIs are all available under arduino-esp32 (it *is* an IDF project). Each phase below lands on `main`, gets OTA-flashed, and gets verified on the real device before the next one starts. Only the last code phase flips the framework, and by then almost nothing depends on Arduino.
