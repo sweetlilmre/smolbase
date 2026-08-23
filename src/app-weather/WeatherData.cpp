@@ -94,8 +94,8 @@ inline void addSnap(const char* label) {
 
 // ---- helpers (task side) ----------------------------------------------------
 
-String urlEncode(const char* s) {
-  String out;
+std::string urlEncode(const char* s) {
+  std::string out;
   for (const char* p = s; *p; ++p) {
     if (isalnum((unsigned char)*p)) out += *p;
     else {
@@ -110,7 +110,7 @@ String urlEncode(const char* s) {
 // Transport + diagnostics shim: WxHttp owns the GET (#96); this records the
 // stage code and, on a failed connect, the transport's words — both for
 // /api/debug/weather.
-bool getJson(const String& url, const JsonDocument& filter, JsonDocument& out,
+bool getJson(const std::string& url, const JsonDocument& filter, JsonDocument& out,
              volatile int& code) {
   WxHttp::Result res = WxHttp::getJson(url, filter, out);
   code = res.code;
@@ -149,7 +149,7 @@ bool geocode(const FetchContext::Args& args, FetchContext::Geo& g) {
   filter["results"][0]["name"] = true;
   filter["results"][0]["country_code"] = true;
   JsonDocument doc;
-  String url = String(WxHttp::SCHEME) + "geocoding-api.open-meteo.com/v1/search?name=" +
+  std::string url = std::string(WxHttp::SCHEME) + "geocoding-api.open-meteo.com/v1/search?name=" +
                urlEncode(args.city) + "&count=1&language=en&format=json";
   if (!getJson(url, filter, doc, dbgGeoCode) || doc["results"][0].isNull()) return false;
   snprintf(g.lat, sizeof(g.lat), "%.4f", doc["results"][0]["latitude"].as<double>());
@@ -170,7 +170,7 @@ bool fetchOwm(const FetchContext::Args& args, WeatherData::Reading& r, FetchCont
   filter["name"] = true;
   JsonDocument doc;
   bool byId = isdigit((unsigned char)args.city[0]);
-  String url = String(WxHttp::SCHEME) + "api.openweathermap.org/data/2.5/weather?" +
+  std::string url = std::string(WxHttp::SCHEME) + "api.openweathermap.org/data/2.5/weather?" +
                (byId ? "id=" : "q=") + urlEncode(args.city) +
                "&appid=" + args.key + "&units=metric&lang=en";
   if (!getJson(url, filter, doc, dbgOwmCode) || doc["main"].isNull()) return false;
@@ -209,7 +209,7 @@ bool fetchOpenMeteo(const FetchContext::Args& args, const FetchContext::Geo& geo
   filter["daily"]["temperature_2m_max"][0] = true;
   filter["daily"]["temperature_2m_min"][0] = true;
   JsonDocument doc;
-  String url = String(WxHttp::SCHEME) + "api.open-meteo.com/v1/forecast?latitude=" + lat +
+  std::string url = std::string(WxHttp::SCHEME) + "api.open-meteo.com/v1/forecast?latitude=" + lat +
                "&longitude=" + lon +
                "&current_weather=true&daily=temperature_2m_max,temperature_2m_min,weathercode"
                "&forecast_days=1&timezone=auto";
