@@ -41,14 +41,31 @@ Both heap figures come from the same `/api/status` fields computed by the same `
 - **WiFi scan and its cache**, re-read after the driver consumed the records.
 - `loopStackFree` = 6,276 of 8,192 — the core-1 loop task uses under 2 KB.
 
-## Still unverified — do not claim otherwise
+## Verified on the device
 
-- **mDNS resolution.** This dev host has no working `.local` resolver; it failed before the migration too, so there is no A/B. Needs a host that can resolve mDNS. The `mdns` component is now a registry dependency rather than an IDF built-in, so this is *more* worth checking than it was.
-- **The captive-portal DNS hijack, and AP mode generally.** Exercising it means deliberately clearing credentials, and there is no plain restart endpoint (see *Mistakes*). Test it alongside anything else that touches AP entry. PsychicHttp's `ON_AP_FILTER` keys off `esp_netif` handles we now create ourselves, so this is the highest-value untested path.
-- **fs-OTA with an image built by `littlefs_create_partition_image`.** Firmware-only OTA is proven; flashing `spiffs.bin` is not. `CONFIG_LITTLEFS_OBJ_NAME_LEN=64` is pinned in `sdkconfig.defaults` because it is written into the superblock of images built this way.
-- **GitHub self-update end to end.** The check works; no release yet carries assets built by this toolchain.
-- **Touch and the panel with human eyes on them.** The driver calibrates (`touchBaseline` 1606) and the numbers look right, but a tap and a look at the screen is the only real test.
-- **CI.** The workflow is rewritten (one `esp-idf-ci-action` matrix leg per App) but has not run. First push will tell. Watch for the LovyanGFX configure-time clone and the `littlefs-python` venv, both of which need network inside the container.
+The 7c section above, plus everything below, added during the phase 9 verification pass.
+
+- **mDNS.** Verified by querying the device directly rather than through this host's resolver (`scripts`-free probe, both the QU-unicast and multicast-on-5353 paths): it answers `A smolbase-2e00.local -> 10.0.0.32`, `PTR _http._tcp.local`, and `SRV ...:80`. Service discovery works, not just name resolution. The old note claiming this host has no working `.local` resolver was wrong — `Resolve-DnsName` and `ping` resolve it too.
+- **fs-OTA with an image built by `littlefs_create_partition_image`** — after fixing a bug this test existed to find; see below. All six assets on the reflashed volume are byte-identical to the built image, gzip fallback included.
+- **`/api/fs` single-file upload**, which is the live exercise of `Fs::mkdirParents` and the new `Fs::replace`.
+- **`App::statusJson` with a real App's state**: the weather App reports a completed keyless fetch (`geoCode` 200, `meteoCode` 200, coordinates harvested) with its fields copied under the fetch mux from the httpd task.
+- **`onNotFound`'s STA branch**, confirmed by accident while the filesystem was empty: `GET /settings.html` returned the 2,446-byte compiled-in recovery page rather than a 404.
+- **`ON_AP_FILTER` staying inert on the STA netif**: `GET /` served `index.html`, not the AP-mode `portal.html` rewrite.
+- **Settings survive** two firmware swaps (smolbase → weatherclock → smolbase) and are restorable over `POST /api/settings` after a full fs flash.
+- **The rollback guard**, implicitly: a dozen OTA cycles this session, every one confirmed healthy past the 30 s gate with no bootloader fallback.
+
+### The bug the fs-OTA test was for
+
+`littlefs_create_partition_image` was pointed at `data-<app>/w`, but `littlefs-python create` lays the *contents* of its source directory at the image root. The image therefore held `/index.html.gz` while the firmware serves from `/w/` — a valid image that mounts cleanly and 404s everything on it. PlatformIO's `mklittlefs` was handed `data-<env>/` and so got this right by accident, which is why the port did not catch it.
+
+Worth dwelling on how well it hid: the build succeeded, the image carried the `littlefs` magic at offset 8 so `Ota`'s guard passed, the upload answered `{"ok":true,"restarting":true}`, and the device came back joined, healthy, and serving the embedded recovery page for `/settings.html`. Every one of those looks like success. Only comparing *what was served* against what was built showed it. Every release would have shipped an unusable `<app>-littlefs-<tag>.bin`, for all three Apps.
+
+## Still unverified
+
+- **AP mode and the captive DNS hijack.** Needs a human and a phone; the procedure is [idf6-ap-mode-verification.md](idf6-ap-mode-verification.md), which lists what is already confirmed so it does not get re-tested. This is the last significant gap.
+- **GitHub self-update end to end.** `/api/update/check` works (TLS to api.github.com, and the semver compare correctly reports `ahead` rather than offering a downgrade). The download-and-flash half needs a release carrying assets built by this toolchain.
+- **Panel and touch with human eyes.** The numbers are right — `touch.baseline` 1605 against a 1445 threshold, `app.presentUs` ~26 ms of real panel push — but nobody has looked at the screen or tapped the pad since the flip.
+- **CI.** Rewritten and cached, never run. First push will tell. Watch for the LovyanGFX configure-time clone and the `littlefs-python` venv, both of which need network inside the container.
 
 ## Hard-won facts — do not re-derive these
 
