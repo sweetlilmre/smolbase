@@ -48,14 +48,26 @@
 // Runtime WiFi drops auto-reconnect forever; there is deliberately no runtime AP fallback.
 
 // ---- Touch (single capacitive pad, T9/GPIO32) ----
-// Boot calibration: average this many touchRead() samples with the pad untouched.
+// The touch-sensor driver's channel id for GPIO32. Kept alongside the pin so
+// the two cannot drift: SMOLBASE_PIN_TOUCH is documentation now, since the
+// driver addresses the pad by channel.
+#define SMOLBASE_TOUCH_CHANNEL 9
+// V1 sample config: charge duration in ms (float). The driver's own test app
+// uses 5.0 for this hardware revision.
+#define SMOLBASE_TOUCH_CHARGE_MS 5.0f
+// The software filter runs on a 10 ms timer; wait at least this long after
+// starting the scan before the first read, or calibration samples come back 0.
+#define SMOLBASE_TOUCH_SETTLE_MS 100
+// Boot calibration: average this many samples with the pad untouched, spaced
+// far enough apart that the 10 ms filter has moved on between reads.
 #define SMOLBASE_TOUCH_CAL_SAMPLES 16
-// Pressed when the reading drops below (untouched baseline - margin).
-#define SMOLBASE_TOUCH_MARGIN 120
-// A boot baseline below this is implausible for an untouched pad (finger present
-// at boot?) — fall back to the default threshold instead of miscalibrating.
-#define SMOLBASE_TOUCH_MIN_BASELINE 200
-#define SMOLBASE_TOUCH_DEFAULT_THRESHOLD 300
+#define SMOLBASE_TOUCH_CAL_GAP_MS 20
+// Pressed when the reading falls this far BELOW the measured baseline, as a
+// PERCENTAGE of it. A percentage rather than an absolute count because the
+// driver's value scale is nothing like Arduino touchRead()'s (~1600 vs a few
+// hundred on this pad), so an absolute margin does not survive the port. Tune
+// against the live baseline, which /api/status reports as touchBaseline.
+#define SMOLBASE_TOUCH_DELTA_PCT 15
 // An edge (press or release) must hold this long before it is believed.
 #define SMOLBASE_TOUCH_DEBOUNCE_MS 30
 // Held at least this long = long-press (fires once while held); shorter = tap on release.

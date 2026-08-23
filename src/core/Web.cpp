@@ -22,6 +22,7 @@
 #include "Ota.h"
 #include "Platform.h"
 #include "Secrets.h"
+#include "Touch.h"
 #include "smolbase_config.h"
 #include <ArduinoJson.h>
 #include <LittleFS.h>
@@ -138,6 +139,11 @@ void begin(App& app) {
     // allocations (TLS included) can only come from this pool, and it runs
     // ~52 KB below heapFree on this chip. #119 was a failure of THIS number.
     doc["heapFree8Bit"] = Platform::freeHeap8Bit();
+    // Touch pad, for tuning SMOLBASE_TOUCH_DELTA_PCT against real readings.
+    // 0/0 means calibration failed and the pad is inert.
+    doc["touchBaseline"] = Touch::padBaseline();
+    doc["touchThreshold"] = Touch::padThreshold();
+    doc["touchNow"] = Touch::padLast();
     if (Net::isUp()) {
       doc["rssi"] = Net::rssi();
       doc["ssid"] = Net::ssid(); // which network we're on (#39)
