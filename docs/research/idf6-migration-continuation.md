@@ -83,6 +83,16 @@ Worth dwelling on how well it hid: the build succeeded, the image carried the `l
 - **`PsychicHttp`'s `ON_AP_FILTER`/`ON_STA_FILTER` use pure `esp_netif`** (`ESP_NETIF_DHCP_SERVER`) — but both netifs must exist, so `Net.cpp` creates them up front.
 - **In native mode PsychicHttp returns `const char*`** from `uri()`, `host()`, `body()`, `getParam()->value()`, and upload filenames. `==` against a literal compiles fine and compares pointers — every one of those needs `strcmp`. `host()` is backed by a member the next accessor reuses; copy it before touching the request again. `uri()` returns `_uri.c_str()` and is stable.
 - **IDF applies `-Werror` to warning classes arduino-esp32 did not**, including `-Wformat` and `-Wformat-truncation`. `uint32_t` is `long unsigned` on this target, so `%u` on a heap figure is a hard error — cast and use `%lu`.
+- **A .NET SerialPort with default settings DROPS BYTES during the boot burst.** `System.IO.Ports.SerialPort` defaults to a 4096-byte read buffer, and a per-line `ReadLine()` loop in PowerShell cannot keep up with ~11.5 KB/s of boot log. The corruption looks like a firmware bug, because what you get is plausible-but-wrong text:
+
+  ```
+  E (1615) psychic: Server startailed - no network interface available.
+  E  (114) ychi: erer srtfaled -o netor iterfae available.
+  I (1612) esp_netif_lwip: DHCP server started on interface WIFI_AP_DEwithIP: 192.164.1
+  ```
+
+  That last line mangles an IP address. Set `ReadBufferSize = 262144` and drain with `ReadExisting()` in a tight loop, doing nothing else in it — no `curl`, no `Test-NetConnection` between reads. Same boot then comes out byte-perfect. Verified both ways.
+- **The AP-startup `wifi:no need to send deauth when softap is sending deauth` flood is a CLIENT, not us.** It appears only on boots where something with a saved profile pounces on the AP as it starts beaconing (a `wifi:station: <mac> join` line always follows); with no client in range it does not appear at all. Counts observed: 24, 2, and 0. Driver-internal, benign, and not a conversion regression — `esp_wifi_set_config(WIFI_IF_AP)` runs BEFORE `esp_wifi_start()` here, where arduino-esp32's `APClass::create` configured after starting, which restarts a running AP.
 - **`idf_component_register` silently ignores `SRC_DIRS` when `SRCS` is also given**, with one warning in a very long configure log. Use one or the other.
 - **`mdns` is no longer bundled with IDF.** It is `espressif/mdns` in the component registry from 6.0 on.
 
