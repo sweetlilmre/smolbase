@@ -62,8 +62,9 @@ Worth dwelling on how well it hid: the build succeeded, the image carried the `l
 
 ## Still unverified
 
-- **AP mode and the captive DNS hijack.** Needs a human and a phone; the procedure is [idf6-ap-mode-verification.md](idf6-ap-mode-verification.md), which lists what is already confirmed so it does not get re-tested. This is the last significant gap.
+- ~~**AP mode and the captive DNS hijack.**~~ **Done** — [idf6-ap-mode-verification.md](idf6-ap-mode-verification.md) has the results. The captive path passes 14/14 (DNS hijack, the OS-probe redirects, the loop guard, the portal rewrite, the scan). Getting there took two fixes: a brick-class one-shot `Web::start()`, and the scan's deferred record collection. Serial was attached partway through and is what made the loop fast; attach it before re-running.
 - **GitHub self-update end to end.** `/api/update/check` works (TLS to api.github.com, and the semver compare correctly reports `ahead` rather than offering a downgrade). The download-and-flash half needs a release carrying assets built by this toolchain.
+- **The once-per-boot STA re-association.** Observed, not explained: 5-15 s after connecting, back with the same IP in ~200 ms, once and then stable. Ruled out: power save (`WIFI_PS_NONE`, pm type 0, zero sleep time, drop unchanged) and every WiFi call of ours. The link is WPA3-SAE with PMF. mDNS now holds through it; nothing else is affected. Low priority, but do not rediscover it from scratch.
 - **Panel and touch with human eyes.** The numbers are right — `touch.baseline` 1605 against a 1445 threshold, `app.presentUs` ~26 ms of real panel push — but nobody has looked at the screen or tapped the pad since the flip.
 - **CI.** Rewritten and cached, never run. First push will tell. Watch for the LovyanGFX configure-time clone and the `littlefs-python` venv, both of which need network inside the container.
 
