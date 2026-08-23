@@ -13,18 +13,72 @@ namespace {
 
 // ArduinoJson reader over esp_http_client: read() / readBytes() is the whole
 // concept ArduinoJson needs. Bytes arrive de-chunked (see Http.h, pitfall 3).
+//
+// BUFFERED, and that is not a nicety — it restores what the Arduino path had
+// for free. ArduinoJson scans a document mostly one byte at a time. The Arduino
+// version passed `*http.getStreamPtr()` to deserializeJson, and that Stream was
+// an arduino-esp32 NetworkClient, which owns a NetworkClientRxBuffer: a
+// heap-allocated 1436-byte (TCP MSS) buffer whose whole purpose is to make
+// Stream::read() cheap. Phase 4a replaced the Stream with a raw
+// esp_http_client_read and silently dropped that buffer, turning GitHub's ~30 KB
+// release JSON into ~30,000 round trips through mbedTLS — measured at 2.07 s of
+// the 8.49 s /api/update/check took.
+//
+// Same size and same placement as NetworkClientRxBuffer on purpose: 1436 is one
+// TCP segment, and it lives on the heap because this is constructed on the httpd
+// task, whose stack is not the place for it.
 class ClientReader {
+  static constexpr size_t kBufSize = 1436; // arduino-esp32 NetworkClientRxBuffer
   esp_http_client_handle_t _c;
+  char* _buf;
+  size_t _pos = 0, _len = 0;
+
+  // True when at least one byte is available in _buf.
+  bool fill() {
+    if (_pos < _len) return true;
+    if (!_buf) return false;
+    const int n = esp_http_client_read(_c, _buf, (int)kBufSize);
+    if (n <= 0) {
+      _pos = _len = 0;
+      return false;
+    }
+    _pos = 0;
+    _len = (size_t)n;
+    return true;
+  }
 
 public:
-  explicit ClientReader(esp_http_client_handle_t c) : _c(c) {}
+  explicit ClientReader(esp_http_client_handle_t c)
+      : _c(c), _buf(static_cast<char*>(malloc(kBufSize))) {}
+  ~ClientReader() { free(_buf); }
+  ClientReader(const ClientReader&) = delete;
+  ClientReader& operator=(const ClientReader&) = delete;
+
+  // Allocation failure degrades to the unbuffered behaviour rather than losing
+  // the response: slow, but a JSON fetch that works beats one that does not.
   int read() {
-    char ch;
-    return esp_http_client_read(_c, &ch, 1) == 1 ? (int)(unsigned char)ch : -1;
+    if (!_buf) {
+      char ch;
+      return esp_http_client_read(_c, &ch, 1) == 1 ? (int)(unsigned char)ch : -1;
+    }
+    if (!fill()) return -1;
+    return (int)(unsigned char)_buf[_pos++];
   }
-  size_t readBytes(char* buf, size_t len) {
-    int n = esp_http_client_read(_c, buf, (int)len);
-    return n > 0 ? (size_t)n : 0;
+  size_t readBytes(char* dst, size_t len) {
+    if (!_buf) {
+      const int n = esp_http_client_read(_c, dst, (int)len);
+      return n > 0 ? (size_t)n : 0;
+    }
+    size_t done = 0;
+    while (done < len) {
+      if (!fill()) break;
+      size_t take = _len - _pos;
+      if (take > len - done) take = len - done;
+      memcpy(dst + done, _buf + _pos, take);
+      _pos += take;
+      done += take;
+    }
+    return done;
   }
 };
 

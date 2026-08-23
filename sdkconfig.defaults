@@ -39,14 +39,39 @@ CONFIG_FREERTOS_HZ=1000
 # rolled back by the bootloader on the next power cycle.
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
-# ---- mbedTLS: the ADR 0005 thesis, in three lines instead of a lib rebuild ----
-# LARGE_KEY_SOFTWARE_MPI: REQUIRED. The ESP32 RSA accelerator cannot complete
-# 4096-bit verifies, so GitHub's CDN chain (cross-signed by RSA-4096 ISRG Root
-# X1) fails with PK error 0x4290 without a software fallback, and the OTA is
-# dead in the field (#119). Set EXPLICITLY rather than inherited: the Kconfig
-# default is conditional on SOC_RSA_MAX_BIT_LEN.
-CONFIG_MBEDTLS_HARDWARE_MPI=y
-CONFIG_MBEDTLS_LARGE_KEY_SOFTWARE_MPI=y
+# ---- mbedTLS ----
+# The RSA/MPI accelerator is OFF, which is the opposite of what you would guess
+# and is MEASURED. On this device, one TLS handshake to api.github.com:
+#
+#   HARDWARE_MPI=y, FIXED_POINT_OPTIM=n   6.85 s   watchdog trips every request
+#   HARDWARE_MPI=y, FIXED_POINT_OPTIM=y   6.50 s   watchdog trips every request
+#   HARDWARE_MPI=n, FIXED_POINT_OPTIM=n   5.92 s   watchdog trips every request
+#   HARDWARE_MPI=n, FIXED_POINT_OPTIM=y   4.25 s   clean
+#   (arduino-esp32 v0.3.3, same device, same request: 4.12 s, clean)
+#
+# The ESP32 has no ECC accelerator at all - MBEDTLS_HARDWARE_ECC and
+# MBEDTLS_HARDWARE_ECDSA_VERIFY both depend on SOC caps this chip lacks - so an
+# ECDHE-ECDSA handshake is software elliptic-curve maths either way. What the
+# accelerator does is intercept mbedtls_mpi_mul_mpi, and mbedTLS 4's ECP code
+# calls that far more often than 3.x did, on 256-bit operands where the
+# peripheral's per-operation setup and locking cost more than they save. Turning
+# it off is worth ~0.9 s; the fixed-point tables are worth a further ~1.7 s, but
+# only once the accelerator is out of the way (with it on they buy 0.35 s).
+#
+# #119 IS STILL SAFE, by a simpler route. The failure was the RSA accelerator
+# being unable to complete the 4096-bit verify in GitHub's ISRG Root X1
+# cross-signed chain (PK error 0x4290), which LARGE_KEY_SOFTWARE_MPI patched by
+# adding a software fallback for oversized keys. With no hardware MPI there is no
+# hardware limit to exceed: every RSA op is software, so the 4096-bit verify
+# simply works. LARGE_KEY_SOFTWARE_MPI depends on HARDWARE_MPI and is therefore
+# gone with it - deliberately, not by omission.
+#
+# HARDWARE_SHA and HARDWARE_AES stay at their =y defaults: those accelerators
+# are a real win, and the arduino-esp32 build had them on too.
+# CONFIG_MBEDTLS_HARDWARE_MPI is not set
+# Fixed-point ECP precomputation tables: ~1.7 s off a handshake for ~23 KB of
+# flash, which is cheap in a partition that is a third empty.
+CONFIG_MBEDTLS_ECP_FIXED_POINT_OPTIM=y
 # Asymmetric TLS buffers: OUT 16 KB -> 4 KB, ~12 KB less heap per connection,
 # zero protocol risk. IN must stay 16384 — Fastly sends full-size records and
 # there is no MFL/record_size_limit path (docs/research/ghupdate-tls-knobs.md).
