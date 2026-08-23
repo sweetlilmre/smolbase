@@ -94,6 +94,7 @@ static void loop() {
   const uint32_t t0 = Platform::millis();
   Events::drain(onSysEvent);
   Net::loop();
+  Web::loop(); // brings the listener up as soon as a netif is up — see Web.h
   Clock::loop(); // SNTP re-kick belt; cheap no-op once synced
   Touch::loop();
   Display::tick();

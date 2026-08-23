@@ -112,11 +112,29 @@ esp_err_t sendJson(PsychicResponse* res, int code, const JsonDocument& doc) {
   return res->send(code, "application/json", out.c_str());
 }
 
+// Whether the listener is actually up, so loop() knows when to stop trying.
+// PsychicHttp's start() is idempotent but does not distinguish "was already
+// running" from "just started", and the transition is worth logging once.
+static bool s_running = false;
+static uint32_t s_lastTryMs = 0;
+static constexpr uint32_t kStartRetryMs = 250;
+
 void start() {
-  // Idempotent (start() returns ESP_OK when already running). Called from the
-  // NetworkUp/ApModeEntered handlers — the moments a netif provably has an IP.
-  esp_err_t err = httpServer.start();
-  if (err != ESP_OK) printf("[web] server start failed: %d\n", (int)err);
+  if (s_running) return;
+  if (httpServer.start() == ESP_OK) {
+    s_running = true;
+    printf("[web] listening on port 80\n");
+  }
+  // Deliberately silent on failure: loop() retries every 250 ms until a netif
+  // is up, and at boot "not yet" is the normal answer for a moment. See Web.h.
+}
+
+void loop() {
+  if (s_running) return;
+  const uint32_t now = Platform::millis();
+  if (s_lastTryMs && now - s_lastTryMs < kStartRetryMs) return;
+  s_lastTryMs = now;
+  start();
 }
 
 void begin(App& app) {
