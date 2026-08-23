@@ -1,7 +1,18 @@
-# IDF tuning levers — measured, none applied
+# IDF tuning levers — footprint measurements
 
 **Written:** 2026-08-23, during the phase 9 cleanup, against ESP-IDF v6.0.2 and the smolbase App.
-**Status:** measurement only. Nothing in this document has been applied to `sdkconfig.defaults`. Each lever is listed with what it actually costs and what it actually risks, so the decision is a decision rather than a guess.
+**Status:** the *footprint* levers below were measured and none was taken. Two *timing* levers were found later and ARE applied — see the banner.
+
+> **SUPERSEDED IN PART, 2026-08-23.** This document concluded that no tuning
+> lever was worth taking. That was right about *flash* and wrong about *time*:
+> it only ever looked at footprint. A later session measured TLS handshake cost
+> and found two levers worth 4.3 s between them —
+> `CONFIG_MBEDTLS_HARDWARE_MPI` **off** and
+> `CONFIG_MBEDTLS_ECP_FIXED_POINT_OPTIM` **on**, both now applied. See the TLS
+> section of [idf6-migration-continuation.md](idf6-migration-continuation.md).
+> The method and the two measurement traps below are still correct and still
+> worth reading; the *conclusion* is not. The lesson: "measure before changing"
+> is only as good as the thing you chose to measure.
 
 ## Why the framing matters
 
