@@ -1,6 +1,6 @@
 // The Weather Clock App (wayfinder map #63) — a port of the SmolTV-Pro
-// weather dashboard onto the smolbase extension surface. Built by
-// [env:weatherclock]; the stock demo in src/app/ stays untouched.
+// weather dashboard onto the smolbase extension surface. Built with
+// -DSMOLBASE_APP=weatherclock; the stock demo App stays untouched.
 //
 #include "../core/App.h"
 #include "../core/ConfigStore.h"
@@ -87,7 +87,7 @@ public:
     server.on("/api/debug/weather", HTTP_GET, [](PsychicRequest*, PsychicResponse* res) {
       JsonDocument doc;
       WeatherDebug::json(doc); // core-0-safe: snapshots under the fetch mux (#99)
-      String out;
+      std::string out;
       serializeJson(doc, out);
       return res->send(200, "application/json", out.c_str());
     });

@@ -1,0 +1,4 @@
+-B
+build/smolbase
+-D
+SMOLBASE_APP=smolbase

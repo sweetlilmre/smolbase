@@ -13,7 +13,8 @@
 #include <ArduinoJson.h>
 #include <esp_crt_bundle.h>
 #include <mbedtls/base64.h>
-#include <mbedtls/sha256.h>
+#include <psa/crypto.h>
+#include <cmath>
 #include <cstdio>
 #include "../core/Http.h"
 #include <cstring>
@@ -65,9 +66,17 @@ static bool jwtPayload(const std::string& token, long& expOut, std::string& regi
 }
 
 // SHA-256 of userId → lowercase hex string (the account-id header value).
+// PSA, not mbedtls_sha256(): IDF 6 ships mbedTLS 4, where the hash primitives
+// moved to TF-PSA-Crypto and <mbedtls/sha256.h> is private. Returns "" on
+// failure -- the caller treats an empty hash as "no account-id header".
 static std::string sha256Hex(const std::string& s) {
     uint8_t hash[32];
-    mbedtls_sha256((const uint8_t*)s.c_str(), s.length(), hash, 0);
+    size_t hashLen = 0;
+    if (psa_crypto_init() != PSA_SUCCESS) return {};
+    if (psa_hash_compute(PSA_ALG_SHA_256, (const uint8_t*)s.c_str(), s.length(), hash,
+                         sizeof(hash), &hashLen) != PSA_SUCCESS ||
+        hashLen != sizeof(hash))
+        return {};
     char hex[65];
     for (int i = 0; i < 32; i++) snprintf(hex + i * 2, 3, "%02x", hash[i]);
     return hex;

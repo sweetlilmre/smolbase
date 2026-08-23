@@ -9,16 +9,15 @@
 #include "Http.h"
 #include "smolbase_config.h"
 #include <ArduinoJson.h>
-#include <FS.h>
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
-#include <mbedtls/sha256.h>
+#include <psa/crypto.h>
 #include <cstdio>
 
 static const char* const GH_REPO = "sweetlilmre/smolbase";
 
-// Release asset carrying this build's web assets: <prefix>-<tag>.tar.
-// Envs override via build_flags, mirroring SMOLBASE_FW_ASSET_PREFIX.
+// Release asset carrying this build's web assets: <prefix>-<tag>.tar. Apps
+// override it from the root CMakeLists.txt, mirroring SMOLBASE_FW_ASSET_PREFIX.
 #ifndef SMOLBASE_ASSETS_PREFIX
 #define SMOLBASE_ASSETS_PREFIX "smolbase-assets"
 #endif
@@ -63,12 +62,12 @@ static bool findBackupDir(char* out, size_t len) {
   bool found = false;
   Fs::Dir::Entry ent;
   while (root.next(ent)) {
-    // Match on the BASENAME, not the full path: the old strncmp(p, "/w.", 3)
-    // assumed the volume was mounted at the root and would silently stop
-    // matching once a mount prefix was in play.
-    const char* p = ent.path.c_str(); // e.g. "/littlefs/w.v0.3.2"
-    bool isDir = ent.isDir;
-    if (isDir && strncmp(ent.name.c_str(), "w.", 2) == 0) {
+    // Match on the BASENAME, not the full path. The volume is mounted at the
+    // root today, so the old strncmp(path, "/w.", 3) would work again — but it
+    // only worked by accident, and a backup that cannot be found never gets
+    // restored, which is the whole point of #122.
+    const char* p = ent.path.c_str(); // e.g. "/w.v0.3.2"
+    if (ent.isDir && strncmp(ent.name.c_str(), "w.", 2) == 0) {
       strlcpy(out, p, len);
       found = true;
       break;
@@ -105,7 +104,7 @@ bool fetchAssetDigest(const char* tag, char* outHex, size_t outHexLen, char* err
     return false;
   }
   for (JsonObject a : doc["assets"].as<JsonArray>()) {
-    if (String(a["name"] | "") != assetName) continue;
+    if (strcmp(a["name"] | "", assetName) != 0) continue;
     const char* d = a["digest"] | "";
     if (strncmp(d, "sha256:", 7) != 0 || strlen(d + 7) != 64) {
       setErr(errBuf, errLen, "digest: missing on %s", assetName);
@@ -148,9 +147,19 @@ bool downloadTar(const char* tag, const char* expectedHex, char* errBuf, size_t 
   esp_http_client_set_header(client, "User-Agent", "smolbase-esp32");
 
   bool ok = false;
-  mbedtls_sha256_context sha;
-  mbedtls_sha256_init(&sha);
-  mbedtls_sha256_starts(&sha, 0);
+  // PSA, not mbedtls_sha256_*: IDF 6 ships mbedTLS 4, where the hash primitives
+  // moved to TF-PSA-Crypto and <mbedtls/sha256.h> is private. psa_crypto_init()
+  // is idempotent (esp-tls calls it too) — called here so this path does not
+  // depend on a TLS handshake having happened first.
+  psa_hash_operation_t sha = PSA_HASH_OPERATION_INIT;
+  if (psa_crypto_init() != PSA_SUCCESS ||
+      psa_hash_setup(&sha, PSA_ALG_SHA_256) != PSA_SUCCESS) {
+    out.close();
+    Fs::remove(kStagingTar);
+    esp_http_client_cleanup(client);
+    setErr(errBuf, errLen, "tar: sha256 init failed");
+    return false;
+  }
 
   do {
     // open+fetch follows the 302 to the CDN internally (native redirects).
@@ -181,7 +190,7 @@ bool downloadTar(const char* tag, const char* expectedHex, char* errBuf, size_t 
     while (got < total) {
       int rd = esp_http_client_read(client, (char*)buf, sizeof(buf));
       if (rd <= 0) { ioFail = true; break; }
-      mbedtls_sha256_update(&sha, buf, rd);
+      if (psa_hash_update(&sha, buf, rd) != PSA_SUCCESS) { ioFail = true; break; }
       if (out.write(buf, rd) != (size_t)rd) { ioFail = true; break; }
       got += rd;
     }
@@ -191,7 +200,12 @@ bool downloadTar(const char* tag, const char* expectedHex, char* errBuf, size_t 
     }
 
     unsigned char digest[32];
-    mbedtls_sha256_finish(&sha, digest);
+    size_t digestLen = 0;
+    if (psa_hash_finish(&sha, digest, sizeof(digest), &digestLen) != PSA_SUCCESS ||
+        digestLen != sizeof(digest)) {
+      setErr(errBuf, errLen, "tar: sha256 finish failed");
+      break;
+    }
     char hex[65];
     for (int i = 0; i < 32; i++) sprintf(hex + i * 2, "%02x", digest[i]);
     if (strcasecmp(hex, expectedHex) != 0) {
@@ -201,7 +215,7 @@ bool downloadTar(const char* tag, const char* expectedHex, char* errBuf, size_t 
     ok = true;
   } while (false);
 
-  mbedtls_sha256_free(&sha);
+  psa_hash_abort(&sha);
   esp_http_client_close(client);
   esp_http_client_cleanup(client);
   out.close();
@@ -340,8 +354,16 @@ static bool extractTo(const char* destDir, bool viaTmp, int totalFiles,
   TarEntry e;
   int r, done = 0;
   while ((r = readHeader(tar, e, errBuf, errLen)) == 1) {
-    char dst[96], tmp[100];
-    snprintf(dst, sizeof(dst), "%s/%s", destDir, e.name);
+    // destDir is "/w" or a "/w.<version>" backup; e.name is a ustar name, so up
+    // to 100 bytes. Sized so truncation cannot happen, and checked anyway — a
+    // truncated path would write the wrong file rather than fail.
+    char dst[160], tmp[168];
+    const int dstLen = snprintf(dst, sizeof(dst), "%s/%s", destDir, e.name);
+    if (dstLen < 0 || (size_t)dstLen >= sizeof(dst)) {
+      setErr(errBuf, errLen, "extract: path too long: %s", e.name);
+      tar.close();
+      return false;
+    }
     snprintf(tmp, sizeof(tmp), "%s.tmp", dst);
     const char* writePath = viaTmp ? tmp : dst;
     Fs::File out(writePath, "w");

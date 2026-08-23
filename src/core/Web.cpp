@@ -1,5 +1,5 @@
 // See Web.h for the structural registration order. Verified against the
-// pinned PsychicHttp 3.1.2 source (.pio/libdeps/*/PsychicHttp/src):
+// pinned PsychicHttp 3.1.2 source (managed_components/psychichttp/src):
 //  - Static serving auto-falls-back to "<name>.gz" with Content-Encoding: gzip
 //    (PsychicStaticFileHander.cpp — upstream filename typo — _fileExists()).
 //  - ON_AP_FILTER / ON_STA_FILTER are free functions keyed off the netif that
@@ -25,10 +25,10 @@
 #include "Touch.h"
 #include "smolbase_config.h"
 #include <ArduinoJson.h>
-#include <LittleFS.h>
 #include <PsychicHttp.h>
 #include <nvs_flash.h>
 #include <cstdio>
+#include <cstring>
 
 namespace Web {
 
@@ -106,7 +106,7 @@ static PsychicHttpServer httpServer;
 PsychicHttpServer& server() { return httpServer; }
 
 static esp_err_t sendJson(PsychicResponse* res, int code, const JsonDocument& doc) {
-  String out;
+  std::string out;
   serializeJson(doc, out);
   return res->send(code, "application/json", out.c_str());
 }
@@ -140,6 +140,10 @@ void begin(App& app) {
     // allocations (TLS included) can only come from this pool, and it runs
     // ~52 KB below heapFree on this chip. #119 was a failure of THIS number.
     doc["heapFree8Bit"] = Platform::freeHeap8Bit();
+    // Low-water free stack of the core-1 loop task. Arduino sized that stack
+    // implicitly at 8 KB; main.cpp now sizes it deliberately, so the headroom
+    // has to be observable — there is no UART on the dev bench.
+    doc["loopStackFree"] = Platform::loopStackFree();
     // Touch pad, for tuning SMOLBASE_TOUCH_DELTA_PCT against real readings.
     // 0/0 means calibration failed and the pad is inert.
     doc["touchBaseline"] = Touch::padBaseline();
@@ -168,7 +172,7 @@ void begin(App& app) {
   httpServer.on("/api/wifi", HTTP_POST, [](PsychicRequest* req, PsychicResponse* res) {
     JsonDocument doc;
     if (deserializeJson(doc, req->body()) != DeserializationError::Ok ||
-        doc["ssid"].as<String>().isEmpty()) {
+        doc["ssid"].as<std::string>().empty()) {
       return res->send(400, "application/json", "{\"error\":\"expected {ssid,pass}\"}");
     }
     if (!Net::saveCredentials(doc["ssid"].as<std::string>(), doc["pass"].as<std::string>())) {
@@ -263,28 +267,25 @@ void begin(App& app) {
   // not replace fs-OTA, which stays the way to ship coherent images.
   {
     static Fs::File fsFile;
-    static String fsPath;      // volume-relative; comes from PsychicHttp's param
-    static std::string fsFsPath; // absolute, for core/Fs
+    // One spelling: the volume is mounted at the root, so the request's ?path=
+    // IS the POSIX path (see the SMOLBASE_FS_MOUNT note in smolbase_config.h).
+    static std::string fsPath;
     static bool fsFailed;
     auto* fsUp = new PsychicUploadHandler(); // lives for the server's lifetime
-    fsUp->onUpload([](PsychicRequest* req, const String&, uint64_t index, uint8_t* data,
+    fsUp->onUpload([](PsychicRequest* req, const char*, uint64_t index, uint8_t* data,
                       size_t len, bool last) -> esp_err_t {
       if (index == 0) {
         fsFailed = false;
         PsychicWebParameter* p = req->getParam("path");
-        fsPath = p ? p->value() : String("");
-        if (fsPath.length() < 2 || fsPath[0] != '/' || fsPath.indexOf("..") >= 0) {
+        fsPath = p ? p->value() : "";
+        if (fsPath.length() < 2 || fsPath[0] != '/' ||
+            fsPath.find("..") != std::string::npos) {
           fsFailed = true;
           return ESP_OK; // drain; verdict in onRequest
         }
-        // fsPath stays volume-relative (it came from PsychicHttp's param, and
-        // is echoed back to the client); fsFsPath is the POSIX form.
-        fsFsPath = std::string(SMOLBASE_FS_MOUNT) + fsPath.c_str();
-        for (int i = 1; (i = fsPath.indexOf('/', i)) > 0; ++i) {
-          const std::string anc =
-              std::string(SMOLBASE_FS_MOUNT) + fsPath.substring(0, i).c_str();
-          Fs::mkdir(anc.c_str()); // no-op when it exists (Fs::mkdir folds EEXIST)
-        }
+        // Create the ancestors: "/w/sub/f.gz" needs "/w" and "/w/sub".
+        for (size_t i = 1; (i = fsPath.find('/', i)) != std::string::npos; ++i)
+          Fs::mkdir(fsPath.substr(0, i).c_str()); // no-op when it exists (folds EEXIST)
         fsFile = Fs::File(SMOLBASE_FS_MOUNT "/.upload.tmp", "w");
         if (!fsFile) fsFailed = true;
       }
@@ -296,8 +297,8 @@ void begin(App& app) {
       }
       if (last) {
         fsFile.close();
-        Fs::remove(fsFsPath.c_str());
-        if (!Fs::rename(SMOLBASE_FS_MOUNT "/.upload.tmp", fsFsPath.c_str())) fsFailed = true;
+        Fs::remove(fsPath.c_str());
+        if (!Fs::rename(SMOLBASE_FS_MOUNT "/.upload.tmp", fsPath.c_str())) fsFailed = true;
       }
       return ESP_OK;
     });
@@ -325,7 +326,7 @@ void begin(App& app) {
   app.registerRoutes(httpServer);
 
   // --- 4. static assets (gzip-only files; PsychicHttp auto-serves name.gz) ---
-  httpServer.serveStatic("/", LittleFS, SMOLBASE_WWW_DIR "/")
+  httpServer.serveStatic("/", SMOLBASE_WWW_DIR "/")
       ->setDefaultFile("index.html")
       ->setCacheControl("max-age=300");
   // AP mode: "/" lands on the provisioning portal (asset ships with ticket
@@ -340,21 +341,24 @@ void begin(App& app) {
   // missing (first flash arrives by OTA and the old filesystem has no smolbase
   // assets), serve the embedded fallback so provisioning is never UI-dead.
   httpServer.onNotFound([](PsychicRequest* req, PsychicResponse* res) -> esp_err_t {
+    // strcmp, not ==: in native mode uri() returns a const char* and == would
+    // compare pointers.
+    const char* uri = req->uri();
     if (Net::inApMode()) {
       const std::string self = Net::ip();
-      // req->host() is an Arduino String until phase 7 flips PsychicHttp to
-      // native mode; convert at the boundary. No starts_with on gnu++17, so
-      // rfind(prefix, 0) is the prefix test.
-      const std::string host = req->host().c_str();
+      // In native mode host() returns a const char* backed by a member the next
+      // accessor call reuses — copy it before touching the request again. No
+      // starts_with on gnu++17, so rfind(prefix, 0) is the prefix test.
+      const std::string host = req->host();
       const bool selfAddressed = host == self || host.rfind(self + ":", 0) == 0;
       if (!selfAddressed) {
         res->setCode(302);
         return res->redirect(("http://" + self + "/").c_str());
       }
-      if (req->uri() == "/" || req->uri() == "/portal.html") {
+      if (strcmp(uri, "/") == 0 || strcmp(uri, "/portal.html") == 0) {
         return res->send(200, "text/html", FALLBACK_PORTAL);
       }
-    } else if (req->uri() == "/" || req->uri() == "/settings.html") {
+    } else if (strcmp(uri, "/") == 0 || strcmp(uri, "/settings.html") == 0) {
       // STA mode with the asset missing (wiped/failed filesystem): serve the
       // embedded recovery page so the device is never browser-dead — also for
       // bookmarked settings.html. A *present but broken* asset still serves

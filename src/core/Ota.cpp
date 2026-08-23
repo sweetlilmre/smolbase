@@ -27,11 +27,12 @@
 #include "Events.h"
 #include "Net.h"
 #include "Platform.h"
-#include <LittleFS.h>
 #include <PsychicHttp.h>
+#include <esp_littlefs.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 #include <spi_flash_mmap.h>
+#include <cstring>
 #include <cstdio>
 
 // Boot-loop guard (ticket #76): the arduino core's initArduino() normally
@@ -229,7 +230,7 @@ static void fail(bool abortUpdate) {
   if (!s_isFs) s_inFlight = false;
 }
 
-static esp_err_t onUploadChunk(PsychicRequest* req, const String& filename,
+static esp_err_t onUploadChunk(PsychicRequest* req, const char* filename,
                                uint64_t index, uint8_t* data, size_t len, bool last) {
   if (index == 0) {
     if (s_inFlight) {
@@ -250,9 +251,11 @@ static esp_err_t onUploadChunk(PsychicRequest* req, const String& filename,
     // Works as a form field only if it precedes the file part, so the query
     // string is the documented spelling.
     PsychicWebParameter* p = req->getParam("target");
-    s_isFs = (p != nullptr && p->value() == "fs");
+    // p->value() is a const char* in PsychicHttp's native mode, so this MUST be
+    // strcmp — == would compare pointers and silently always be false.
+    s_isFs = (p != nullptr && strcmp(p->value(), "fs") == 0);
     printf("[ota] %s update starting (%s)\n",
-                  s_isFs ? "filesystem" : "firmware", filename.c_str());
+                  s_isFs ? "filesystem" : "firmware", filename ? filename : "");
 
     if (s_isFs) {
       // Guard against flashing a non-filesystem image over the data partition
@@ -270,7 +273,7 @@ static esp_err_t onUploadChunk(PsychicRequest* req, const String& filename,
       // unmount first so nothing writes through stale metadata during or
       // after the flash (SmolTV-Pro proved this pattern). From here on the
       // device MUST restart — with or without a successful update.
-      LittleFS.end();
+      esp_vfs_littlefs_unregister("spiffs");
     } else {
       // Mirror of the littlefs guard for the fw path: every ESP32 app image
       // starts with 0xE9. esp_ota_write validates the header itself and would

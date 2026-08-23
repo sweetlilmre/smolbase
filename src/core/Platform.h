@@ -60,6 +60,14 @@ inline uint32_t largestFreeBlock() { return heap_caps_get_largest_free_block(MAL
 // Lowest freeHeap() seen since boot.
 inline uint32_t minFreeHeap() { return esp_get_minimum_free_heap_size(); }
 
+// Low-water free stack, in bytes, of the core-1 consumer loop task (ADR 0001).
+// The only function here that is NOT inline: the task handle belongs to main.cpp,
+// which owns the task, and this is the seam everything else already includes.
+// Arduino sized that stack implicitly at 8 KB; now that main.cpp sizes it
+// deliberately, /api/status reports this so the headroom is a measurement
+// rather than a guess. 0 before the task exists.
+uint32_t loopStackFree();
+
 // Reboot (Arduino: ESP.restart()). Does not return.
 [[noreturn]] inline void restart() {
   esp_restart();

@@ -1,0 +1,4 @@
+-B
+build/weatherclock
+-D
+SMOLBASE_APP=weatherclock

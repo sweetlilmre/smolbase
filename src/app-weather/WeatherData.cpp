@@ -182,7 +182,15 @@ bool fetchOwm(const FetchContext::Args& args, WeatherData::Reading& r, FetchCont
   r.pressureHpa = doc["main"]["pressure"] | 0;
   r.windMs = doc["wind"]["speed"] | 0.0f;
   strlcpy(r.condition, doc["weather"][0]["main"] | "", sizeof(r.condition));
-  r.iconCode = (uint8_t)String(doc["weather"][0]["icon"] | "01").substring(0, 2).toInt();
+  // OWM icon codes are "<NN><d|n>" — "01d", "10n" — and the sprite table keys on
+  // the two leading digits. This is Arduino's String(..).substring(0,2).toInt():
+  // a non-numeric or short value yields 0, exactly as toInt() did.
+  const char* icon = doc["weather"][0]["icon"] | "01";
+  // Short-circuit: icon[1] is only read once icon[0] is known to be a digit, so
+  // a one-character or empty value cannot run past the terminator.
+  const bool twoDigits =
+      icon[0] >= '0' && icon[0] <= '9' && icon[1] >= '0' && icon[1] <= '9';
+  r.iconCode = twoDigits ? (uint8_t)((icon[0] - '0') * 10 + (icon[1] - '0')) : 0;
   strlcpy(r.city, doc["name"] | args.city, sizeof(r.city));
   strlcpy(r.country, doc["sys"]["country"] | "", sizeof(r.country));
   r.keyless = false;

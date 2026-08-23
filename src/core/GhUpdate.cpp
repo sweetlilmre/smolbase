@@ -37,9 +37,9 @@
 
 static const char* const GH_REPO = "sweetlilmre/smolbase";
 
-// Release asset this build self-updates from: <prefix>-<tag>.bin. Each env
-// overrides via build_flags so a weatherclock device never flashes the
-// smolbase image (CI ships one firmware/littlefs pair per env).
+// Release asset this build self-updates from: <prefix>-<tag>.bin. Each App
+// overrides this from the root CMakeLists.txt so a weatherclock device never
+// flashes the smolbase image (CI ships one firmware/littlefs pair per App).
 #ifndef SMOLBASE_FW_ASSET_PREFIX
 #define SMOLBASE_FW_ASSET_PREFIX "smolbase-firmware"
 #endif
@@ -177,7 +177,7 @@ static bool downloadImpl(const char* tag) {
     char url[160];
     snprintf(url, sizeof(url), "https://github.com/%s/releases/download/%s/%s-%s.bin",
              GH_REPO, tag, GH_FW_PREFIX, tag);
-    printf("[ghupdate] pulling %s (heap=%u)\n", url, Platform::freeHeap());
+    printf("[ghupdate] pulling %s (heap=%lu)\n", url, (unsigned long)Platform::freeHeap());
 
     esp_http_client_config_t http = {};
     http.url               = url;
@@ -203,8 +203,9 @@ static bool downloadImpl(const char* tag) {
 
     esp_err_t err = esp_https_ota_begin(&ota, &handle);
     if (err != ESP_OK) {
-      snprintf(m, sizeof(m), "begin: %s (heap=%u max=%u)",
-               esp_err_to_name(err), Platform::freeHeap(), Platform::largestFreeBlock());
+      snprintf(m, sizeof(m), "begin: %s (heap=%lu max=%lu)", esp_err_to_name(err),
+               (unsigned long)Platform::freeHeap(),
+               (unsigned long)Platform::largestFreeBlock());
       AssetUpdate::sweepStaleStaging();
       return failOta(m);
     }
@@ -325,8 +326,8 @@ void registerRoutes(PsychicHttpServer& server) {
     JsonDocument doc;
     if (deserializeJson(doc, req->body()) != DeserializationError::Ok)
       return res->send(400, "application/json", "{\"error\":\"invalid JSON\"}");
-    String tag = doc["tag"] | String("");
-    if (tag.isEmpty() || !tag.startsWith("v"))
+    const std::string tag = doc["tag"].as<std::string>();
+    if (tag.empty() || tag[0] != 'v')
       return res->send(400, "application/json", "{\"error\":\"missing or invalid tag\"}");
 
     s_inFlight = true;

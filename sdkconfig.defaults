@@ -1,0 +1,112 @@
+# smolbase Kconfig — hand-written, and the source of truth for it.
+#
+# This file replaces a 3,775-line sdkconfig.defaults that was an OUTPUT of the
+# pioarduino hybrid compile rather than anything anyone maintained (ADR 0005,
+# now superseded). Every line below is here on purpose. Two kinds of line:
+#
+#   - Values that differ from the IDF 6 default and MUST, because the hardware,
+#     the shipped flash layout, or a field bug requires them.
+#   - Values that happen to match the IDF default but which the arduino-esp32
+#     build also set explicitly, and which the firmware's behaviour depends on.
+#     Stated so a future default change cannot move them silently.
+#
+# Anything NOT here is deliberately the IDF default.
+
+CONFIG_IDF_TARGET="esp32"
+
+# ---- Flash and partitions: must match the shipped firmware exactly ----
+# Fielded devices have this layout; the `spiffs`-subtype partition holds
+# LittleFS and the label stays (see partitions.csv).
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_40M=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# ---- CPU / scheduler ----
+# 240 MHz, not the IDF default 160: the arduino-esp32 build ran at 240 and the
+# display push rates and loop budget (SMOLBASE_LOOP_BUDGET_MS) were measured there.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+# 1000 Hz, not the IDF default 100. REQUIRED: the main loop ends in
+# Platform::delayMs(2) and Touch's debounce/settle constants are in single-digit
+# milliseconds. At 100 Hz a 2 ms delay becomes 10 ms and the loop budget blows.
+CONFIG_FREERTOS_HZ=1000
+
+# ---- Rollback (#76) ----
+# Ota::tickRollbackGuard() calls esp_ota_mark_app_valid_cancel_rollback() only
+# after healthy uptime, so a broken image that cannot reach that point is
+# rolled back by the bootloader on the next power cycle.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# ---- mbedTLS: the ADR 0005 thesis, in three lines instead of a lib rebuild ----
+# LARGE_KEY_SOFTWARE_MPI: REQUIRED. The ESP32 RSA accelerator cannot complete
+# 4096-bit verifies, so GitHub's CDN chain (cross-signed by RSA-4096 ISRG Root
+# X1) fails with PK error 0x4290 without a software fallback, and the OTA is
+# dead in the field (#119). Set EXPLICITLY rather than inherited: the Kconfig
+# default is conditional on SOC_RSA_MAX_BIT_LEN.
+CONFIG_MBEDTLS_HARDWARE_MPI=y
+CONFIG_MBEDTLS_LARGE_KEY_SOFTWARE_MPI=y
+# Asymmetric TLS buffers: OUT 16 KB -> 4 KB, ~12 KB less heap per connection,
+# zero protocol risk. IN must stay 16384 — Fastly sends full-size records and
+# there is no MFL/record_size_limit path (docs/research/ghupdate-tls-knobs.md).
+CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=y
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384
+# The bundle core/Http attaches via esp_crt_bundle. FULL, not the trimmed
+# default set: the device talks to GitHub, its CDN, and whatever weather or CGM
+# host a consumer configures.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
+
+# ---- esp_http_server: PsychicHttp in native mode ----
+# WS support is required by PsychicHttp's native build.
+CONFIG_HTTPD_WS_SUPPORT=y
+# 1024, not the IDF default 512: what arduino-esp32 shipped, and browsers on the
+# settings page send request headers (UA + cookies) that do not fit in 512.
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+CONFIG_HTTPD_MAX_URI_LEN=512
+
+# ---- WiFi / lwIP ----
+# 16 sockets, not the IDF default 10: what arduino-esp32 shipped, and the httpd
+# plus the DNS responder plus an outbound TLS fetch can be live at once.
+CONFIG_LWIP_MAX_SOCKETS=16
+# Static RX 8 rather than the IDF default 10 — the arduino-esp32 value, kept so
+# the heap figures in the wayfinder tickets stay comparable.
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=32
+CONFIG_ESP_WIFI_TX_BUFFER_TYPE=1
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=32
+
+# ---- LittleFS ----
+# The arduino-esp32 values for the same joltwallet component, so the mounted
+# volume behaves identically and the RAM cost is unchanged. OBJ_NAME_LEN in
+# particular is written into images built by littlefs_create_partition_image.
+CONFIG_LITTLEFS_OBJ_NAME_LEN=64
+CONFIG_LITTLEFS_PAGE_SIZE=256
+CONFIG_LITTLEFS_READ_SIZE=128
+CONFIG_LITTLEFS_WRITE_SIZE=128
+CONFIG_LITTLEFS_CACHE_SIZE=512
+CONFIG_LITTLEFS_LOOKAHEAD_SIZE=128
+CONFIG_LITTLEFS_BLOCK_CYCLES=512
+CONFIG_LITTLEFS_USE_MTIME=y
+CONFIG_LITTLEFS_MTIME_USE_SECONDS=y
+
+# ---- Console and logging ----
+# There is no serial flasher or UART reader on the dev bench (docs/flashing.md):
+# diagnostics come out over HTTP. The console config is here so a bench that
+# DOES have a UART sees the boot log at the documented baud.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# ---- Main task ----
+# app_main only spawns the smolbase task (pinned to core 1, ADR 0001) and
+# returns, which frees this stack — so the default size is fine. The consumer
+# loop's stack is sized in main.cpp, where it can be seen.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=4096
+
+# ---- Optimisation ----
+# -Os, as the arduino-esp32 build used. The static-RAM and firmware-size
+# comparisons in docs/research/idf6-migration-continuation.md assume it.
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y

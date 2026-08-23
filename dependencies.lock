@@ -1,0 +1,53 @@
+dependencies:
+  bblanchon/arduinojson:
+    component_hash: 5e6aff2bc5bc988b36c8e90c01e637495ee895ad3af93911860c21ec6da79b6a
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 7.4.3
+  espressif/mdns:
+    component_hash: e81ca7a7f53ea34e78274df054da692c272e1315572876b237b1748e267c013b
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.11.3
+  idf:
+    source:
+      type: idf
+    version: 6.0.2
+  joltwallet/littlefs:
+    component_hash: 3af20a3d75c49db9dc2286fd50862c34055c9f578419ad1f2bf7ed3ed01391fe
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.22.3
+  psychichttp:
+    component_hash: 109ccfc3964d2239b2f6299c5b828396d894aa3bbc8f4ccf48b54344682077fa
+    dependencies:
+    - name: idf
+      version: '>=4.4'
+    - name: bblanchon/arduinojson
+      version: ^7
+    source:
+      git: https://github.com/hoeken/PsychicHttp.git
+      path: .
+      type: git
+    version: 418a3285290aa13a0e2941f58b571453d6701d17
+direct_dependencies:
+- bblanchon/arduinojson
+- espressif/mdns
+- idf
+- joltwallet/littlefs
+- psychichttp
+manifest_hash: 4bd76dcdac3dc63feefec0f1c6d49f1ab675d85836da6acfdbc2c419dd9663ae
+target: esp32
+version: 3.0.0

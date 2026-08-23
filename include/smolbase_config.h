@@ -3,7 +3,7 @@
 
 // ---- Identity ----
 #define SMOLBASE_NAME_PREFIX "smolbase" // hostname/AP SSID become smolbase-XXXX (MAC suffix)
-// Reported by GET /api/status; consumers set their own via build_flags -D.
+// Reported by GET /api/status; consumers set their own with a -D in CMake.
 #ifndef SMOLBASE_FW_VERSION
 // 0.4.0-dev: the IDF 6 migration branch. Unreleased, and deliberately distinct
 // from 0.3.3 so a flashed build is identifiable over /api/status.
@@ -102,18 +102,17 @@
 #endif
 
 // ---- Paths ----
-// Two spellings, deliberately, for as long as the Arduino build lasts:
+// One spelling. The LittleFS volume is mounted at the ROOT (ConfigStore::begin),
+// so a path is simultaneously the POSIX path core/Fs.h wants, the path
+// PsychicHttp's native serveStatic() wants, and the URL suffix — nothing has to
+// be rewritten at a boundary and there is no prefixed/unprefixed pair to get
+// wrong. SMOLBASE_FS_MOUNT is kept, empty, because it is what the mount is
+// configured with and because the concatenated forms below still read clearly.
 //
-//   *_PATH / *_DIR  volume-relative, what Arduino's LittleFS object and
-//                   PsychicHttp's Arduino-mode serveStatic() expect.
-//   *_FSPATH        absolute, what POSIX (core/Fs.h) needs.
-//
-// SMOLBASE_FS_MOUNT is where the volume is mounted. Phase 7 of the IDF 6
-// migration mounts LittleFS at the root instead (verified working by the phase
-// 0 spike, check 12), at which point this becomes "" and both spellings
-// collapse to one. Until then, use the _FSPATH forms with core/Fs and the
-// bare forms only where an Arduino/PsychicHttp API demands them.
-#define SMOLBASE_FS_MOUNT "/littlefs"
+// (The Arduino build mounted at "/littlefs" and every path existed in two
+// spellings; findBackupDir's `strncmp(path, "/w.", 3)` silently assumed the
+// unprefixed one, which is the class of bug this removes.)
+#define SMOLBASE_FS_MOUNT ""
 #define SMOLBASE_SETTINGS_PATH "/config/settings.json"
 #define SMOLBASE_SETTINGS_FSPATH SMOLBASE_FS_MOUNT SMOLBASE_SETTINGS_PATH
 #define SMOLBASE_WWW_DIR "/w" // gzip-only static assets packed from html/

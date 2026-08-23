@@ -1,0 +1,4 @@
+-B
+build/gcm
+-D
+SMOLBASE_APP=gcm

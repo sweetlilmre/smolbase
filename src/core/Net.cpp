@@ -102,9 +102,9 @@ static std::string sanitizeHostname(const std::string& raw) {
 // nvs_get_str — so fielded devices keep their credentials across this change.
 // Secrets.cpp already used the raw API; this matches it.
 //
-// NOTE for phase 7: nothing here calls nvs_flash_init(). Arduino's
-// initArduino() does it at startup, so both this and Secrets.cpp have been
-// relying on that. app_main() must call it explicitly once Arduino is gone.
+// Nothing here calls nvs_flash_init() — app_main() does, once, before this or
+// Secrets.cpp can run. It has to: Arduino's initArduino() used to, and a
+// missing init presents as "every setting and credential vanished".
 static constexpr const char* NVS_NS = "smolbase";
 
 // Reads a string value, leaving `out` untouched when the key is absent.

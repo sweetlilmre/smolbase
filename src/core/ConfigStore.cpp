@@ -3,7 +3,10 @@
 #include "Fs.h"
 #include "smolbase_config.h"
 #include <ArduinoJson.h>
-#include <LittleFS.h>
+#include <esp_littlefs.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <cstdio>
 
 namespace ConfigStore {
 
@@ -284,13 +287,25 @@ bool begin() {
   // Partition label is "spiffs" (historical, from the stock flash layout) but the
   // filesystem is LittleFS.
   //
-  // The MOUNT stays on the Arduino LittleFS object for now, even though all
-  // file I/O below is POSIX: PsychicHttp's Arduino-mode serveStatic() in
-  // Web.cpp takes an fs::FS& and there is no way to hand it a bare VFS mount.
-  // Phase 7 replaces this with esp_vfs_littlefs_register once PsychicHttp
-  // switches to native mode. Both APIs address the same mount, which is
-  // exactly how PsychicHttp's own native-mode psychic::FS works.
-  if (!LittleFS.begin(true, SMOLBASE_FS_MOUNT, 10, "spiffs")) return false;
+  // Mounted at the ROOT (base_path ""), so "/w/index.html.gz" is both the URL
+  // suffix and the POSIX path and there is only one spelling of every path in
+  // the firmware — see the SMOLBASE_FS_MOUNT note in smolbase_config.h. The
+  // phase 0 spike (check 12) proved an empty base_path resolves unprefixed
+  // paths against this volume.
+  //
+  // format_if_mount_failed matches what Arduino's LittleFS.begin(true, ...) did:
+  // a virgin or corrupted data partition becomes an empty filesystem rather than
+  // a device that cannot store settings at all.
+  esp_vfs_littlefs_conf_t fsConf = {};
+  fsConf.base_path = SMOLBASE_FS_MOUNT;
+  fsConf.partition_label = "spiffs";
+  fsConf.format_if_mount_failed = true;
+  fsConf.dont_mount = false;
+  esp_err_t fsErr = esp_vfs_littlefs_register(&fsConf);
+  if (fsErr != ESP_OK) {
+    printf("[cfg] littlefs mount failed: %s\n", esp_err_to_name(fsErr));
+    return false;
+  }
   Fs::File f(SMOLBASE_SETTINGS_FSPATH, "r");
   // Missing file is the normal first-boot state; a parse failure leaves doc
   // empty and the in-code defaults apply. Closes by scope.

@@ -1,0 +1,56 @@
+# Phase 0 spike config. THIS FILE IS THE POINT OF THE SPIKE: everything below is
+# a hand-written, source-of-truth Kconfig line. Compare against the 3775-line
+# generated sdkconfig.defaults at the repo root, which is an output of the
+# pioarduino hybrid compile rather than anything anyone maintains (ADR 0005).
+
+CONFIG_IDF_TARGET="esp32"
+
+# ---- Flash / partitions: must match the shipped firmware exactly ----
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# ---- Rollback: the spike's whole safety story (see README) ----
+# The app never calls esp_ota_mark_app_valid_cancel_rollback(), so with this on
+# a power-cycle returns the device to the real firmware.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# ---- The ADR 0005 thesis, in three lines instead of a 15-minute lib rebuild ----
+# LARGE_KEY_SOFTWARE_MPI: REQUIRED. The ESP32 RSA accelerator cannot complete
+# 4096-bit verifies, so GitHub's CDN chain (cross-signed by RSA-4096 ISRG Root
+# X1) fails with PK error 0x4290 without a software fallback (#119).
+# Set explicitly rather than relying on the v6.0 Kconfig default — the default
+# is conditional on SOC_RSA_MAX_BIT_LEN and we do not want to inherit that.
+CONFIG_MBEDTLS_HARDWARE_MPI=y
+CONFIG_MBEDTLS_LARGE_KEY_SOFTWARE_MPI=y
+# Asymmetric TLS buffers: OUT 16 KB -> 4 KB, ~12 KB less heap per connection.
+# IN must stay 16384 — Fastly sends full-size records and there is no
+# MFL/record_size_limit path. Both of these are already the v6.0 defaults;
+# stated anyway so a future default change cannot silently move them.
+CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=y
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384
+# The certificate bundle the HTTP clients attach.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
+
+# ---- esp_http_server: PsychicHttp native mode wants these ----
+CONFIG_HTTPD_WS_SUPPORT=y
+# PsychicHttp's README calls this out for native-IDF builds; on IDF 6 its
+# >=6.0 branch uses esp_rom_md5.h, so verify whether this is still needed.
+# CONFIG_MBEDTLS_ROM_MD5 is not set
+
+# ---- Console ----
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# ---- Main task: Arduino gave us an implicit 8 KB loopTask (see the migration
+# doc's note on setup()/loop()). Size it deliberately here.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_ESP_MAIN_TASK_AFFINITY_CPU1=y
+
+# ---- Footprint measurement is check 10; do not let -Os muddy the comparison
+# against the Arduino build until we have measured both the same way.
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
