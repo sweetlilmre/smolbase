@@ -5,7 +5,9 @@
 #define SMOLBASE_NAME_PREFIX "smolbase" // hostname/AP SSID become smolbase-XXXX (MAC suffix)
 // Reported by GET /api/status; consumers set their own via build_flags -D.
 #ifndef SMOLBASE_FW_VERSION
-#define SMOLBASE_FW_VERSION "0.3.3"
+// 0.4.0-dev: the IDF 6 migration branch. Unreleased, and deliberately distinct
+// from 0.3.3 so a flashed build is identifiable over /api/status.
+#define SMOLBASE_FW_VERSION "0.4.0-dev"
 #endif
 
 // ---- Hardware: GeekMagic Small TV Pro (ESP32-D0WD, 8MB flash, no PSRAM) ----
