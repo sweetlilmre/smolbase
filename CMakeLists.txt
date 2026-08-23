@@ -70,5 +70,15 @@ add_custom_target(smolbase_assets
 # Builds build/<app>/spiffs.bin — the fs-OTA / release image. The partition is
 # named "spiffs" for historical reasons (stock flash layout) but holds LittleFS;
 # partitions.csv is byte-identical to the shipped one and must stay that way.
-littlefs_create_partition_image(spiffs ${SB_ROOT}/data-${SMOLBASE_APP}/w
+#
+# The base dir is data-<app>/, NOT data-<app>/w/. `littlefs-python create` lays
+# the CONTENTS of its source directory at the image root, so pointing it at w/
+# produces an image with /index.html.gz at the top level while the firmware
+# serves from /w/ — a valid image that mounts cleanly and answers 404 to
+# everything. That flashed with an HTTP 200 and a healthy reboot before anyone
+# noticed. PlatformIO's mklittlefs was handed data-<env>/ and so got this right
+# by accident. (scripts/pack_fs.py owns the w/ level; the asset tar in CI is
+# separately built with -C data-<app>/w because AssetUpdate extracts into /w
+# itself.)
+littlefs_create_partition_image(spiffs ${SB_ROOT}/data-${SMOLBASE_APP}
                                FLASH_IN_PROJECT DEPENDS smolbase_assets)
