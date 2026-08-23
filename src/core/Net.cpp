@@ -181,6 +181,11 @@ static std::string computeName() {
 // the same calls it made, minus the global object.
 static bool mdnsUp = false;
 static uint32_t mdnsLastTry = 0;
+static uint32_t mdnsLinkDownAt = 0; // 0 = link up, else when it went down
+// How long the link must stay down before the responder is torn down. Long
+// enough to ride out a re-association, short enough that a real outage still
+// stops answering with a stale address. See the note in loop().
+static constexpr uint32_t kMdnsHoldMs = 3000;
 
 // mdns_free() is safe when nothing was started, which the old MDNS.end() call
 // relied on to clear a half-dead responder.
@@ -403,8 +408,21 @@ void loop() {
 
   // mDNS lifecycle (main loop only): register once up, tear down on a drop so
   // the reconnect path re-registers cleanly.
-  bool up = isUp();
-  if (mdnsUp && !up) mdnsStop();
+  // A brief link blip does NOT tear the responder down. Measured on this
+  // hardware: the STA re-associates exactly once per boot, 5-15 s after
+  // connecting, and is back with the same IP inside ~200 ms. Rebuilding mDNS for
+  // that costs far more than it saves — a client that queries during the gap can
+  // cache the negative answer for much longer than the outage lasted, which is
+  // what "mDNS takes a while to come up" actually looked like. (Not power save:
+  // verified with WIFI_PS_NONE, pm type 0 and zero sleep time, and the
+  // re-association still happened. Not any WiFi call of ours either.)
+  const bool up = isUp();
+  if (up) {
+    mdnsLinkDownAt = 0;
+  } else if (mdnsUp) {
+    if (!mdnsLinkDownAt) mdnsLinkDownAt = Platform::millis();
+    if (Platform::millis() - mdnsLinkDownAt > kMdnsHoldMs) mdnsStop();
+  }
   if (!mdnsUp && up && Platform::millis() - mdnsLastTry > 1000) {
     mdnsLastTry = Platform::millis();
     mdnsStop(); // clears any half-dead responder before retrying
