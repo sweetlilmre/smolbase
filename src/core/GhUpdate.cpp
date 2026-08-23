@@ -21,12 +21,11 @@
 #include "GhUpdate.h"
 #include "AssetUpdate.h"
 #include "Events.h"
+#include "Http.h"
 #include "Net.h"
 #include "Platform.h"
 #include "smolbase_config.h"
 #include <ArduinoJson.h>
-#include <HTTPClient.h>
-#include <NetworkClientSecure.h>
 #include <PsychicHttp.h>
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
@@ -47,10 +46,6 @@ static const char* const GH_FW_PREFIX = SMOLBASE_FW_ASSET_PREFIX;
 
 namespace GhUpdate {
 
-class BundleClient : public NetworkClientSecure {
-public:
-  BundleClient() { attach_ssl_certificate_bundle(sslclient.get(), true); _use_ca_bundle = true; }
-};
 
 struct Progress {
   enum State : uint8_t { Idle, Downloading, Done, Error };
@@ -66,24 +61,21 @@ static Progress s_progress;
 static volatile bool s_inFlight = false;
 static char s_tag[32] = {}; // written by the POST handler before the task spawns
 
-static String detectLatestTag() {
-  BundleClient tls;
-  HTTPClient http;
-  http.setTimeout(10000);
-  http.setConnectTimeout(10000);
-  http.addHeader("Accept", "application/vnd.github+json");
-  if (!http.begin(tls, String("https://api.github.com/repos/") + GH_REPO + "/releases/latest"))
-    return "";
-  int code = http.GET();
-  if (code != HTTP_CODE_OK) { http.end(); return ""; }
+static std::string detectLatestTag() {
+  const std::string url =
+      std::string("https://api.github.com/repos/") + GH_REPO + "/releases/latest";
   JsonDocument filter;
   filter["tag_name"] = true;
   JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, *http.getStreamPtr(),
-                                             DeserializationOption::Filter(filter));
-  http.end();
-  if (err != DeserializationError::Ok) return "";
-  return doc["tag_name"] | String("");
+  const Http::Header hdrs[] = {{"Accept", "application/vnd.github+json"}};
+  Http::Request rq;
+  rq.url = url.c_str();
+  rq.filter = &filter;
+  rq.headers = hdrs;
+  rq.headerCount = 1;
+  // Streamed, not buffered: this response is tens of KB (see Http.h).
+  if (!Http::json(rq, doc).ok) return {};
+  return doc["tag_name"].as<std::string>();
 }
 
 static bool failOta(const char* msg) {
@@ -257,13 +249,13 @@ void registerRoutes(PsychicHttpServer& server) {
   server.on("/api/update/check", HTTP_GET, [](PsychicRequest*, PsychicResponse* res) {
     if (s_inFlight)
       return res->send(409, "application/json", "{\"error\":\"update in progress\"}");
-    String latest = detectLatestTag();
-    if (latest.isEmpty())
+    const std::string latest = detectLatestTag();
+    if (latest.empty())
       return res->send(503, "application/json", "{\"error\":\"could not reach GitHub releases\"}");
-    String current = "v" + String(SMOLBASE_FW_VERSION);
-    bool upToDate  = (latest == current);
-    String out = "{\"current\":\"" + current + "\",\"latest\":\"" + latest +
-                 "\",\"upToDate\":" + (upToDate ? "true" : "false") + "}";
+    const std::string current = std::string("v") + SMOLBASE_FW_VERSION;
+    const bool upToDate = (latest == current);
+    const std::string out = "{\"current\":\"" + current + "\",\"latest\":\"" + latest +
+                            "\",\"upToDate\":" + (upToDate ? "true" : "false") + "}";
     return res->send(200, "application/json", out.c_str());
   });
 

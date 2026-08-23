@@ -5,13 +5,12 @@
 // content integrity via GitHub's per-asset sha256 digest streamed during
 // download (tar header checksums cover headers only).
 #include "AssetUpdate.h"
+#include "Http.h"
 #include "smolbase_config.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <FS.h>
-#include <HTTPClient.h>
 #include <LittleFS.h>
-#include <NetworkClientSecure.h>
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
 #include <mbedtls/sha256.h>
@@ -79,39 +78,28 @@ static bool findBackupDir(char* out, size_t len) {
 
 // ---- GitHub digest lookup -------------------------------------------------
 
-class BundleClient : public NetworkClientSecure {
-public:
-  BundleClient() { attach_ssl_certificate_bundle(sslclient.get(), true); _use_ca_bundle = true; }
-};
 
 bool fetchAssetDigest(const char* tag, char* outHex, size_t outHexLen, char* errBuf, size_t errLen) {
   char assetName[80];
   snprintf(assetName, sizeof(assetName), "%s-%s.tar", SMOLBASE_ASSETS_PREFIX, tag);
 
-  BundleClient tls;
-  HTTPClient http;
-  http.setTimeout(15000);
-  http.setConnectTimeout(10000);
-  http.addHeader("Accept", "application/vnd.github+json");
-  if (!http.begin(tls, String("https://api.github.com/repos/") + GH_REPO + "/releases/tags/" + tag)) {
-    setErr(errBuf, errLen, "digest: begin failed");
-    return false;
-  }
-  int code = http.GET();
-  if (code != HTTP_CODE_OK) {
-    http.end();
-    setErr(errBuf, errLen, "digest: HTTP %d", code);
-    return false;
-  }
   JsonDocument filter;
   filter["assets"][0]["name"]   = true;
   filter["assets"][0]["digest"] = true;
   JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, *http.getStreamPtr(),
-                                             DeserializationOption::Filter(filter));
-  http.end();
-  if (err != DeserializationError::Ok) {
-    setErr(errBuf, errLen, "digest: JSON %s", err.c_str());
+  const std::string url =
+      std::string("https://api.github.com/repos/") + GH_REPO + "/releases/tags/" + tag;
+  const Http::Header hdrs[] = {{"Accept", "application/vnd.github+json"}};
+  Http::Request rq;
+  rq.url = url.c_str();
+  rq.filter = &filter;
+  rq.headers = hdrs;
+  rq.headerCount = 1;
+  rq.timeoutMs = 15000;
+  // Streamed, not buffered: this response is tens of KB (see Http.h).
+  Http::Result hr = Http::json(rq, doc);
+  if (!hr.ok) {
+    setErr(errBuf, errLen, "digest: HTTP %d %s", hr.status, hr.err);
     return false;
   }
   for (JsonObject a : doc["assets"].as<JsonArray>()) {
