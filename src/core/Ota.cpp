@@ -1,13 +1,27 @@
-// OTA via PsychicUploadHandler streaming into Update.h (research #4 pattern).
-// Multipart bodies don't carry a total size up front, hence
-// Update.begin(UPDATE_SIZE_UNKNOWN); partition fit is checked at Update.end().
+// OTA via PsychicUploadHandler streaming into esp_ota_ops / esp_partition.
+//
+// Two targets, and they are NOT symmetric:
+//   firmware -> esp_ota_ops (begin/write/end/set_boot_partition)
+//   fs       -> raw esp_partition writes, because esp_ota has no
+//               data-partition equivalent. Arduino's U_SPIFFS was
+//               arduino-esp32's own invention and, as the guard below notes,
+//               verified nothing about what it was writing.
+//
+// Erase strategy differs for a real reason. esp_ota_write does not erase;
+// esp_ota_begin does it up front, and with OTA_SIZE_UNKNOWN that means the
+// whole 2.125 MB slot (~2-3 s of blocking flash erase on the httpd task).
+// Content-Length gives a much tighter bound, so it is used when present and
+// OTA_SIZE_UNKNOWN is only the fallback. The fs path erases lazily, one sector
+// ahead of the write front: erasing its 3.8 MB partition up front would block
+// for ~20 s and trip the task watchdog.
 // The upload callback must keep returning ESP_OK even after an Update error —
 // PsychicUploadHandler only runs onRequest when every chunk callback returned
 // ESP_OK, and onRequest is where we send the JSON verdict. So on error we
 // remember it, drain the remaining chunks, and answer 400 from onRequest.
-// Update.abort() overwrites the real error with "Aborted", so errorString()
-// is captured first. Restart happens via Net::restartToApply() AFTER the
-// 200 response is sent (never mid-handler, per the arduino_ota example).
+// Each writer call records its own esp_err_to_name() on failure, so the real
+// cause survives the abort that follows (Arduino's Update.abort() used to
+// overwrite it with "Aborted"). Restart happens via Net::restartToApply()
+// AFTER the 200 response is sent, never mid-handler.
 #include "Ota.h"
 #include "AssetUpdate.h"
 #include "Events.h"
@@ -15,8 +29,9 @@
 #include "Platform.h"
 #include <LittleFS.h>
 #include <PsychicHttp.h>
-#include <Update.h>
 #include <esp_ota_ops.h>
+#include <esp_partition.h>
+#include <spi_flash_mmap.h>
 
 // Boot-loop guard (ticket #76): the arduino core's initArduino() normally
 // confirms a PENDING_VERIFY image immediately at boot. Returning true here
@@ -81,12 +96,114 @@ static bool s_inFlight = false;
 static bool s_isFs = false;   // current upload targets the data partition
 static int s_socket = -1;     // socket carrying the in-flight upload
 static size_t s_progress = 0; // bytes written so far
-static String s_error;
+static std::string s_error;
+
+// ---- write target ---------------------------------------------------------
+// One shape over two very different mechanisms; see the file header.
+static esp_ota_handle_t s_ota = 0;
+static const esp_partition_t* s_part = nullptr;
+static bool s_running = false;
+static size_t s_fsOffset = 0; // fs path: write front
+static size_t s_fsErased = 0; // fs path: erased up to here (sector-aligned)
+
+static bool writerBegin(size_t sizeHint) {
+  s_running = false;
+  s_fsOffset = 0;
+  s_fsErased = 0;
+  if (s_isFs) {
+    s_part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY,
+                                      "spiffs");
+    if (!s_part) {
+      s_error = "data partition 'spiffs' not found";
+      return false;
+    }
+  } else {
+    s_part = esp_ota_get_next_update_partition(nullptr);
+    if (!s_part) {
+      s_error = "no free OTA slot";
+      return false;
+    }
+    // Content-Length includes the multipart envelope, so it over-estimates the
+    // image slightly — harmless, it only widens the erase. Clamp to the slot.
+    size_t erase = sizeHint ? sizeHint : OTA_SIZE_UNKNOWN;
+    if (erase != OTA_SIZE_UNKNOWN && erase > s_part->size) erase = s_part->size;
+    esp_err_t e = esp_ota_begin(s_part, erase, &s_ota);
+    if (e != ESP_OK) {
+      s_error = esp_err_to_name(e);
+      return false;
+    }
+  }
+  s_running = true;
+  return true;
+}
+
+static bool writerWrite(const uint8_t* data, size_t len) {
+  if (!s_running) return false;
+  if (!s_isFs) {
+    esp_err_t e = esp_ota_write(s_ota, data, len);
+    if (e != ESP_OK) {
+      s_error = esp_err_to_name(e);
+      return false;
+    }
+    return true;
+  }
+  if (s_fsOffset + len > s_part->size) {
+    s_error = "image larger than the data partition";
+    return false;
+  }
+  // Erase only as far as this write needs, rounded up to whole sectors.
+  const size_t need = s_fsOffset + len;
+  if (need > s_fsErased) {
+    size_t end = (need + SPI_FLASH_SEC_SIZE - 1) & ~((size_t)SPI_FLASH_SEC_SIZE - 1);
+    if (end > s_part->size) end = s_part->size;
+    esp_err_t e = esp_partition_erase_range(s_part, s_fsErased, end - s_fsErased);
+    if (e != ESP_OK) {
+      s_error = esp_err_to_name(e);
+      return false;
+    }
+    s_fsErased = end;
+  }
+  esp_err_t e = esp_partition_write(s_part, s_fsOffset, data, len);
+  if (e != ESP_OK) {
+    s_error = esp_err_to_name(e);
+    return false;
+  }
+  s_fsOffset += len;
+  return true;
+}
+
+// Commits. For firmware this is where the boot partition switches, which is
+// the point of no return the onClose backstop reasons about.
+static bool writerEnd() {
+  if (!s_running) return false;
+  s_running = false;
+  if (s_isFs) return true; // a data partition has nothing to commit
+  esp_err_t e = esp_ota_end(s_ota);
+  if (e != ESP_OK) {
+    s_error = esp_err_to_name(e);
+    return false;
+  }
+  e = esp_ota_set_boot_partition(s_part);
+  if (e != ESP_OK) {
+    s_error = esp_err_to_name(e);
+    return false;
+  }
+  return true;
+}
+
+static void writerAbort() {
+  if (!s_running) return;
+  s_running = false;
+  if (!s_isFs) esp_ota_abort(s_ota); // frees the handle; slot stays unbootable
+}
+
+static bool writerRunning() { return s_running; }
 
 static void fail(bool abortUpdate) {
-  s_error = Update.errorString(); // before abort() clobbers it
-  Update.printError(Serial);
-  if (abortUpdate) Update.abort();
+  // s_error was set by whichever writer call failed; only fill in a fallback.
+  if (s_error.empty()) s_error = "write failed";
+  Serial.printf("[ota] %s\n", s_error.c_str());
+  if (abortUpdate) writerAbort();
   s_outcome = Outcome::Failed;
   // fs-target failures keep the latch: LittleFS is unmounted, so the device
   // must reboot — either onUploadDone's Failed branch or, if the client
@@ -108,13 +225,12 @@ static esp_err_t onUploadChunk(PsychicRequest* req, const String& filename,
     s_inFlight = true;
     s_socket = req->client() ? req->client()->socket() : -1;
     s_progress = 0;
-    s_error = "";
+    s_error.clear();
     Events::post(SysEvent::OtaStarting); // apps: stop drawing/allocating
 
     // ?target=fw (default) -> app partition; ?target=fs -> data partition.
-    // U_SPIFFS is arduino-esp32's constant for the data partition; it is
-    // what updates LittleFS too. Works as a form field only if it precedes
-    // the file part, so the query string is the documented spelling.
+    // Works as a form field only if it precedes the file part, so the query
+    // string is the documented spelling.
     PsychicWebParameter* p = req->getParam("target");
     s_isFs = (p != nullptr && p->value() == "fs");
     Serial.printf("[ota] %s update starting (%s)\n",
@@ -122,8 +238,9 @@ static esp_err_t onUploadChunk(PsychicRequest* req, const String& filename,
 
     if (s_isFs) {
       // Guard against flashing a non-filesystem image over the data partition
-      // (Update.h verifies NOTHING for U_SPIFFS — a firmware.bin here would
-      // destroy the filesystem). A littlefs image carries "littlefs" at
+      // (nothing downstream verifies a data-partition image — a firmware.bin
+      // here would destroy the filesystem). A littlefs image carries
+      // "littlefs" at
       // offset 8; require enough bytes in the first chunk to check.
       if (len < 16 || memcmp(data + 8, "littlefs", 8) != 0) {
         s_error = "not a littlefs image (magic missing at offset 8)";
@@ -138,9 +255,9 @@ static esp_err_t onUploadChunk(PsychicRequest* req, const String& filename,
       LittleFS.end();
     } else {
       // Mirror of the littlefs guard for the fw path: every ESP32 app image
-      // starts with 0xE9. Update.h's _verifyHeader would fail on the first
-      // write anyway, but checking here gives an honest error before any
-      // bytes are flashed — symmetric with the fs guard above.
+      // starts with 0xE9. esp_ota_write validates the header itself and would
+      // fail on the first chunk anyway, but checking here gives an honest
+      // error before the partition is erased — symmetric with the fs guard.
       if (len < 1 || data[0] != 0xE9) {
         s_error = "not an ESP32 app image (magic 0xE9 missing at byte 0)";
         s_outcome = Outcome::Failed;
@@ -149,7 +266,9 @@ static esp_err_t onUploadChunk(PsychicRequest* req, const String& filename,
       }
     }
 
-    if (!Update.begin(UPDATE_SIZE_UNKNOWN, s_isFs ? U_SPIFFS : U_FLASH)) {
+    // Content-Length bounds the erase; 0 (absent / chunked) falls back to
+    // erasing the whole slot inside writerBegin.
+    if (!writerBegin(req ? req->contentLength() : 0)) {
       fail(false);
       return ESP_OK;
     }
@@ -157,14 +276,14 @@ static esp_err_t onUploadChunk(PsychicRequest* req, const String& filename,
 
   if (s_outcome != Outcome::None) return ESP_OK; // already decided; drain
 
-  if (len > 0 && Update.write(data, len) != len) {
+  if (len > 0 && !writerWrite(data, len)) {
     fail(true);
     return ESP_OK;
   }
   s_progress += len;
 
   if (last) {
-    if (Update.end(true)) {
+    if (writerEnd()) {
       Serial.printf("[ota] update complete: %u bytes\n", (unsigned)s_progress);
       s_outcome = Outcome::Ok; // s_inFlight stays set: restart is imminent
     } else {
@@ -186,7 +305,7 @@ static esp_err_t onUploadDone(PsychicRequest*, PsychicResponse* res) {
       return res->send(409, "application/json", "{\"error\":\"update already in progress\"}");
     case Outcome::Failed: {
       s_outcome = Outcome::None;
-      String out = "{\"error\":\"";
+      std::string out = "{\"error\":\"";
       out += s_error;
       out += s_isFs ? "\",\"restarting\":true}" : "\"}";
       esp_err_t r = res->send(400, "application/json", out.c_str());
@@ -198,12 +317,12 @@ static esp_err_t onUploadDone(PsychicRequest*, PsychicResponse* res) {
     }
     case Outcome::None: // no file part, or a multipart parse error mid-file
     default:
-      // A malformed body can abort the part callbacks after Update.begin()
+      // A malformed body can abort the part callbacks after writerBegin()
       // succeeded (the processor drains bytes and still reports ESP_OK) —
       // without this cleanup the in-flight latch would block all future
       // updates until a power cycle.
       if (s_inFlight) {
-        if (Update.isRunning()) Update.abort();
+        if (writerRunning()) writerAbort();
         s_inFlight = false;
         if (s_isFs) { // filesystem may be half-written; a reboot re-mounts or formats
           esp_err_t r = res->send(400, "application/json",
@@ -233,7 +352,7 @@ static void onSocketClose(PsychicClient* client) {
     Net::restartToApply(); // no return
   }
   Serial.println("[ota] upload aborted (client disconnect / parse error)");
-  if (Update.isRunning()) Update.abort();
+  if (writerRunning()) writerAbort();
   s_inFlight = false;
   s_outcome = Outcome::None;
   if (s_isFs) Net::restartToApply(); // filesystem is unmounted/possibly torn; reboot
@@ -242,7 +361,7 @@ static void onSocketClose(PsychicClient* client) {
 void registerRoutes(PsychicHttpServer& server) {
   // The library default MAX_UPLOAD_SIZE (2 MB) is smaller than the 2.17 MB
   // app partition; a near-full firmware image would be refused with a 400
-  // before our handler ever ran. Update.end() still enforces the real
+  // before our handler ever ran. The partition bounds still enforce the real
   // partition fit, so a generous cap is safe.
   server.maxUploadSize = 4 * 1024 * 1024;
 
