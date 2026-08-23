@@ -114,10 +114,16 @@ every push, which is what stops an app in the repo from silently rotting.
   display, touch, clock, network, web) is up. Register settings here, create
   your Screens, and claim the display with `Display::setActive(&myScreen)`.
 - **`loop()`** — called every main-loop pass on core 1. The pass has a **soft
-  latency budget of ~25 ms** (`SMOLBASE_LOOP_BUDGET_MS`): overrun it and touch
+  latency budget** (`SMOLBASE_LOOP_BUDGET_MS`): overrun it and touch
   responsiveness and event latency degrade. Heavy work (TLS fetches, JSON
   parsing of large payloads) belongs in a FreeRTOS task you spawn — then you
   own the synchronization.
+
+  The budget depends on your framebuffer mode, because the floor does:
+  **25 ms** for direct-draw builds, **40 ms** when a full-frame buffer is
+  compiled in, where `Display::present()` is a blocking 25–29 ms panel push and
+  is the frame's cost by design (ADR 0004). `/api/status` reports the budget in
+  use alongside the measurements, so you never have to remember which applies.
 
   A slow pass tells on itself in `GET /api/status`, under `loop`: `passMs` and
   `passMaxMs` for the whole iteration, `appMs`/`appMaxMs` for your `loop()`
@@ -126,12 +132,11 @@ every push, which is what stops an app in the repo from silently rotting.
   `loop()` — which is the normal shape — your work lands in the pass, not the
   app slice, so a near-zero `appMs` beside a large `passMs` is expected.
 
-  **Caveat, measured:** on a `PALETTE_8` framebuffer build the blocking
-  240×240 panel push in `Display::present()` costs ~28 ms on its own, so a
-  frame pass runs ~33–35 ms and `overruns` climbs about once per frame. That is
-  the framebuffer trade (ADR 0004), not your App misbehaving. The 25 ms figure
-  describes a direct-draw pass; compare against `passMs` on your own build
-  before believing an overrun count.
+  **For reference, measured on this hardware:** the demo App on a `PALETTE_8`
+  build runs a frame pass of ~33–35 ms, of which ~25–29 ms is the panel push
+  (`app.presentUs` in the same response breaks that down). That sits inside the
+  40 ms framebuffer budget with room to spare, so an overrun there is worth
+  investigating rather than shrugging at.
 
 - **`statusJson(JsonObject)`** — optional. Whatever you write lands in the
   `app` object of `GET /api/status`, so your App never needs its own debug

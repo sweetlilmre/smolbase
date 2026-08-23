@@ -94,7 +94,27 @@
 #define SMOLBASE_TOUCH_LONGPRESS_MS 600
 
 // ---- Main loop contract ----
-#define SMOLBASE_LOOP_BUDGET_MS 25 // soft latency budget; debug builds log overruns
+// Soft latency budget for ONE main-loop pass. Exceed it and touch feels laggy
+// and event latency grows; nothing breaks. GET /api/status reports passMs,
+// passMaxMs and overruns against this.
+//
+// Framebuffer-mode dependent, because the floor is: with a full-frame buffer
+// the pass includes Display::present(), a blocking 240x240 8-bpp DMA push over
+// 40 MHz SPI, measured at 25-29 ms on this panel. That is the frame's cost by
+// design (ADR 0004), not an App misbehaving — so a 25 ms budget on a
+// framebuffer build is violated on every single frame, which makes the overrun
+// count noise instead of a signal. 40 ms leaves ~11 ms of real headroom over
+// the push for the effect, the overlay and everything else in the pass; the
+// demo App measures ~33-35 ms total, so an overrun on that build now means
+// something went wrong.
+//
+// Direct-draw builds keep the original 25 ms: a Screen that pushes only what
+// changed has no such floor, and the tighter budget is the honest target.
+#if SMOLBASE_FRAMEBUFFER == SMOLBASE_FB_NONE
+#define SMOLBASE_LOOP_BUDGET_MS 25
+#else
+#define SMOLBASE_LOOP_BUDGET_MS 40
+#endif
 
 // ---- Settings schema ----
 #ifndef SMOLBASE_MAX_SETTINGS
