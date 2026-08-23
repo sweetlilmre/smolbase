@@ -2,3 +2,5 @@
 build/weatherclock
 -D
 SMOLBASE_APP=weatherclock
+-D
+SDKCONFIG=build/weatherclock/sdkconfig

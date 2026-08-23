@@ -2,3 +2,5 @@
 build/smolbase
 -D
 SMOLBASE_APP=smolbase
+-D
+SDKCONFIG=build/smolbase/sdkconfig

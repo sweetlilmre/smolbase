@@ -14,7 +14,9 @@ build/
 # a checkout that predates it stays quiet; safe to delete.
 .pio/
 
-# Generated from the tracked sdkconfig.defaults on every configure. Note the
+# Generated from the tracked sdkconfig.defaults on every configure. The argfiles
+# put it in build/<app>/ so nothing is shared between Apps; these two catch a
+# bare `idf.py` invoked without one, which writes to the project root. Note the
 # leading slashes: sdkconfig.defaults IS tracked and must not be caught here.
 /sdkconfig
 /sdkconfig.old

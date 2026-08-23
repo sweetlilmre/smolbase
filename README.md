@@ -115,7 +115,7 @@ CMakeLists.txt  the build: App selection, compile definitions, fs image
 main/           the IDF component manifest (idf_component.yml: pinned deps)
 components/     our LovyanGFX wrapper (upstream is cloned in, gitignored)
 sdkconfig.defaults  hand-written Kconfig — every line is deliberate
-<app>.args      idf.py argfiles pairing -B build/<app> with -D SMOLBASE_APP
+<app>.args      idf.py argfiles: build dir + App selection + that App's sdkconfig
 ```
 
 ## Documentation
