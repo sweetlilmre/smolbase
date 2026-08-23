@@ -16,6 +16,7 @@
 #include "Clock.h"
 #include "ConfigStore.h"
 #include "Events.h"
+#include "Fs.h"
 #include "Net.h"
 #include "GhUpdate.h"
 #include "Ota.h"
@@ -236,7 +237,7 @@ void begin(App& app) {
   // boot (one-time beat). WiFi is still running over the erased partition for
   // the ~200 ms until restart; any writes it attempts just fail silently.
   httpServer.on("/api/factory-reset", HTTP_POST, [](PsychicRequest*, PsychicResponse* res) {
-    LittleFS.remove(SMOLBASE_SETTINGS_PATH);
+    Fs::remove(SMOLBASE_SETTINGS_FSPATH);
     esp_err_t r = res->send(200, "application/json", "{\"ok\":true,\"restarting\":true}");
     nvs_flash_deinit(); // best-effort; open handles just leak into the restart
     nvs_flash_erase();
@@ -250,8 +251,9 @@ void begin(App& app) {
   // gzip-only, so the loop is: gzip the edited file, POST, refresh. This does
   // not replace fs-OTA, which stays the way to ship coherent images.
   {
-    static File fsFile;
-    static String fsPath;
+    static Fs::File fsFile;
+    static String fsPath;      // volume-relative; comes from PsychicHttp's param
+    static std::string fsFsPath; // absolute, for core/Fs
     static bool fsFailed;
     auto* fsUp = new PsychicUploadHandler(); // lives for the server's lifetime
     fsUp->onUpload([](PsychicRequest* req, const String&, uint64_t index, uint8_t* data,
@@ -264,10 +266,15 @@ void begin(App& app) {
           fsFailed = true;
           return ESP_OK; // drain; verdict in onRequest
         }
+        // fsPath stays volume-relative (it came from PsychicHttp's param, and
+        // is echoed back to the client); fsFsPath is the POSIX form.
+        fsFsPath = std::string(SMOLBASE_FS_MOUNT) + fsPath.c_str();
         for (int i = 1; (i = fsPath.indexOf('/', i)) > 0; ++i) {
-          LittleFS.mkdir(fsPath.substring(0, i)); // no-op when it exists
+          const std::string anc =
+              std::string(SMOLBASE_FS_MOUNT) + fsPath.substring(0, i).c_str();
+          Fs::mkdir(anc.c_str()); // no-op when it exists (Fs::mkdir folds EEXIST)
         }
-        fsFile = LittleFS.open("/.upload.tmp", "w");
+        fsFile = Fs::File(SMOLBASE_FS_MOUNT "/.upload.tmp", "w");
         if (!fsFile) fsFailed = true;
       }
       if (fsFailed) return ESP_OK;
@@ -278,8 +285,8 @@ void begin(App& app) {
       }
       if (last) {
         fsFile.close();
-        LittleFS.remove(fsPath);
-        if (!LittleFS.rename("/.upload.tmp", fsPath)) fsFailed = true;
+        Fs::remove(fsFsPath.c_str());
+        if (!Fs::rename(SMOLBASE_FS_MOUNT "/.upload.tmp", fsFsPath.c_str())) fsFailed = true;
       }
       return ESP_OK;
     });

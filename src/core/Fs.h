@@ -99,6 +99,13 @@ public:
   size_t readBytes(char* buf, size_t n) { return _f ? ::fread(buf, 1, n, _f) : 0; }
   size_t write(uint8_t c) { return _f ? ::fwrite(&c, 1, 1, _f) : 0; }
   size_t write(const uint8_t* buf, size_t n) { return _f ? ::fwrite(buf, 1, n, _f) : 0; }
+
+  // Byte-buffer convenience, so binary callers need no cast at every site.
+  size_t readBytes(uint8_t* buf, size_t n) { return readBytes((char*)buf, n); }
+
+  // Positioning — AssetUpdate's tar walker seeks past each entry's content.
+  bool seek(long pos) { return _f && ::fseek(_f, pos, SEEK_SET) == 0; }
+  long position() { return _f ? ::ftell(_f) : -1; }
 };
 
 // ---- RAII directory iterator ----
