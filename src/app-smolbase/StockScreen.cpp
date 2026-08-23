@@ -70,5 +70,5 @@ void StockScreen::tick(lgfx::LGFX_Device& d) {
   d.setTextColor(d.color888(colHost >> 16, (colHost >> 8) & 0xff, colHost & 0xff), TFT_BLACK);
   d.drawString((Net::deviceName() + ".local").c_str(), 120, 160);
   d.setTextColor(d.color888(colIp >> 16, (colIp >> 8) & 0xff, colIp & 0xff), TFT_BLACK);
-  d.drawString(Net::isUp() ? Net::ip().toString() : "connecting...", 120, 185);
+  d.drawString(Net::isUp() ? Net::ip().c_str() : "connecting...", 120, 185);
 }

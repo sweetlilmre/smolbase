@@ -128,7 +128,7 @@ void begin(App& app) {
   httpServer.on("/api/status", HTTP_GET, [](PsychicRequest*, PsychicResponse* res) {
     JsonDocument doc;
     doc["name"] = Net::deviceName();
-    doc["ip"] = Net::ip().toString();
+    doc["ip"] = Net::ip();
     doc["apMode"] = Net::inApMode();
     doc["fwVersion"] = SMOLBASE_FW_VERSION;
     doc["uptimeS"] = Platform::millis() / 1000;
@@ -334,12 +334,15 @@ void begin(App& app) {
   // assets), serve the embedded fallback so provisioning is never UI-dead.
   httpServer.onNotFound([](PsychicRequest* req, PsychicResponse* res) -> esp_err_t {
     if (Net::inApMode()) {
-      String self = Net::ip().toString();
-      const String& host = req->host();
-      bool selfAddressed = host == self || host.startsWith(self + ":");
+      const std::string self = Net::ip();
+      // req->host() is an Arduino String until phase 7 flips PsychicHttp to
+      // native mode; convert at the boundary. No starts_with on gnu++17, so
+      // rfind(prefix, 0) is the prefix test.
+      const std::string host = req->host().c_str();
+      const bool selfAddressed = host == self || host.rfind(self + ":", 0) == 0;
       if (!selfAddressed) {
         res->setCode(302);
-        return res->redirect((String("http://") + self + "/").c_str());
+        return res->redirect(("http://" + self + "/").c_str());
       }
       if (req->uri() == "/" || req->uri() == "/portal.html") {
         return res->send(200, "text/html", FALLBACK_PORTAL);

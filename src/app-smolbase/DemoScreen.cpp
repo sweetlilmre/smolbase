@@ -175,7 +175,7 @@ void DemoScreen::drawIdentity(lgfx::LGFX_Sprite& f) {
   f.setFont(&fonts::FreeSans9pt7b);
   f.setTextDatum(lgfx::middle_center);
   shadowString(f, (Net::deviceName() + ".local").c_str(), 120, 160, fx::UI_TEXT + 3);
-  shadowString(f, Net::isUp() ? Net::ip().toString().c_str() : "connecting...", 120, 185,
+  shadowString(f, Net::isUp() ? Net::ip().c_str() : "connecting...", 120, 185,
                fx::UI_TEXT + 4);
   // "Now showing": one long press is the only way to discover the roster on a
   // device with a single touch pad, so it says what it just switched to.

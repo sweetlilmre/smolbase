@@ -4,9 +4,8 @@
 // Hostname: the ConfigStore "hostname" setting (sanitized) when non-blank,
 // else smolbase-XXXX; it is also the mDNS name and the AP SSID.
 #pragma once
-#include <Arduino.h> // IPAddress; drops out in phase 6
 #include <ArduinoJson.h>
-#include <IPAddress.h>
+#include <cstdint>
 #include <string>
 
 namespace Net {
@@ -14,7 +13,7 @@ void begin();
 void loop(); // pumps the boot-connect timeout + mDNS lifecycle; cheap when settled
 bool isUp();
 bool inApMode();
-IPAddress ip(); // STA IP or AP IP as appropriate
+std::string ip(); // dotted-quad STA IP, or the AP IP in AP mode
 std::string deviceName(); // effective hostname: "hostname" setting or smolbase-XXXX
 void applyHostname(); // re-apply after a settings change (re-registers mDNS live)
 int32_t rssi();      // STA link RSSI in dBm; 0 when not connected

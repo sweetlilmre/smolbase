@@ -339,7 +339,7 @@ void WeatherScreen::drawClockBand(lgfx::LovyanGFX& gfx, const struct tm& tm) {
     scratch.setTextColor(col(COL_WHITE), col(COL_OVERLAY_BG));
     scratch.drawString(Net::deviceName().c_str(), W / 2, 14);
     scratch.setTextColor(col(COL_CYAN), col(COL_OVERLAY_BG));
-    scratch.drawString(Net::ip().toString(), W / 2, 32);
+    scratch.drawString(Net::ip().c_str(), W / 2, 32);
     scratch.setTextColor(col(COL_WHITE), col(COL_OVERLAY_BG));
     scratch.drawString(SMOLBASE_FW_VERSION, W / 2, 51);
     scratch.setTextDatum(lgfx::top_left);

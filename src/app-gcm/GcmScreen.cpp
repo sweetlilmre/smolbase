@@ -288,7 +288,7 @@ void GcmScreen::drawOverlay(lgfx::LGFX_Device& gfx) {
     gfx.setTextColor(C_WHITE, C_OVL_BG);
     gfx.drawString(Net::deviceName().c_str(), W / 2, 90);
     gfx.setTextColor(C_CYAN, C_OVL_BG);
-    gfx.drawString(Net::ip().toString(), W / 2, 120);
+    gfx.drawString(Net::ip().c_str(), W / 2, 120);
     gfx.setTextColor(C_WHITE, C_OVL_BG);
     gfx.drawString(SMOLBASE_FW_VERSION, W / 2, 150);
 }

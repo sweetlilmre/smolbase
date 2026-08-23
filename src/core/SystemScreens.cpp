@@ -53,7 +53,7 @@ void ApInfoScreen::onEnter(lgfx::LGFX_Device& d) {
   d.drawRoundRect(14, 182, 212, 40, 8, accent);
   d.setFont(&fonts::FreeSansBold9pt7b);
   d.setTextColor(accent);
-  d.drawString("http://" + Net::ip().toString(), 120, 202); // 192.168.4.1 in AP mode
+  d.drawString(("http://" + Net::ip()).c_str(), 120, 202); // 192.168.4.1 in AP mode
 }
 
 ApInfoScreen& apInfoScreen() {
