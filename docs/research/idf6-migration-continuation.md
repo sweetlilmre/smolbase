@@ -5,7 +5,7 @@
 
 ## State
 
-**Done.** Phases 1–8 are complete: `platformio.ini` is gone, the build is a native ESP-IDF v6.0.2 CMake project, all three Apps build warning-clean, and the smolbase App has been flashed and verified on the physical device. `spike/idf6/` has been deleted — its `sb_fs.h` lives on as `src/core/Fs.h` and its scaffolding as the root `CMakeLists.txt`, `main/`, `components/lovyangfx/` and `sdkconfig.defaults`.
+**Done.** Phases 1–9 are complete: `platformio.ini` is gone, the build is a native ESP-IDF v6.0.2 CMake project, all three Apps build warning-clean, and the smolbase App has been flashed and verified on the physical device. `spike/idf6/` has been deleted — its `sb_fs.h` lives on as `src/core/Fs.h` and its scaffolding as the root `CMakeLists.txt`, `main/`, `components/lovyangfx/` and `sdkconfig.defaults`.
 
 The device numbers are the reason the exercise was worth doing:
 
@@ -32,18 +32,18 @@ Both heap figures come from the same `/api/status` fields computed by the same `
 
 `idf.py` resolves `@name` to a file called exactly `name`, so the `.args` extension is part of the argument, not a suffix it adds.
 
-## Verified on the device, after the flip
+## Verified on the device
+
+### At the flip (phase 7c)
 
 - Boots, joins, panel up, hostname right, settings persisted from the pre-migration filesystem.
-- **Static assets serve from the pre-existing (mklittlefs-built) volume at the new root mount**, gzip fallback included — response sizes match the `.gz` bytes exactly. This was the one-way door: the geometry of an image built by `littlefs-python` is not proven, but the *volume already on the device* mounts and reads fine.
+- **Static assets serve from the pre-existing (mklittlefs-built) volume at the new root mount**, gzip fallback included — response sizes match the `.gz` bytes exactly. This was the one-way door: the volume already on the device mounts and reads fine under `esp_vfs_littlefs` at `base_path = ""`.
 - **TLS to api.github.com**, i.e. the RSA-4096 chain and therefore `CONFIG_MBEDTLS_LARGE_KEY_SOFTWARE_MPI` coming out of the hand-written `sdkconfig.defaults` — the whole ADR 0005 thesis, now with no lib rebuild behind it. `/api/update/check` also correctly reports `ahead: true` rather than offering a downgrade.
 - **SNTP**, synced within 13 s of boot, which is the raw-lwIP-under-the-core-lock `kick()` working (see the note in `Clock.cpp` about why `<esp_sntp.h>` is not included).
 - **WiFi scan and its cache**, re-read after the driver consumed the records.
-- `loopStackFree` = 6,276 of 8,192 — the core-1 loop task uses under 2 KB.
+- `loop.stackFree` = 6,276 of 8,192 — the core-1 loop task uses under 2 KB.
 
-## Verified on the device
-
-The 7c section above, plus everything below, added during the phase 9 verification pass.
+### In the phase 9 verification pass
 
 - **mDNS.** Verified by querying the device directly rather than through this host's resolver (`scripts`-free probe, both the QU-unicast and multicast-on-5353 paths): it answers `A smolbase-2e00.local -> 10.0.0.32`, `PTR _http._tcp.local`, and `SRV ...:80`. Service discovery works, not just name resolution. The old note claiming this host has no working `.local` resolver was wrong — `Resolve-DnsName` and `ping` resolve it too.
 - **fs-OTA with an image built by `littlefs_create_partition_image`** — after fixing a bug this test existed to find; see below. All six assets on the reflashed volume are byte-identical to the built image, gzip fallback included.
@@ -99,3 +99,6 @@ Worth dwelling on how well it hid: the build succeeded, the image carried the `l
 - `findBackupDir` matched backups with `strncmp(path, "/w.", 3)`, silently assuming the volume was mounted at the root. (It is again — but by decision now, not by accident.) A backup that cannot be found never gets restored, which is the whole point of #122.
 - `/api/update/check` compared version **strings**, so any mismatch read as "update available" and a device ahead of the latest release was offered a **downgrade**.
 - `extractTo` built its output path with an `snprintf` that could truncate a 100-byte ustar member name into a 96-byte buffer, writing the wrong file. Found by `-Werror=format-truncation` on the first native build.
+- The weather App reported its fetch task's free stack as high-water × 4. ESP-IDF's `uxTaskGetStackHighWaterMark` returns bytes, not the words vanilla FreeRTOS documents — so the figure was four times too generous, in the wrong direction for a number whose job is to warn before an overflow.
+- `Platform::largestFreeBlock()` counted `MALLOC_CAP_INTERNAL` while documented as "what a TLS handshake actually needs". The IRAM-leftover region it includes cannot serve a byte buffer, so it answered with memory nobody can spend.
+- The weather geocoder persisted `wx_geo_name` and `wx_geo_cc` and never read them back, so `geo.fresh ? geo.cc : ""` blanked the country on every cycle that did not re-geocode — all of them once the cache is warm, including after every reboot. The weather screen draws that country beside the city. Found by reading the status surface immediately after cleaning it up.
