@@ -373,12 +373,7 @@ bool save() {
       Fs::remove(SMOLBASE_SETTINGS_FSPATH ".tmp");
       return false;
     }
-    // littlefs rename atomically replaces an existing destination, so the settings
-    // file is never absent. Fall back to remove+rename in case the VFS refuses.
-    if (!Fs::rename(SMOLBASE_SETTINGS_FSPATH ".tmp", SMOLBASE_SETTINGS_FSPATH)) {
-      Fs::remove(SMOLBASE_SETTINGS_FSPATH);
-      if (!Fs::rename(SMOLBASE_SETTINGS_FSPATH ".tmp", SMOLBASE_SETTINGS_FSPATH)) return false;
-    }
+    if (!Fs::replace(SMOLBASE_SETTINGS_FSPATH ".tmp", SMOLBASE_SETTINGS_FSPATH)) return false;
   }
   Events::post(SysEvent::SettingsChanged);
   return true;

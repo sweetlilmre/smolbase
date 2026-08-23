@@ -3,6 +3,7 @@
 #include "../core/ConfigStore.h"
 #include "../core/Net.h"
 #include "hex_color.h"
+#include <cstdio>
 #include <ctime>
 
 void StockScreen::loadColors() {
@@ -67,7 +68,10 @@ void StockScreen::tick(lgfx::LGFX_Device& d) {
   d.setTextDatum(lgfx::middle_center);
   d.fillRect(0, 145, 240, 65, TFT_BLACK);
   d.setTextColor(d.color888(colHost >> 16, (colHost >> 8) & 0xff, colHost & 0xff), TFT_BLACK);
-  d.drawString((Net::deviceName() + ".local").c_str(), 120, 160);
+  // Stack buffer — see the note in DemoScreen::drawIdentity.
+  char host[48];
+  snprintf(host, sizeof(host), "%s.local", Net::deviceName().c_str());
+  d.drawString(host, 120, 160);
   d.setTextColor(d.color888(colIp >> 16, (colIp >> 8) & 0xff, colIp & 0xff), TFT_BLACK);
   d.drawString(Net::isUp() ? Net::ip().c_str() : "connecting...", 120, 185);
 }

@@ -5,17 +5,21 @@
 // the handle, plus path ops verified in both directions).
 //
 // This is a FILE ACCESS helper, not an fs::FS compatibility layer. It does
-// three things and deliberately nothing else:
+// four things and deliberately nothing else:
 //
 //  1. Path ops that return bool. Arduino returned true-on-success; POSIX
 //     returns 0-on-success. Thirty call sites read `if (!LittleFS.remove(p))`,
 //     and a forgotten inversion SILENTLY REVERSES the logic — in exactly the
 //     paths that heal a torn asset update or preserve settings on a failed
 //     write. That is worth twelve lines to make impossible.
-//  2. An RAII file handle. Eleven opens against twenty-three manual closes,
+//  2. The three compound operations every caller needs and nobody should spell
+//     twice: replace() (the temp-then-swap that makes a write atomic),
+//     mkdirParents(), removeDirFlat(). Each of these existed in two or three
+//     places with subtly different behaviour before it lived here.
+//  3. An RAII file handle. Eleven opens against twenty-three manual closes,
 //     several on early-return paths, against a mount that allows 10 open
 //     files. A leaked descriptor is a reachable failure, not untidiness.
-//  3. An RAII directory iterator, for AssetUpdate's two walk functions.
+//  4. An RAII directory iterator, for AssetUpdate's two walk functions.
 //
 // It does NOT translate paths. See docs/research/littlefs-wrapper-sketch.md:
 // prefixing here would create two path namespaces inside Web.cpp, because
@@ -51,6 +55,29 @@ inline bool exists(const char* p) {
 inline bool isDir(const char* p) {
   struct stat st;
   return ::stat(p, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+// Replace `dst` with `tmp` — the write-to-temp-then-swap half of every safe
+// write in the firmware. littlefs's rename replaces an existing destination in
+// ONE metadata commit, so `dst` is never absent, not even for an instant; the
+// remove-and-retry is a belt for a VFS that refuses to clobber. Three call
+// sites used to spell this three different ways (one with the fallback, one
+// removing unconditionally first, one with neither), which is three chances to
+// leave a half-written file where a whole one used to be.
+inline bool replace(const char* tmp, const char* dst) {
+  if (rename(tmp, dst)) return true;
+  remove(dst);
+  return rename(tmp, dst);
+}
+
+// mkdir -p over the ANCESTORS of `path`, not the leaf: "/w/sub/f.gz" creates
+// "/w" and "/w/sub". Existing directories fold into success, as mkdir does.
+inline bool mkdirParents(const char* path) {
+  const std::string p(path);
+  bool ok = true;
+  for (size_t i = 1; (i = p.find('/', i)) != std::string::npos; ++i)
+    if (!mkdir(p.substr(0, i).c_str())) ok = false;
+  return ok;
 }
 
 // ---- RAII file handle ----
@@ -89,7 +116,6 @@ public:
     struct stat st;
     return ::fstat(::fileno(_f), &st) == 0 ? (long)st.st_size : -1;
   }
-  bool flushToDisk() { return _f && ::fflush(_f) == 0; }
 
   // ---- ArduinoJson reader/writer concept ----
   // These exact signatures are what let serializeJson(doc, f) and
@@ -166,5 +192,37 @@ public:
     return false;
   }
 };
+
+// ---- Directory removal ----
+// Flat only: /w holds files, never subdirectories. Deletes in bounded batches
+// because deleting while iterating trips some FS iterators — each pass collects
+// a batch, closes the handle, then unlinks — and loops until a pass finds
+// nothing, so there is NO CAP on the file count. (The version this replaces
+// collected at most 24 names in one pass and silently left the 25th file
+// behind, after which the rmdir failed and the caller saw "restore failed" with
+// no clue why.)
+//
+// Returns false if a pass removes nothing while entries remain — which is what
+// a subdirectory looks like, since unlink refuses one. Fails loudly rather than
+// spinning.
+inline bool removeDirFlat(const char* path) {
+  if (!isDir(path)) return false;
+  for (;;) {
+    std::string batch[16];
+    int n = 0;
+    {
+      Dir d(path);
+      if (!d) return false;
+      Dir::Entry e;
+      while (n < 16 && d.next(e)) batch[n++] = e.path;
+    }
+    if (n == 0) break;
+    int removed = 0;
+    for (int i = 0; i < n; ++i)
+      if (remove(batch[i].c_str())) ++removed;
+    if (removed == 0) return false;
+  }
+  return rmdir(path);
+}
 
 } // namespace Fs

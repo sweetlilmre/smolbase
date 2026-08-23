@@ -174,7 +174,11 @@ void DemoScreen::drawIdentity(lgfx::LGFX_Sprite& f) {
   }
   f.setFont(&fonts::FreeSans9pt7b);
   f.setTextDatum(lgfx::middle_center);
-  shadowString(f, (Net::deviceName() + ".local").c_str(), 120, 160, fx::UI_TEXT + 3);
+  // Stack buffer, not `deviceName() + ".local"`: at 19 chars that concat is past
+  // std::string's 15-byte SSO, so it heap-allocated once per frame at 30 FPS.
+  char host[48];
+  snprintf(host, sizeof(host), "%s.local", Net::deviceName().c_str());
+  shadowString(f, host, 120, 160, fx::UI_TEXT + 3);
   shadowString(f, Net::isUp() ? Net::ip().c_str() : "connecting...", 120, 185,
                fx::UI_TEXT + 4);
   // "Now showing": one long press is the only way to discover the roster on a
@@ -222,30 +226,35 @@ void DemoScreen::tick(lgfx::LGFX_Device&) {
     }
   }
 
-#ifdef SMOLBASE_DEBUG
-  // Where the 33 ms goes, once a second. The claim this roster is built on is
-  // that an effect fits in what present() leaves over — this is how to check it
-  // on real hardware rather than trusting the arithmetic.
+  // Where the 33 ms goes. The claim this roster is built on is that an effect
+  // fits in what present() leaves over, and these three numbers are how to check
+  // it on real hardware instead of trusting the arithmetic. They used to be a
+  // debug-build-only printf — invisible without a rebuild, and unreadable at all
+  // on a bench with no serial line. Now they are always recorded and reported
+  // under "app" by GET /api/status. Four esp_timer reads per frame against a
+  // ~24 ms blocking panel push is not measurable.
   const uint32_t t0 = Platform::micros();
   if (Effect* e = ROSTER[idx].fx) e->step(f);
   else f.fillScreen(fx::UI_BLACK);
   const uint32_t t1 = Platform::micros();
   drawIdentity(f);
   const uint32_t t2 = Platform::micros();
-  Display::present();
-  const uint32_t t3 = Platform::micros();
-  static uint32_t lastLog = 0;
-  if (t3 - lastLog > 1000000) {
-    lastLog = t3;
-    printf("[demo] %s: effect %lu us, overlay %lu us, present %lu us\n",
-                  ROSTER[idx].label, t1 - t0, t2 - t1, t3 - t2);
-  }
-#else
-  if (Effect* e = ROSTER[idx].fx) e->step(f);
-  else f.fillScreen(fx::UI_BLACK);
-  drawIdentity(f);
   Display::present(); // ~24 ms blocking push — the frame's real cost
-#endif
+  const uint32_t t3 = Platform::micros();
+  lastEffectUs = t1 - t0;
+  lastOverlayUs = t2 - t1;
+  lastPresentUs = t3 - t2;
+}
+
+void DemoScreen::statusJson(JsonObject out) const {
+  // Read on the httpd task (core 0) while the main loop writes them. Plain
+  // uint32 reads of independently-updated counters: the worst case is one
+  // frame's number beside another's, which is harmless for a diagnostic and
+  // not worth a lock on the frame path.
+  out["effect"] = ROSTER[idx].label;
+  out["effectUs"] = lastEffectUs;
+  out["overlayUs"] = lastOverlayUs;
+  out["presentUs"] = lastPresentUs;
 }
 
 void DemoScreen::onTap() {

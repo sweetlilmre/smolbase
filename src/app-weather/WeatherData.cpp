@@ -375,7 +375,7 @@ void onSettingsChanged() {
 // mux, then serialized outside it. ConfigStore/Secrets are internally
 // mutex-guarded, the heap probes are atomic, and `snaps` is append-only with
 // a count byte — all safe to read without the mux.
-void WeatherDebug::json(JsonDocument& out) {
+void WeatherDebug::json(JsonObject out) {
   WeatherData::Reading r;
   char lastErr[sizeof(dbgLastErr)];
   uint32_t attempts, successes;
@@ -414,14 +414,20 @@ void WeatherDebug::json(JsonDocument& out) {
   out["lon"] = ConfigStore::getString(K_GEO_LON, "");
   out["msSinceFetch"] = Platform::millis() - lastFetchMs;
   out["lastErr"] = (const char*)lastErr;
-  // The heap trio that diagnosed the TLS OOM (#74) — cheap, keep: min-ever
-  // near zero means a handshake is scraping bottom again (docs/app-weather-memory.md).
-  out["heapFree"] = esp_get_free_heap_size();
-  out["heapLargest"] = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-  out["heapMinEver"] = esp_get_minimum_free_heap_size();
-  // Stack watermark for the fetch task (words * 4 = bytes; min seen across all cycles).
-  if (fetchTask)
-    out["fetchStackFreeB"] = uxTaskGetStackHighWaterMark(fetchTask) * 4;
+  // The heap trio that diagnosed the TLS OOM (#74) is GONE from here: the
+  // enclosing /api/status response carries `heap.free`, `heap.largestBlock` and
+  // `heap.minFree` in the same payload, computed through Platform:: so every
+  // heap figure in the firmware uses one ruler. These three used to answer with
+  // esp_get_free_heap_size()/MALLOC_CAP_8BIT/esp_get_minimum_free_heap_size(),
+  // which disagreed with the core figures by ~52 KB and would have read as a
+  // regression sitting next to them.
+  //
+  // Stack watermark for the fetch task, in BYTES: ESP-IDF's
+  // uxTaskGetStackHighWaterMark returns bytes, not the words vanilla FreeRTOS
+  // documents (task.h says so explicitly). The `* 4` that used to be here
+  // overstated the free stack fourfold — the wrong direction for a number whose
+  // whole job is to warn before an overflow.
+  if (fetchTask) out["fetchStackFreeB"] = uxTaskGetStackHighWaterMark(fetchTask);
   // Heap trajectory: one entry per addSnap() call, fills on the first ~4 fetch cycles.
   JsonArray sa = out["snaps"].to<JsonArray>();
   for (int i = 0; i < snapCount; ++i) {

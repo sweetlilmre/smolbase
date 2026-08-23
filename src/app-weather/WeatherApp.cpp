@@ -10,7 +10,6 @@
 #include "WeatherDebug.h"
 #include "WeatherKeys.h"
 #include "WeatherScreen.h"
-#include <PsychicHttp.h>
 
 namespace {
 
@@ -83,14 +82,9 @@ public:
     Display::setActive(&screen);
   }
 
-  void registerRoutes(PsychicHttpServer& server) override {
-    server.on("/api/debug/weather", HTTP_GET, [](PsychicRequest*, PsychicResponse* res) {
-      JsonDocument doc;
-      WeatherDebug::json(doc); // core-0-safe: snapshots under the fetch mux (#99)
-      std::string out;
-      serializeJson(doc, out);
-      return res->send(200, "application/json", out.c_str());
-    });
+  // Lands in the "app" object of GET /api/status.
+  void statusJson(JsonObject out) override {
+    WeatherDebug::json(out); // core-0-safe: snapshots under the fetch mux (#99)
   }
 
   void loop() override {

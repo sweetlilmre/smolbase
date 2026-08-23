@@ -24,6 +24,7 @@
 #include "Http.h"
 #include "Net.h"
 #include "Platform.h"
+#include "Web.h"
 #include "smolbase_config.h"
 #include <ArduinoJson.h>
 #include <PsychicHttp.h>
@@ -63,14 +64,17 @@ static volatile bool s_inFlight = false;
 static char s_tag[32] = {}; // written by the POST handler before the task spawns
 
 static std::string detectLatestTag() {
-  const std::string url =
-      std::string("https://api.github.com/repos/") + GH_REPO + "/releases/latest";
+  // snprintf, not concatenation: this runs immediately before a TLS handshake,
+  // and on this chip the handshake's own allocations are what run out (#119).
+  // Every URL built on that path is a stack buffer for the same reason.
+  char url[96];
+  snprintf(url, sizeof(url), "https://api.github.com/repos/%s/releases/latest", GH_REPO);
   JsonDocument filter;
   filter["tag_name"] = true;
   JsonDocument doc;
   const Http::Header hdrs[] = {{"Accept", "application/vnd.github+json"}};
   Http::Request rq;
-  rq.url = url.c_str();
+  rq.url = url;
   rq.filter = &filter;
   rq.headers = hdrs;
   rq.headerCount = 1;
@@ -284,7 +288,7 @@ void registerRoutes(PsychicHttpServer& server) {
     const std::string latest = detectLatestTag();
     if (latest.empty())
       return res->send(503, "application/json", "{\"error\":\"could not reach GitHub releases\"}");
-    const std::string current = std::string("v") + SMOLBASE_FW_VERSION;
+    const std::string current = "v" SMOLBASE_FW_VERSION;
     // upToDate means "no NEWER release exists" — NOT "the strings match".
     // Equality was the old test, and it reported a device running something
     // newer than the latest release as out of date, which made the UI offer a
@@ -296,26 +300,27 @@ void registerRoutes(PsychicHttpServer& server) {
     // Unparseable tags fall back to equality: conservative, and preserves the
     // old behaviour for anything that is not vX.Y.Z.
     const bool upToDate = comparable ? cmpVer(lat, cur) <= 0 : (latest == current);
-    const std::string out = "{\"current\":\"" + current + "\",\"latest\":\"" + latest +
-                            "\",\"upToDate\":" + (upToDate ? "true" : "false") +
-                            ",\"ahead\":" + (ahead ? "true" : "false") + "}";
-    return res->send(200, "application/json", out.c_str());
+    JsonDocument out;
+    out["current"] = current;
+    out["latest"] = latest; // a GitHub tag: not ours, so let ArduinoJson escape it
+    out["upToDate"] = upToDate;
+    out["ahead"] = ahead;
+    return Web::sendJson(res, 200, out);
   });
 
   server.on("/api/update/ghprogress", HTTP_GET, [](PsychicRequest*, PsychicResponse* res) {
     static const char* const STATES[] = { "idle", "downloading", "done", "error" };
-    char buf[280];
-    snprintf(buf, sizeof(buf),
-             "{\"state\":\"%s\",\"phase\":\"%s\",\"bytesWritten\":%u,\"totalBytes\":%u,"
-             "\"filesDone\":%d,\"filesTotal\":%d,\"error\":\"%s\"}",
-             STATES[(int)s_progress.state],
-             s_progress.phase,
-             (unsigned)s_progress.bytesWritten,
-             (unsigned)s_progress.totalBytes,
-             s_progress.filesDone,
-             s_progress.filesTotal,
-             s_progress.errorMsg);
-    return res->send(200, "application/json", buf);
+    JsonDocument out;
+    out["state"] = STATES[(int)s_progress.state];
+    out["phase"] = (const char*)s_progress.phase;
+    out["bytesWritten"] = (uint32_t)s_progress.bytesWritten;
+    out["totalBytes"] = (uint32_t)s_progress.totalBytes;
+    out["filesDone"] = s_progress.filesDone;
+    out["filesTotal"] = s_progress.filesTotal;
+    // errorMsg carries esp_err_to_name output and our own formatted text; it is
+    // the field most likely to grow a quote, and the one the UI displays.
+    out["error"] = (const char*)s_progress.errorMsg;
+    return Web::sendJson(res, 200, out);
   });
 
   // Spawns the Core 0 download task directly — the httpd task is already on
@@ -343,8 +348,10 @@ void registerRoutes(PsychicHttpServer& server) {
       strlcpy(s_progress.errorMsg, "task create failed", sizeof(s_progress.errorMsg));
       return res->send(500, "application/json", "{\"error\":\"task create failed\"}");
     }
-    return res->send(200, "application/json",
-                     ("{\"ok\":true,\"tag\":\"" + tag + "\"}").c_str());
+    JsonDocument out;
+    out["ok"] = true;
+    out["tag"] = tag; // straight off the request body — escape it
+    return Web::sendJson(res, 200, out);
   });
 }
 

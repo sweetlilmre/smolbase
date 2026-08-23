@@ -115,10 +115,31 @@ every push, which is what stops an app in the repo from silently rotting.
   your Screens, and claim the display with `Display::setActive(&myScreen)`.
 - **`loop()`** — called every main-loop pass on core 1. The pass has a **soft
   latency budget of ~25 ms** (`SMOLBASE_LOOP_BUDGET_MS`): overrun it and touch
-  responsiveness and event latency degrade. Debug builds log overruns to
-  serial, so a slow pass tells on itself. Heavy work (TLS fetches, JSON
+  responsiveness and event latency degrade. Heavy work (TLS fetches, JSON
   parsing of large payloads) belongs in a FreeRTOS task you spawn — then you
   own the synchronization.
+
+  A slow pass tells on itself in `GET /api/status`, under `loop`: `passMs` and
+  `passMaxMs` for the whole iteration, `appMs`/`appMaxMs` for your `loop()`
+  slice alone, `overruns` since boot, and `stackFree` for the core-1 task's
+  low-water stack. If your App draws from `Screen::tick()` rather than
+  `loop()` — which is the normal shape — your work lands in the pass, not the
+  app slice, so a near-zero `appMs` beside a large `passMs` is expected.
+
+  **Caveat, measured:** on a `PALETTE_8` framebuffer build the blocking
+  240×240 panel push in `Display::present()` costs ~28 ms on its own, so a
+  frame pass runs ~33–35 ms and `overruns` climbs about once per frame. That is
+  the framebuffer trade (ADR 0004), not your App misbehaving. The 25 ms figure
+  describes a direct-draw pass; compare against `passMs` on your own build
+  before believing an overrun count.
+
+- **`statusJson(JsonObject)`** — optional. Whatever you write lands in the
+  `app` object of `GET /api/status`, so your App never needs its own debug
+  endpoint. Called on the httpd task (**core 0**), like route handlers: copy
+  anything the main loop writes under whatever guard protects it, keep it
+  short, and never put a secret's value in it (presence is fine — ADR 0003).
+  The weather App is the worked example: it reports the current reading,
+  per-stage fetch codes and key presence.
 
 ## Screens
 
@@ -310,7 +331,11 @@ calibration data regenerates on the following boot.
 
 ## HTTP routes
 
-Override `registerRoutes(PsychicHttpServer&)` to add endpoints:
+If all you want is to expose state for diagnosis, use `statusJson()` above
+instead — one endpoint for the whole device is one thing to curl, and a
+diagnostic route tends to outlive the problem it was added for.
+
+Override `registerRoutes(PsychicHttpServer&)` to add real endpoints:
 
 ```cpp
 void registerRoutes(PsychicHttpServer& server) override {
@@ -323,9 +348,9 @@ void registerRoutes(PsychicHttpServer& server) override {
 What the template guarantees (see `src/core/Web.h` — the order is structural,
 PsychicHttp matches first-registered-first):
 
-1. System API routes (`/api/status`, `/api/wifi*`, `/api/settings`,
-   `/api/factory-reset`) register first — you cannot shadow them, and you may
-   not claim `/api/*` system paths.
+1. System API routes (`/api/status` — including your `statusJson()` under
+   `app` — plus `/api/wifi*`, `/api/settings`, `/api/factory-reset`) register
+   first: you cannot shadow them, and you may not claim `/api/*` system paths.
 2. OTA (`/api/update`) registers second.
 3. **Your routes register third** — before static assets, so a route named
    like a file wins.

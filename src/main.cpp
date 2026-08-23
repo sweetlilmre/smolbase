@@ -91,6 +91,7 @@ static void setup() {
 }
 
 static void loop() {
+  const uint32_t t0 = Platform::millis();
   Events::drain(onSysEvent);
   Net::loop();
   Clock::loop(); // SNTP re-kick belt; cheap no-op once synced
@@ -98,6 +99,10 @@ static void loop() {
   Display::tick();
   AppHost::loop();
   Ota::tickRollbackGuard(); // confirm a fresh image after healthy uptime (#76)
+  // Timed here, excluding the yield below: this is the whole pass, which is
+  // what SMOLBASE_LOOP_BUDGET_MS is about and what sets touch latency.
+  // Reported under "loop" by GET /api/status.
+  AppHost::recordPass(Platform::millis() - t0);
   Platform::delayMs(2); // yield to the idle task; keeps the WDT fed without busy-spinning
 }
 

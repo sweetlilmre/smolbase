@@ -13,6 +13,7 @@
 //    captive probes want 302, hence the explicit setCode.
 #include "Web.h"
 #include "App.h"
+#include "AppHost.h"
 #include "Clock.h"
 #include "ConfigStore.h"
 #include "Events.h"
@@ -81,7 +82,7 @@ font:inherit}progress{width:100%;display:none}.msg{color:#666;min-height:1.2em;f
 <script>
 fetch("/api/status").then(function(r){return r.json()}).then(function(j){
 document.getElementById("st").textContent=j.name+" · "+j.ip+" · fw "+j.fwVersion+
-" · heap "+Math.round(j.heapFree/1024)+" kB free"}).catch(function(){})
+" · heap "+Math.round(j.heap.free/1024)+" kB free"}).catch(function(){})
 function up(fid,bid,pid,mid,target){var b=document.getElementById(bid);
 b.onclick=function(){var f=document.getElementById(fid).files[0],
 m=document.getElementById(mid),p=document.getElementById(pid);
@@ -105,7 +106,7 @@ static PsychicHttpServer httpServer;
 
 PsychicHttpServer& server() { return httpServer; }
 
-static esp_err_t sendJson(PsychicResponse* res, int code, const JsonDocument& doc) {
+esp_err_t sendJson(PsychicResponse* res, int code, const JsonDocument& doc) {
   std::string out;
   serializeJson(doc, out);
   return res->send(code, "application/json", out.c_str());
@@ -127,6 +128,11 @@ void begin(App& app) {
   // NOTE: no start() here — see Web.h. Routes register fine pre-start.
 
   // --- 1. system API routes ---
+  // The one diagnostic endpoint. Identity stays flat — name/ip/fwVersion are
+  // the contract the portal, the settings page and the embedded recovery page
+  // read, and nesting them would buy nothing. Everything else is grouped by the
+  // question it answers, so a new field lands somewhere obvious instead of
+  // widening a flat bag, and an App's own fields cannot collide with a core one.
   httpServer.on("/api/status", HTTP_GET, [](PsychicRequest*, PsychicResponse* res) {
     JsonDocument doc;
     doc["name"] = Net::deviceName();
@@ -134,25 +140,52 @@ void begin(App& app) {
     doc["apMode"] = Net::inApMode();
     doc["fwVersion"] = SMOLBASE_FW_VERSION;
     doc["uptimeS"] = Platform::millis() / 1000;
-    doc["heapFree"] = Platform::freeHeap();
     doc["timeSynced"] = Clock::isSynced(); // observability for SNTP stalls (#38)
-    // The 8-bit-accessible figure, which heapFree does not show: byte-buffer
+
+    JsonObject heap = doc["heap"].to<JsonObject>();
+    heap["free"] = Platform::freeHeap();
+    // The 8-bit-accessible figure, which `free` does not show: byte-buffer
     // allocations (TLS included) can only come from this pool, and it runs
-    // ~52 KB below heapFree on this chip. #119 was a failure of THIS number.
-    doc["heapFree8Bit"] = Platform::freeHeap8Bit();
-    // Low-water free stack of the core-1 loop task. Arduino sized that stack
-    // implicitly at 8 KB; main.cpp now sizes it deliberately, so the headroom
-    // has to be observable — there is no UART on the dev bench.
-    doc["loopStackFree"] = Platform::loopStackFree();
-    // Touch pad, for tuning SMOLBASE_TOUCH_DELTA_PCT against real readings.
+    // ~52 KB below `free` on this chip. #119 was a failure of THIS number.
+    heap["free8Bit"] = Platform::freeHeap8Bit();
+    // What a TLS handshake actually needs, and the lowest either has ever been
+    // since boot — a transient dip that has already recovered is invisible in
+    // `free` and is exactly what #119 looked like.
+    heap["largestBlock"] = Platform::largestFreeBlock();
+    heap["minFree"] = Platform::minFreeHeap();
+
+    // ADR 0001's contract, made observable. stackFree is the low-water mark of
+    // the 8 KB main.cpp gives the core-1 task; the rest is loop timing — see
+    // AppHost.h for why the whole pass and the App's own slice are both here.
+    JsonObject loop = doc["loop"].to<JsonObject>();
+    loop["stackFree"] = Platform::loopStackFree();
+    loop["passMs"] = AppHost::passLastMs();
+    loop["passMaxMs"] = AppHost::passMaxMs();
+    loop["overruns"] = AppHost::passOverruns();
+    loop["appMs"] = AppHost::appLastMs();
+    loop["appMaxMs"] = AppHost::appMaxMs();
+    loop["budgetMs"] = SMOLBASE_LOOP_BUDGET_MS;
+
+    // For tuning SMOLBASE_TOUCH_DELTA_PCT against real readings.
     // 0/0 means calibration failed and the pad is inert.
-    doc["touchBaseline"] = Touch::padBaseline();
-    doc["touchThreshold"] = Touch::padThreshold();
-    doc["touchNow"] = Touch::padLast();
+    JsonObject touch = doc["touch"].to<JsonObject>();
+    touch["baseline"] = Touch::padBaseline();
+    touch["threshold"] = Touch::padThreshold();
+    touch["now"] = Touch::padLast();
+
     if (Net::isUp()) {
-      doc["rssi"] = Net::rssi();
-      doc["ssid"] = Net::ssid(); // which network we're on (#39)
+      JsonObject wifi = doc["wifi"].to<JsonObject>();
+      wifi["rssi"] = Net::rssi();
+      wifi["ssid"] = Net::ssid(); // which network we're on (#39)
     }
+
+    // The App's own diagnostics (App::statusJson). Created unconditionally so
+    // the key is always present and a caller never has to branch; an App that
+    // reports nothing leaves it empty. This is why no App needs its own
+    // debug endpoint.
+    JsonObject app = doc["app"].to<JsonObject>();
+    AppHost::app().statusJson(app);
+
     return sendJson(res, 200, doc);
   });
 
@@ -283,9 +316,7 @@ void begin(App& app) {
           fsFailed = true;
           return ESP_OK; // drain; verdict in onRequest
         }
-        // Create the ancestors: "/w/sub/f.gz" needs "/w" and "/w/sub".
-        for (size_t i = 1; (i = fsPath.find('/', i)) != std::string::npos; ++i)
-          Fs::mkdir(fsPath.substr(0, i).c_str()); // no-op when it exists (folds EEXIST)
+        Fs::mkdirParents(fsPath.c_str());
         fsFile = Fs::File(SMOLBASE_FS_MOUNT "/.upload.tmp", "w");
         if (!fsFile) fsFailed = true;
       }
@@ -297,8 +328,7 @@ void begin(App& app) {
       }
       if (last) {
         fsFile.close();
-        Fs::remove(fsPath.c_str());
-        if (!Fs::rename(SMOLBASE_FS_MOUNT "/.upload.tmp", fsPath.c_str())) fsFailed = true;
+        if (!Fs::replace(SMOLBASE_FS_MOUNT "/.upload.tmp", fsPath.c_str())) fsFailed = true;
       }
       return ESP_OK;
     });

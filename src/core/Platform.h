@@ -53,11 +53,22 @@ inline uint32_t freeHeap() { return heap_caps_get_free_size(MALLOC_CAP_INTERNAL)
 // "will this TLS handshake fit". Lower than freeHeap() by the IRAM region.
 inline uint32_t freeHeap8Bit() { return heap_caps_get_free_size(MALLOC_CAP_8BIT); }
 
-// Largest single allocation still possible (Arduino: ESP.getMaxAllocHeap()).
-// This, not freeHeap(), is what a TLS handshake actually needs.
-inline uint32_t largestFreeBlock() { return heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL); }
+// Largest single BYTE-BUFFER allocation still possible — what a TLS handshake
+// actually needs, and the number that fails first under pressure (#119).
+//
+// MALLOC_CAP_8BIT, not INTERNAL, unlike freeHeap(): the two have opposite
+// reasons. freeHeap() is INTERNAL to stay comparable with every heap figure
+// this project has ever recorded. This one is asked "will an allocation fit",
+// and the IRAM-leftover region INTERNAL counts cannot serve a byte buffer at
+// all, so including it would answer a question nobody asked with a number
+// nobody can spend. Nothing was reading this before it reached /api/status, so
+// there is no historical series to keep faith with.
+inline uint32_t largestFreeBlock() { return heap_caps_get_largest_free_block(MALLOC_CAP_8BIT); }
 
-// Lowest freeHeap() seen since boot.
+// Lowest free heap seen since boot. Note the ruler: esp_get_minimum_free_heap_size()
+// tracks MALLOC_CAP_DEFAULT, so this is the low-water mark of freeHeap8Bit(),
+// NOT of freeHeap(). Compare it against free8Bit, never against free — that
+// mismatch is a 52 KB phantom regression waiting to be discovered.
 inline uint32_t minFreeHeap() { return esp_get_minimum_free_heap_size(); }
 
 // Low-water free stack, in bytes, of the core-1 consumer loop task (ADR 0001).

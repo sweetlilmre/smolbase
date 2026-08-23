@@ -39,21 +39,6 @@ static void backupName(char* out, size_t len) {
   snprintf(out, len, SMOLBASE_FS_MOUNT "/w.v%s", SMOLBASE_FW_VERSION);
 }
 
-// Remove a flat directory (files only — /w never holds subdirs) then the dir.
-static bool removeDirRecursive(const char* path) {
-  if (!Fs::isDir(path)) return false;
-  Fs::Dir dir(path);
-  if (!dir) return false;
-  // Collect names first: deleting while iterating trips some FS iterators.
-  std::string names[24];
-  int n = 0;
-  Fs::Dir::Entry e;
-  while (n < 24 && dir.next(e)) names[n++] = e.path;
-  dir.close();
-  for (int i = 0; i < n; i++) Fs::remove(names[i].c_str());
-  return Fs::rmdir(path);
-}
-
 // Find a "/w.<something>" backup dir at the fs root; returns true and fills
 // out (e.g. "/w.v0.3.2") if one exists.
 static bool findBackupDir(char* out, size_t len) {
@@ -88,11 +73,13 @@ bool fetchAssetDigest(const char* tag, char* outHex, size_t outHexLen, char* err
   filter["assets"][0]["name"]   = true;
   filter["assets"][0]["digest"] = true;
   JsonDocument doc;
-  const std::string url =
-      std::string("https://api.github.com/repos/") + GH_REPO + "/releases/tags/" + tag;
+  // Stack buffer: this is the first of two TLS sessions in a self-update, and
+  // heap headroom at the handshake is what fails first (#119).
+  char url[128];
+  snprintf(url, sizeof(url), "https://api.github.com/repos/%s/releases/tags/%s", GH_REPO, tag);
   const Http::Header hdrs[] = {{"Accept", "application/vnd.github+json"}};
   Http::Request rq;
-  rq.url = url.c_str();
+  rq.url = url;
   rq.filter = &filter;
   rq.headers = hdrs;
   rq.headerCount = 1;
@@ -386,13 +373,10 @@ static bool extractTo(const char* destDir, bool viaTmp, int totalFiles,
       remaining -= chunk;
     }
     out.close();
-    if (viaTmp) {
-      Fs::remove(dst); // rename requires the destination absent
-      if (!Fs::rename(tmp, dst)) {
-        tar.close();
-        setErr(errBuf, errLen, "extract: rename %s", e.name);
-        return false;
-      }
+    if (viaTmp && !Fs::replace(tmp, dst)) {
+      tar.close();
+      setErr(errBuf, errLen, "extract: rename %s", e.name);
+      return false;
     }
     if (!skipPadding(tar, e.size)) {
       tar.close();
@@ -412,7 +396,7 @@ bool applyTarWithBackup(FileProgressCb cb, char* errBuf, size_t errLen) {
 
   char bak[24];
   backupName(bak, sizeof(bak));
-  removeDirRecursive(bak); // leftover from an interrupted run
+  Fs::removeDirFlat(bak); // leftover from an interrupted run
   if (!Fs::rename(kWebDir, bak)) {
     setErr(errBuf, errLen, "backup rename failed");
     return false;
@@ -420,7 +404,7 @@ bool applyTarWithBackup(FileProgressCb cb, char* errBuf, size_t errLen) {
   Fs::mkdir(kWebDir);
   if (!extractTo(kWebDir, false, files, cb, errBuf, errLen)) {
     // Restore the exact old set: we are still running the old firmware.
-    removeDirRecursive(kWebDir);
+    Fs::removeDirFlat(kWebDir);
     Fs::rename(bak, kWebDir);
     Fs::remove(kStagingTar);
     return false;
@@ -468,7 +452,7 @@ bool applyTarInPlace(FileProgressCb cb, char* errBuf, size_t errLen) {
 void sweepStaleStaging() {
   Fs::remove(kStagingTar);
   char bak[32];
-  if (findBackupDir(bak, sizeof(bak))) removeDirRecursive(bak);
+  if (findBackupDir(bak, sizeof(bak))) Fs::removeDirFlat(bak);
 }
 
 void bootHeal() {
@@ -482,7 +466,7 @@ void bootHeal() {
     // The backup holds *this* version's assets: we were rolled back, or the
     // update tore before finalize. Restore the exact old set.
     printf("[assets] boot heal: restoring %s\n", bak);
-    removeDirRecursive(kWebDir);
+    Fs::removeDirFlat(kWebDir);
     Fs::rename(bak, kWebDir);
   }
   // A backup for a different version is deleted at onImageConfirmed(), not
@@ -496,7 +480,7 @@ void onImageConfirmed() {
     backupName(mine, sizeof(mine));
     if (strcmp(bak, mine) != 0) {
       printf("[assets] image confirmed - deleting %s\n", bak);
-      removeDirRecursive(bak);
+      Fs::removeDirFlat(bak);
     }
   }
   Fs::remove(kStagingTar);
