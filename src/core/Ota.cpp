@@ -123,6 +123,23 @@ static bool writerBegin(size_t sizeHint) {
       s_error = "no free OTA slot";
       return false;
     }
+    // esp_ota_begin REFUSES to start while the running image is
+    // PENDING_VERIFY (ESP_ERR_OTA_ROLLBACK_INVALID_STATE) — a constraint
+    // Arduino's Update.h did not have, so flashing within the 30 s before the
+    // #76 rollback guard confirms would fail outright. Found by flashing twice
+    // in a row; GhUpdate.cpp:171 already handles the same thing.
+    //
+    // Confirming here is honest rather than expedient: this code is running
+    // inside an HTTP request that the image itself accepted, so it demonstrably
+    // booted, joined the network and is serving. That is exactly the evidence
+    // the guard waits for.
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    esp_ota_img_states_t imgState;
+    if (esp_ota_get_state_partition(running, &imgState) == ESP_OK &&
+        imgState == ESP_OTA_IMG_PENDING_VERIFY) {
+      esp_ota_mark_app_valid_cancel_rollback();
+      AssetUpdate::onImageConfirmed(); // keep the asset-backup bookkeeping in step
+    }
     // Content-Length includes the multipart envelope, so it over-estimates the
     // image slightly — harmless, it only widens the erase. Clamp to the slot.
     size_t erase = sizeHint ? sizeHint : OTA_SIZE_UNKNOWN;
