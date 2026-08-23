@@ -78,6 +78,36 @@ static std::string detectLatestTag() {
   return doc["tag_name"].as<std::string>();
 }
 
+// ---- version comparison -----------------------------------------------------
+// Tags are "vX.Y.Z" with an optional "-suffix" for unreleased builds. A plain
+// string compare cannot answer "is there anything newer", which is the only
+// question /api/update/check is actually asking.
+struct Ver {
+  int major = -1, minor = 0, patch = 0;
+  bool pre = false; // has a "-suffix"
+  bool valid() const { return major >= 0; }
+};
+
+static Ver parseVer(const std::string& s) {
+  Ver v;
+  const char* p = s.c_str();
+  if (*p == 'v' || *p == 'V') ++p;
+  int n = 0;
+  if (sscanf(p, "%d.%d.%d%n", &v.major, &v.minor, &v.patch, &n) != 3) return Ver{};
+  v.pre = p[n] == '-';
+  return v;
+}
+
+// -1 / 0 / +1. Semver precedence: a pre-release sorts BEFORE the same X.Y.Z, so
+// 0.4.0-dev < 0.4.0 while still being greater than 0.3.3.
+static int cmpVer(const Ver& a, const Ver& b) {
+  if (a.major != b.major) return a.major < b.major ? -1 : 1;
+  if (a.minor != b.minor) return a.minor < b.minor ? -1 : 1;
+  if (a.patch != b.patch) return a.patch < b.patch ? -1 : 1;
+  if (a.pre != b.pre) return a.pre ? -1 : 1;
+  return 0;
+}
+
 static bool failOta(const char* msg) {
   Serial.printf("[ghupdate] failed: %s\n", msg);
   strlcpy(s_progress.errorMsg, msg, sizeof(s_progress.errorMsg));
@@ -253,9 +283,20 @@ void registerRoutes(PsychicHttpServer& server) {
     if (latest.empty())
       return res->send(503, "application/json", "{\"error\":\"could not reach GitHub releases\"}");
     const std::string current = std::string("v") + SMOLBASE_FW_VERSION;
-    const bool upToDate = (latest == current);
+    // upToDate means "no NEWER release exists" — NOT "the strings match".
+    // Equality was the old test, and it reported a device running something
+    // newer than the latest release as out of date, which made the UI offer a
+    // DOWNGRADE (and GhUpdate would happily flash it, assets included).
+    const Ver cur = parseVer(current);
+    const Ver lat = parseVer(latest);
+    const bool comparable = cur.valid() && lat.valid();
+    const bool ahead = comparable && cmpVer(cur, lat) > 0;
+    // Unparseable tags fall back to equality: conservative, and preserves the
+    // old behaviour for anything that is not vX.Y.Z.
+    const bool upToDate = comparable ? cmpVer(lat, cur) <= 0 : (latest == current);
     const std::string out = "{\"current\":\"" + current + "\",\"latest\":\"" + latest +
-                            "\",\"upToDate\":" + (upToDate ? "true" : "false") + "}";
+                            "\",\"upToDate\":" + (upToDate ? "true" : "false") +
+                            ",\"ahead\":" + (ahead ? "true" : "false") + "}";
     return res->send(200, "application/json", out.c_str());
   });
 

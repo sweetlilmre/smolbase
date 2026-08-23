@@ -479,7 +479,15 @@ function render() {
       const j = await r.json();
       setMsg(ghmsg, "");
       ghresult.hidden = false;
-      if (j.upToDate) {
+      if (j.ahead) {
+        // Running something newer than any release — a dev build. There is no
+        // release matching this tag, so an asset reinstall would 404, and
+        // offering j.latest would be a downgrade. No sensible action.
+        _ghTag = null;
+        ghavail.innerHTML = "Running an unreleased build (<b>" + esc(j.current) +
+          "</b>). Latest release is " + esc(j.latest) + ".";
+        ghupdate.hidden = true;
+      } else if (j.upToDate) {
         _ghTag = j.current; // same-tag POST = asset reinstall (no reboot)
         ghavail.textContent = "Already on the latest release (" + j.current + ").";
         ghupdate.textContent = "Reinstall assets";
