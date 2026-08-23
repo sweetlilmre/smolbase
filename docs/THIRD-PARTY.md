@@ -108,19 +108,25 @@ fixed point against our palette bank. Nothing was copied.
 
 ## Linked libraries
 
-Pinned in `platformio.ini`; licenses verified from the installed packages'
-manifests and LICENSE files (versions as of this writing).
+Pinned in `main/idf_component.yml` (and `components/lovyangfx/CMakeLists.txt`
+for LovyanGFX, which is not in the ESP component registry); licenses verified
+from the fetched packages' manifests and LICENSE files (versions as of this
+writing).
 
 | Library | Version | License | Copyright |
 | --- | --- | --- | --- |
 | [LovyanGFX](https://github.com/lovyan03/LovyanGFX) | 1.2.27 | FreeBSD (BSD-2-Clause); bundles BSD-licensed Adafruit-derived code (manifest: `MIT AND BSD-2-Clause`) | Copyright (c) 2020 lovyan03 |
 | [PsychicHttp](https://github.com/hoeken/PsychicHttp) | 3.1.2 | MIT | Copyright (c) 2024 Jeremy Poulter, Zachary Smith, and Mathieu Carbou |
 | [ArduinoJson](https://github.com/bblanchon/ArduinoJson) | 7.x | MIT | Copyright © 2014-2026, Benoit BLANCHON |
+| [esp_littlefs](https://github.com/joltwallet/esp_littlefs) | 1.22.x | MIT; bundles [littlefs](https://github.com/littlefs-project/littlefs) (BSD-3-Clause) | Copyright (c) 2020 Brian Pugh; littlefs © 2022 The littlefs authors, © 2017 Christopher Haster |
+| [esp-protocols/mdns](https://github.com/espressif/esp-protocols) | 1.11.x | Apache-2.0 | Copyright (c) Espressif Systems |
 
 ## Platform and framework
 
-The build targets the [pioarduino](https://github.com/pioarduino/platform-espressif32)
-platform: [arduino-esp32](https://github.com/espressif/arduino-esp32)
-(LGPL-2.1) over [ESP-IDF](https://github.com/espressif/esp-idf) (Apache-2.0).
-These are toolchain/framework dependencies fetched at build time, not
-distributed in this repository.
+The build targets [ESP-IDF](https://github.com/espressif/esp-idf) v6.0.x
+(Apache-2.0) directly — there is no Arduino layer
+([ADR 0006](adr/0006-native-esp-idf-framework.md)). ESP-IDF bundles, among
+others, [Mbed TLS](https://github.com/Mbed-TLS/mbedtls) and TF-PSA-Crypto
+(Apache-2.0) and [lwIP](https://savannah.nongnu.org/projects/lwip/)
+(BSD-3-Clause). The SDK and its toolchain are build-time dependencies fetched
+by the developer, not distributed in this repository.
