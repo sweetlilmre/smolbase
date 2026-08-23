@@ -1,5 +1,6 @@
 #include "Events.h"
 #include <Arduino.h>
+#include <cstdio>
 
 namespace Events {
 
@@ -13,7 +14,7 @@ bool post(SysEvent e) {
   // A dropped event is close to unrecoverable (a lost NetworkUp strands the
   // portal); with 16 slots drained every ~2 ms it should never happen — if it
   // does, the log is the only witness.
-  if (!ok) Serial.printf("[events] queue full, dropped event %d\n", (int)e);
+  if (!ok) printf("[events] queue full, dropped event %d\n", (int)e);
   return ok;
 }
 

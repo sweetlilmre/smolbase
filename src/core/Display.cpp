@@ -18,7 +18,9 @@ public:
   SmolPanel() {
     {
       auto cfg = _bus.config();
-      cfg.spi_host = VSPI_HOST;
+      // SPI3_HOST, not VSPI_HOST: the VSPI_* aliases are gone in IDF 6 and this
+      // is the same peripheral on classic ESP32. Valid on 5.5.5 too.
+      cfg.spi_host = SPI3_HOST;
       cfg.spi_mode = 3; // CS tied to GND: ST7789 samples on a mode-3 clock
       cfg.freq_write = SMOLBASE_SPI_HZ;
       cfg.freq_read = 16000000; // unused (no MISO), harmless

@@ -15,6 +15,7 @@
 #include "hex_color.h"
 #include <Arduino.h>
 #include <ctime>
+#include <cstdio>
 
 namespace {
 
@@ -237,7 +238,7 @@ void DemoScreen::tick(lgfx::LGFX_Device&) {
   static uint32_t lastLog = 0;
   if (t3 - lastLog > 1000000) {
     lastLog = t3;
-    Serial.printf("[demo] %s: effect %lu us, overlay %lu us, present %lu us\n",
+    printf("[demo] %s: effect %lu us, overlay %lu us, present %lu us\n",
                   ROSTER[idx].label, t1 - t0, t2 - t1, t3 - t2);
   }
 #else

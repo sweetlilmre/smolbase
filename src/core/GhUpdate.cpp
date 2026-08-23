@@ -33,6 +33,7 @@
 #include <esp_ota_ops.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <cstdio>
 
 static const char* const GH_REPO = "sweetlilmre/smolbase";
 
@@ -109,7 +110,7 @@ static int cmpVer(const Ver& a, const Ver& b) {
 }
 
 static bool failOta(const char* msg) {
-  Serial.printf("[ghupdate] failed: %s\n", msg);
+  printf("[ghupdate] failed: %s\n", msg);
   strlcpy(s_progress.errorMsg, msg, sizeof(s_progress.errorMsg));
   s_progress.state = Progress::Error;
   s_inFlight = false;
@@ -176,7 +177,7 @@ static bool downloadImpl(const char* tag) {
     char url[160];
     snprintf(url, sizeof(url), "https://github.com/%s/releases/download/%s/%s-%s.bin",
              GH_REPO, tag, GH_FW_PREFIX, tag);
-    Serial.printf("[ghupdate] pulling %s (heap=%u)\n", url, Platform::freeHeap());
+    printf("[ghupdate] pulling %s (heap=%u)\n", url, Platform::freeHeap());
 
     esp_http_client_config_t http = {};
     http.url               = url;
@@ -239,7 +240,7 @@ static bool downloadImpl(const char* tag) {
   if (sameVer) {
     if (!AssetUpdate::applyTarInPlace(assetProgress, m, sizeof(m)))
       return failOta(m);
-    Serial.println("[ghupdate] assets reinstalled");
+    printf("[ghupdate] assets reinstalled\n");
     return true; // no reboot: firmware unchanged
   }
 
@@ -256,7 +257,7 @@ static bool downloadImpl(const char* tag) {
     return failOta(m);
   }
 
-  Serial.printf("[ghupdate] flashed %u bytes + %d asset files\n",
+  printf("[ghupdate] flashed %u bytes + %d asset files\n",
                 (unsigned)s_progress.bytesWritten, s_progress.filesDone);
   return true;
 }
@@ -266,7 +267,7 @@ static void downloadTask(void* arg) {
     s_progress.state = Progress::Done;
     s_inFlight = false;
     if (s_rebootAfter) {
-      Serial.println("[ghupdate] done - restarting");
+      printf("[ghupdate] done - restarting\n");
       vTaskDelay(pdMS_TO_TICKS(3000)); // let the settings page poll the final "done"
       Net::restartToApply();
     }

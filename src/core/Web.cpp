@@ -28,6 +28,7 @@
 #include <LittleFS.h>
 #include <PsychicHttp.h>
 #include <nvs_flash.h>
+#include <cstdio>
 
 namespace Web {
 
@@ -114,7 +115,7 @@ void start() {
   // Idempotent (start() returns ESP_OK when already running). Called from the
   // NetworkUp/ApModeEntered handlers — the moments a netif provably has an IP.
   esp_err_t err = httpServer.start();
-  if (err != ESP_OK) Serial.printf("[web] server start failed: %d\n", (int)err);
+  if (err != ESP_OK) printf("[web] server start failed: %d\n", (int)err);
 }
 
 void begin(App& app) {

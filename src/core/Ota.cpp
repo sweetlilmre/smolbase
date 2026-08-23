@@ -32,6 +32,7 @@
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 #include <spi_flash_mmap.h>
+#include <cstdio>
 
 // Boot-loop guard (ticket #76): the arduino core's initArduino() normally
 // confirms a PENDING_VERIFY image immediately at boot. Returning true here
@@ -75,7 +76,7 @@ void tickRollbackGuard() {
     // the correct outcome for a firmware that cannot be talked to.
     if (!Net::isUp() && !Net::inApMode()) return;
     esp_ota_mark_app_valid_cancel_rollback();
-    Serial.println("[ota] image confirmed - device reachable, rollback armed off");
+    printf("[ota] image confirmed - device reachable, rollback armed off\n");
   }
 
   done = true;
@@ -219,7 +220,7 @@ static bool writerRunning() { return s_running; }
 static void fail(bool abortUpdate) {
   // s_error was set by whichever writer call failed; only fill in a fallback.
   if (s_error.empty()) s_error = "write failed";
-  Serial.printf("[ota] %s\n", s_error.c_str());
+  printf("[ota] %s\n", s_error.c_str());
   if (abortUpdate) writerAbort();
   s_outcome = Outcome::Failed;
   // fs-target failures keep the latch: LittleFS is unmounted, so the device
@@ -250,7 +251,7 @@ static esp_err_t onUploadChunk(PsychicRequest* req, const String& filename,
     // string is the documented spelling.
     PsychicWebParameter* p = req->getParam("target");
     s_isFs = (p != nullptr && p->value() == "fs");
-    Serial.printf("[ota] %s update starting (%s)\n",
+    printf("[ota] %s update starting (%s)\n",
                   s_isFs ? "filesystem" : "firmware", filename.c_str());
 
     if (s_isFs) {
@@ -301,7 +302,7 @@ static esp_err_t onUploadChunk(PsychicRequest* req, const String& filename,
 
   if (last) {
     if (writerEnd()) {
-      Serial.printf("[ota] update complete: %u bytes\n", (unsigned)s_progress);
+      printf("[ota] update complete: %u bytes\n", (unsigned)s_progress);
       s_outcome = Outcome::Ok; // s_inFlight stays set: restart is imminent
     } else {
       fail(false);
@@ -365,10 +366,10 @@ static esp_err_t onUploadDone(PsychicRequest*, PsychicResponse* res) {
 static void onSocketClose(PsychicClient* client) {
   if (!s_inFlight || client == nullptr || client->socket() != s_socket) return;
   if (s_outcome == Outcome::Ok) {
-    Serial.println("[ota] client gone after successful update; restarting");
+    printf("[ota] client gone after successful update; restarting\n");
     Net::restartToApply(); // no return
   }
-  Serial.println("[ota] upload aborted (client disconnect / parse error)");
+  printf("[ota] upload aborted (client disconnect / parse error)\n");
   if (writerRunning()) writerAbort();
   s_inFlight = false;
   s_outcome = Outcome::None;

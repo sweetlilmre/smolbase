@@ -7,6 +7,7 @@
 #include <Arduino.h>
 #include <atomic>
 #include <esp_sntp.h>
+#include <cstdio>
 
 namespace Clock {
 
@@ -96,7 +97,7 @@ void loop() {
   }
   if (now - waitMs < SMOLBASE_SNTP_REKICK_MS) return;
   waitMs = now;
-  Serial.println("[clock] no NTP sync within the re-kick window; restarting SNTP");
+  printf("[clock] no NTP sync within the re-kick window; restarting SNTP\n");
   kick();
 }
 

@@ -2,6 +2,7 @@
 #include "Platform.h"
 #include "smolbase_config.h"
 #include <Arduino.h>
+#include <cstdio>
 
 namespace AppHost {
 
@@ -18,7 +19,7 @@ void loop() {
   app().loop();
   uint32_t dt = Platform::millis() - t0;
   if (dt > SMOLBASE_LOOP_BUDGET_MS)
-    Serial.printf("[smolbase] app.loop() took %lu ms (budget %d ms)\n", dt, SMOLBASE_LOOP_BUDGET_MS);
+    printf("[smolbase] app.loop() took %lu ms (budget %d ms)\n", dt, SMOLBASE_LOOP_BUDGET_MS);
 #else
   app().loop();
 #endif

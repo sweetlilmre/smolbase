@@ -14,6 +14,7 @@
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
 #include <mbedtls/sha256.h>
+#include <cstdio>
 
 static const char* const GH_REPO = "sweetlilmre/smolbase";
 
@@ -459,7 +460,7 @@ void bootHeal() {
   if (strcmp(bak, mine) == 0) {
     // The backup holds *this* version's assets: we were rolled back, or the
     // update tore before finalize. Restore the exact old set.
-    Serial.printf("[assets] boot heal: restoring %s\n", bak);
+    printf("[assets] boot heal: restoring %s\n", bak);
     removeDirRecursive(kWebDir);
     Fs::rename(bak, kWebDir);
   }
@@ -473,7 +474,7 @@ void onImageConfirmed() {
   if (findBackupDir(bak, sizeof(bak))) {
     backupName(mine, sizeof(mine));
     if (strcmp(bak, mine) != 0) {
-      Serial.printf("[assets] image confirmed - deleting %s\n", bak);
+      printf("[assets] image confirmed - deleting %s\n", bak);
       removeDirRecursive(bak);
     }
   }
