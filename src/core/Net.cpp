@@ -3,7 +3,7 @@
 #include "Events.h"
 #include "Platform.h"
 #include "smolbase_config.h"
-#include <ESPmDNS.h>
+#include <mdns.h>
 #include <nvs.h>
 #include <esp_mac.h>
 #include <WiFi.h>
@@ -170,8 +170,32 @@ static std::string computeName() {
 }
 
 // mDNS lifecycle state — owned by the main loop (loop()/applyHostname() only).
+// Arduino's ESPmDNS was a wrapper over the espressif/mdns component; these are
+// the same calls it made, minus the global object.
 static bool mdnsUp = false;
 static uint32_t mdnsLastTry = 0;
+
+// mdns_free() is safe when nothing was started, which the old MDNS.end() call
+// relied on to clear a half-dead responder.
+static void mdnsStop() {
+  mdns_free();
+  mdnsUp = false;
+}
+
+static bool mdnsStart(const char* host) {
+  if (mdns_init() != ESP_OK) return false;
+  if (mdns_hostname_set(host) != ESP_OK) {
+    mdns_free();
+    return false;
+  }
+  // Instance name is what shows up in service browsers; hostname is fine.
+  mdns_instance_name_set(host);
+  if (mdns_service_add(nullptr, "_http", "_tcp", 80, nullptr, 0) != ESP_OK) {
+    mdns_free();
+    return false;
+  }
+  return true;
+}
 
 void applyHostname() {
   // Called on SettingsChanged (main loop). A changed name re-registers mDNS
@@ -181,10 +205,7 @@ void applyHostname() {
   if (next == name) return;
   name = next;
   WiFi.setHostname(name.c_str());
-  if (mdnsUp) {
-    MDNS.end();
-    mdnsUp = false; // loop() re-registers under the new name within ~1 s
-  }
+  if (mdnsUp) mdnsStop(); // loop() re-registers under the new name within ~1 s
 }
 
 void begin() {
@@ -224,17 +245,11 @@ void loop() {
   // mDNS lifecycle (main loop only): register once up, tear down on a drop so
   // the reconnect path re-registers cleanly.
   bool up = isUp();
-  if (mdnsUp && !up) {
-    MDNS.end();
-    mdnsUp = false;
-  }
+  if (mdnsUp && !up) mdnsStop();
   if (!mdnsUp && up && Platform::millis() - mdnsLastTry > 1000) {
     mdnsLastTry = Platform::millis();
-    MDNS.end(); // safe when not started; clears any half-dead responder
-    if (MDNS.begin(name.c_str())) {
-      MDNS.addService("http", "tcp", 80);
-      mdnsUp = true;
-    }
+    mdnsStop(); // clears any half-dead responder before retrying
+    mdnsUp = mdnsStart(name.c_str());
   }
 }
 
