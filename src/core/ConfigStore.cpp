@@ -1,5 +1,6 @@
 #include "ConfigStore.h"
 #include "Events.h"
+#include "Fs.h"
 #include "smolbase_config.h"
 #include <ArduinoJson.h>
 #include <LittleFS.h>
@@ -282,12 +283,18 @@ bool begin() {
   registerSystemSettings();
   // Partition label is "spiffs" (historical, from the stock flash layout) but the
   // filesystem is LittleFS.
-  if (!LittleFS.begin(true, "/littlefs", 10, "spiffs")) return false;
-  File f = LittleFS.open(SMOLBASE_SETTINGS_PATH, "r");
-  if (f) {
-    deserializeJson(doc, f); // parse failure leaves doc empty — defaults apply
-    f.close();
-  }
+  //
+  // The MOUNT stays on the Arduino LittleFS object for now, even though all
+  // file I/O below is POSIX: PsychicHttp's Arduino-mode serveStatic() in
+  // Web.cpp takes an fs::FS& and there is no way to hand it a bare VFS mount.
+  // Phase 7 replaces this with esp_vfs_littlefs_register once PsychicHttp
+  // switches to native mode. Both APIs address the same mount, which is
+  // exactly how PsychicHttp's own native-mode psychic::FS works.
+  if (!LittleFS.begin(true, SMOLBASE_FS_MOUNT, 10, "spiffs")) return false;
+  Fs::File f(SMOLBASE_SETTINGS_FSPATH, "r");
+  // Missing file is the normal first-boot state; a parse failure leaves doc
+  // empty and the in-code defaults apply. Closes by scope.
+  if (f) deserializeJson(doc, f);
   return true;
 }
 
@@ -340,20 +347,22 @@ void setBool(const char* key, bool v) { Guard g; doc[key] = v; }
 bool save() {
   {
     Guard g;
-    LittleFS.mkdir("/config");
-    File f = LittleFS.open(SMOLBASE_SETTINGS_PATH ".tmp", "w");
-    if (!f) return false;
-    size_t written = serializeJson(doc, f);
-    f.close();
+    Fs::mkdir(SMOLBASE_FS_MOUNT "/config");
+    size_t written = 0;
+    {
+      Fs::File f(SMOLBASE_SETTINGS_FSPATH ".tmp", "w");
+      if (!f) return false;
+      written = serializeJson(doc, f);
+    } // closed here, by scope, BEFORE the rename below
     if (written == 0) { // out of space / write error: leave the old file intact
-      LittleFS.remove(SMOLBASE_SETTINGS_PATH ".tmp");
+      Fs::remove(SMOLBASE_SETTINGS_FSPATH ".tmp");
       return false;
     }
     // littlefs rename atomically replaces an existing destination, so the settings
     // file is never absent. Fall back to remove+rename in case the VFS refuses.
-    if (!LittleFS.rename(SMOLBASE_SETTINGS_PATH ".tmp", SMOLBASE_SETTINGS_PATH)) {
-      LittleFS.remove(SMOLBASE_SETTINGS_PATH);
-      if (!LittleFS.rename(SMOLBASE_SETTINGS_PATH ".tmp", SMOLBASE_SETTINGS_PATH)) return false;
+    if (!Fs::rename(SMOLBASE_SETTINGS_FSPATH ".tmp", SMOLBASE_SETTINGS_FSPATH)) {
+      Fs::remove(SMOLBASE_SETTINGS_FSPATH);
+      if (!Fs::rename(SMOLBASE_SETTINGS_FSPATH ".tmp", SMOLBASE_SETTINGS_FSPATH)) return false;
     }
   }
   Events::post(SysEvent::SettingsChanged);

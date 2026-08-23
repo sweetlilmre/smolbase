@@ -68,5 +68,19 @@
 #endif
 
 // ---- Paths ----
+// Two spellings, deliberately, for as long as the Arduino build lasts:
+//
+//   *_PATH / *_DIR  volume-relative, what Arduino's LittleFS object and
+//                   PsychicHttp's Arduino-mode serveStatic() expect.
+//   *_FSPATH        absolute, what POSIX (core/Fs.h) needs.
+//
+// SMOLBASE_FS_MOUNT is where the volume is mounted. Phase 7 of the IDF 6
+// migration mounts LittleFS at the root instead (verified working by the phase
+// 0 spike, check 12), at which point this becomes "" and both spellings
+// collapse to one. Until then, use the _FSPATH forms with core/Fs and the
+// bare forms only where an Arduino/PsychicHttp API demands them.
+#define SMOLBASE_FS_MOUNT "/littlefs"
 #define SMOLBASE_SETTINGS_PATH "/config/settings.json"
+#define SMOLBASE_SETTINGS_FSPATH SMOLBASE_FS_MOUNT SMOLBASE_SETTINGS_PATH
 #define SMOLBASE_WWW_DIR "/w" // gzip-only static assets packed from html/
+#define SMOLBASE_WWW_FSPATH SMOLBASE_FS_MOUNT SMOLBASE_WWW_DIR
