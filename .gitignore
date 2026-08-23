@@ -7,6 +7,9 @@ compile_commands.json
 
 # ESP-IDF build output. One directory per App (see CMakeLists.txt).
 build/
+# ccache, when CCACHE_DIR is redirected here (CI does; locally it defaults to
+# the user cache dir and never appears in the tree).
+.ccache/
 # Dead PlatformIO build cache from before the IDF 6 migration. Still ignored so
 # a checkout that predates it stays quiet; safe to delete.
 .pio/

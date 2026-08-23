@@ -19,19 +19,62 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Everything the build fetches from the network, cached. Without these
+      # every leg re-resolves the component registry, re-clones LovyanGFX and
+      # rebuilds the littlefs-python venv before it compiles a single file.
+      #
+      # Keys are content-addressed on what actually determines the contents, so
+      # a stale entry is impossible rather than merely unlikely:
+      #   managed_components  <- dependencies.lock (the resolved dependency set)
+      #   lovyangfx/upstream  <- the CMakeLists that pins the tag
+      - name: Cache managed components
+        uses: actions/cache@v6
+        with:
+          path: managed_components
+          key: idf-components-${{ hashFiles('dependencies.lock') }}
+
+      - name: Cache LovyanGFX checkout
+        uses: actions/cache@v6
+        with:
+          path: components/lovyangfx/upstream
+          key: lovyangfx-${{ hashFiles('components/lovyangfx/CMakeLists.txt') }}
+
+      # ccache is enabled by default in the IDF build, so this is the one that
+      # actually moves the wall clock on a warm run. Per-App because each App
+      # compiles a different source set; restore-keys lets a new commit start
+      # from the previous run's cache instead of cold. CCACHE_DIR is redirected
+      # under the workspace because that is what the container has mounted.
+      - name: Cache ccache
+        uses: actions/cache@v6
+        with:
+          path: .ccache
+          key: ccache-${{ matrix.app }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ matrix.app }}-
+
       # Pinned to the IDF version the migration was verified on. v6.0.2 needs
       # the pass-through touch filter in Touch.cpp (upstream RAW-read guard bug
       # espressif/esp-idf#18811, fixed after this tag) — that workaround is
       # valid on fixed versions too, so moving this pin is safe but deliberate.
       - name: Build ${{ matrix.app }}
         uses: espressif/esp-idf-ci-action@v1
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+          CCACHE_MAXSIZE: 400M
+          # Compiler paths differ between container runs; hash the preprocessed
+          # source instead of the command line so the cache survives that.
+          CCACHE_COMPILERCHECK: content
+          CCACHE_BASEDIR: ${{ github.workspace }}
         with:
           esp_idf_version: v6.0.2
           target: esp32
           # The App is selected with -D, and the assets + filesystem image come
           # from the smolbase_assets / littlefs targets the root CMakeLists wires
-          # into the default build.
-          command: idf.py -B build/${{ matrix.app }} -D SMOLBASE_APP=${{ matrix.app }} build
+          # into the default build. ccache -s at the end reports the hit rate, so
+          # a cache that silently stops working is visible in the log.
+          command: >-
+            idf.py -B build/${{ matrix.app }} -D SMOLBASE_APP=${{ matrix.app }} build
+            && ccache -s
 
       # Deterministic ustar (docs/research/assets-tar-mechanics.md): stable bytes
       # -> stable GitHub asset digest across rebuilds, which AssetUpdate verifies.
