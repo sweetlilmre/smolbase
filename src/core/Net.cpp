@@ -4,7 +4,7 @@
 #include "Platform.h"
 #include "smolbase_config.h"
 #include <ESPmDNS.h>
-#include <Preferences.h>
+#include <nvs.h>
 #include <esp_mac.h>
 #include <WiFi.h>
 #include <algorithm>
@@ -53,13 +53,34 @@ static std::string sanitizeHostname(const std::string& raw) {
   return out;
 }
 
+// Credentials live in this NVS namespace. Arduino's Preferences was a thin
+// wrapper over exactly these calls, and the phase 0 spike confirmed ON HARDWARE
+// that strings written by Preferences::putString read back through
+// nvs_get_str — so fielded devices keep their credentials across this change.
+// Secrets.cpp already used the raw API; this matches it.
+//
+// NOTE for phase 7: nothing here calls nvs_flash_init(). Arduino's
+// initArduino() does it at startup, so both this and Secrets.cpp have been
+// relying on that. app_main() must call it explicitly once Arduino is gone.
+static constexpr const char* NVS_NS = "smolbase";
+
+// Reads a string value, leaving `out` untouched when the key is absent.
+static bool nvsGetStr(nvs_handle_t h, const char* key, std::string& out) {
+  size_t len = 0; // includes the NUL
+  if (nvs_get_str(h, key, nullptr, &len) != ESP_OK || len == 0) return false;
+  std::vector<char> buf(len);
+  if (nvs_get_str(h, key, buf.data(), &len) != ESP_OK) return false;
+  out.assign(buf.data());
+  return true;
+}
+
 static void loadCreds(std::string& ssid, std::string& pass) {
-  Preferences p;
-  p.begin("smolbase", true);
-  // Preferences is Arduino; it converts to nvs_* in phase 5.
-  ssid = p.getString("ssid", "").c_str();
-  pass = p.getString("pass", "").c_str();
-  p.end();
+  nvs_handle_t h;
+  // Namespace absent is the normal first-boot state, not an error.
+  if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return;
+  nvsGetStr(h, "ssid", ssid);
+  nvsGetStr(h, "pass", pass);
+  nvs_close(h);
 }
 
 bool hasCredentials() {
@@ -69,22 +90,24 @@ bool hasCredentials() {
 }
 
 bool saveCredentials(const std::string& ssid, const std::string& pass) {
-  // putString returns bytes written; 0 = failure (e.g. NVS full of the old
-  // firmware's namespaces). Surfacing this matters: a silent failure here looks
-  // like an unexplained provisioning loop to the user.
-  Preferences p;
-  if (!p.begin("smolbase", false)) return false;
-  bool ok = p.putString("ssid", ssid.c_str()) == ssid.length() &&
-            p.putString("pass", pass.c_str()) == pass.length();
-  p.end();
+  // A write failure here (e.g. NVS full of an old firmware's namespaces) must
+  // surface: silently failing looks like an unexplained provisioning loop to
+  // the user.
+  nvs_handle_t h;
+  if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return false;
+  bool ok = nvs_set_str(h, "ssid", ssid.c_str()) == ESP_OK &&
+            nvs_set_str(h, "pass", pass.c_str()) == ESP_OK &&
+            nvs_commit(h) == ESP_OK;
+  nvs_close(h);
   return ok;
 }
 
 void clearCredentials() {
-  Preferences p;
-  p.begin("smolbase", false);
-  p.clear();
-  p.end();
+  nvs_handle_t h;
+  if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+  nvs_erase_all(h); // Preferences::clear() erased the namespace, same as this
+  nvs_commit(h);
+  nvs_close(h);
 }
 
 void restartToApply() {
