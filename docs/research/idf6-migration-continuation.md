@@ -45,7 +45,7 @@ Both heap figures come from the same `/api/status` fields computed by the same `
 
 ### In the phase 9 verification pass
 
-- **mDNS.** Verified by querying the device directly rather than through this host's resolver (`scripts`-free probe, both the QU-unicast and multicast-on-5353 paths): it answers `A smolbase-2e00.local -> 10.0.0.32`, `PTR _http._tcp.local`, and `SRV ...:80`. Service discovery works, not just name resolution. The old note claiming this host has no working `.local` resolver was wrong — `Resolve-DnsName` and `ping` resolve it too.
+- **mDNS.** Verified by querying the device directly rather than through this host's resolver (`uv run scripts/mdns_probe.py smolbase-2e00 10.0.0.32`, both the QU-unicast and multicast-on-5353 paths): it answers `A smolbase-2e00.local -> 10.0.0.32`, `PTR _http._tcp.local`, and `SRV ...:80`. Service discovery works, not just name resolution. The old note claiming this host has no working `.local` resolver was wrong — `Resolve-DnsName` and `ping` resolve it too.
 - **fs-OTA with an image built by `littlefs_create_partition_image`** — after fixing a bug this test existed to find; see below. All six assets on the reflashed volume are byte-identical to the built image, gzip fallback included.
 - **`/api/fs` single-file upload**, which is the live exercise of `Fs::mkdirParents` and the new `Fs::replace`.
 - **`App::statusJson` with a real App's state**: the weather App reports a completed keyless fetch (`geoCode` 200, `meteoCode` 200, coordinates harvested) with its fields copied under the fetch mux from the httpd task.

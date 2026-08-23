@@ -109,6 +109,7 @@ src/core/       plumbing (network, web, config, display, touch, OTA) — read, d
 include/        smolbase_config.h: pins, framebuffer mode, timeouts, budgets
 html/           web assets (portal, settings UI, zones.json) — packed as gzip to LittleFS
 scripts/        pack_fs.py: assembles data-<app>/ from html/ at build time
+                mdns_probe.py: ask a device's mDNS responder directly
 docs/           consumer guides + ADRs
 partitions.csv  8 MB layout: nvs / otadata / app0+app1 / littlefs
 CMakeLists.txt  the build: App selection, compile definitions, fs image
