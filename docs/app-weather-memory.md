@@ -68,8 +68,11 @@ missing default-bundle attach.
   they are the first to die.
 
 Rule of thumb from the flight: **≥55 KB free with a ≥34 KB largest block at
-handshake start** is the practical gate. `/api/debug/weather` reports
-`heapFree` / `heapLargest` / `heapMinEver` for exactly this check.
+handshake start** is the practical gate. `GET /api/status` reports
+`heap.free8Bit` / `heap.largestBlock` / `heap.minFree` for exactly this check —
+one set of figures for the whole device, all through `Platform::`. (This used to
+be `/api/debug/weather` reporting its own `heapFree` / `heapLargest` /
+`heapMinEver`, on rulers that disagreed with the core's by ~52 KB.)
 
 ## What the weather app holds (steady state)
 
@@ -89,7 +92,7 @@ out: lwIP/WiFi buffer growth after first TLS use, mbedTLS/esp-tls static
 state initialized on first handshake, PsychicHttp per-connection growth from
 the debug endpoints, heap fragmentation overhead being miscounted as usage.
 This is the core question for the follow-up ticket — measure, don't guess:
-the flight's probes (per-stage largest-block snapshots, `heapMinEver`,
+the flight's probes (per-stage largest-block snapshots, min-ever free heap,
 stack high-water) took minutes to add and settled arguments the theory
 never would have.
 

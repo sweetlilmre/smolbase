@@ -7,7 +7,7 @@
 #include "../core/Display.h"
 #include "../core/Secrets.h"
 #include "WeatherData.h"
-#include "WeatherDebug.h"
+#include "WeatherStatus.h"
 #include "WeatherKeys.h"
 #include "WeatherScreen.h"
 
@@ -84,7 +84,7 @@ public:
 
   // Lands in the "app" object of GET /api/status.
   void statusJson(JsonObject out) override {
-    WeatherDebug::json(out); // core-0-safe: snapshots under the fetch mux (#99)
+    WeatherStatus::json(out); // core-0-safe: snapshots under the fetch mux (#99)
   }
 
   void loop() override {

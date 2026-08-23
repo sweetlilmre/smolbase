@@ -50,7 +50,7 @@ const Reading* takeChanged();
 void forceRefresh();      // tap, or a fetch-relevant settings save
 void onSettingsChanged(); // detects a city change: new geocode + refetch
 
-// The debug surface lives in WeatherDebug.h (#99) — the one consumer
+// The status surface lives in WeatherStatus.h (#99) — the one consumer
 // allowed off the main loop, and the reason it is not declared here.
 
 } // namespace WeatherData
