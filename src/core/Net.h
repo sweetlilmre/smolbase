@@ -16,6 +16,12 @@ bool inApMode();
 std::string ip(); // dotted-quad STA IP, or the AP IP in AP mode
 std::string deviceName(); // effective hostname: "hostname" setting or smolbase-XXXX
 void applyHostname(); // re-apply after a settings change (re-registers mDNS live)
+// True once some netif is up AND holding a routable address. This is the exact
+// precondition PsychicHttp's start() enforces (PsychicHttpServer::isConnected),
+// exposed so Web::loop() can test it instead of calling start() and reading the
+// failure — start() logs at ERROR level, and polling it printed eighteen
+// "Server start failed" lines on a healthy boot.
+bool hasUsableNetif();
 int32_t rssi();      // STA link RSSI in dBm; 0 when not connected
 std::string ssid();  // joined network name; "" when not connected
 

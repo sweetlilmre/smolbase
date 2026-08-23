@@ -134,6 +134,12 @@ void loop() {
   const uint32_t now = Platform::millis();
   if (s_lastTryMs && now - s_lastTryMs < kStartRetryMs) return;
   s_lastTryMs = now;
+  // Test the precondition rather than calling start() and reading the failure:
+  // PsychicHttp logs at ERROR level when no netif is up, so polling start()
+  // printed eighteen "Server start failed - no network interface available."
+  // lines on a healthy boot, which is exactly the kind of noise that trains
+  // people to ignore ERROR lines.
+  if (!Net::hasUsableNetif()) return;
   start();
 }
 

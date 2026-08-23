@@ -56,6 +56,21 @@ std::string ip() {
   return ipToString(staIp.load());
 }
 
+// Mirrors PsychicHttp's _netif_is_connected: up, plus an address that is
+// neither unset nor loopback. Deliberately the same test rather than an
+// approximation of it — Web::loop() uses this to decide when start() will
+// succeed, so a looser test would just move the failed call somewhere quieter.
+static bool netifUsable(esp_netif_t* n) {
+  if (!n || !esp_netif_is_netif_up(n)) return false;
+  esp_netif_ip_info_t info = {};
+  if (esp_netif_get_ip_info(n, &info) != ESP_OK) return false;
+  return info.ip.addr != 0 && (info.ip.addr & 0xFF) != 127;
+}
+
+// Only these two exist in this firmware, both created up front by wifiInit(),
+// so there is no need to walk the global netif list.
+bool hasUsableNetif() { return netifUsable(staNetif) || netifUsable(apNetif); }
+
 // esp_wifi_sta_get_ap_info fails unless the link is actually up, which is the
 // same condition the old WiFi.RSSI()/WiFi.SSID() guards enforced.
 static bool apInfo(wifi_ap_record_t& out) {
