@@ -1,9 +1,67 @@
 # mbedTLS 4 vs 3 TLS performance — claims, evidence, and a spike to test them
 
-**Written:** 2026-08-24, to be executed as a spike.
+**Written:** 2026-08-24, as a spike plan. **Updated:** 2026-08-24, after building the harness. **Status: harness built and green on both SDKs; nothing measured yet.**
 **Why this exists:** during the IDF 6 migration I found that a TLS handshake cost 8.49 s where the arduino-esp32 build did the same request in 4.12 s, and I fixed it back to parity (4.21 s) by turning the RSA/MPI accelerator **off** and enabling fixed-point ECP. The *measurements* are solid. The *explanation* I gave for them was largely inference, and part of it is already falsified. This document separates the two and specifies an experiment that can settle it.
 
 **Read this first if you only read one thing:** the config matrix in §2 is trustworthy and reproducible. The causal story in §3 is not established. Do not repeat my mistake of treating a plausible mechanism as a found one.
+
+**Picking this up with no context?** §0 is the whole handover: what exists, what to type, and what the numbers mean. §1–§5 are the background you can read later; §6 is the design.
+
+---
+
+## 0. State, and how to continue from nothing
+
+**Where it stands.** The harness is built. `spike/mbedtls-perf/` compiles the same source under both SDKs, all eight configurations build warning-clean, and every generated `sdkconfig` has been asserted to hold the lever it claims. **Nothing has been flashed and no measurement exists.** Committed as `6f47086` on branch `idf6-migration`. There is no half-finished state to untangle; the next action is a flash.
+
+### Environment
+
+| | |
+|---|---|
+| Repo | `D:\source\smolbase`, branch `idf6-migration`. Harness at `spike/mbedtls-perf/` — it has [its own README](../../spike/mbedtls-perf/README.md), which is the operational detail; this section is the orientation. |
+| ESP-IDF 6.0.2 | `~/esp/esp-idf` → mbedTLS **4.1.0**. `& $HOME\esp\esp-idf\export.ps1` |
+| ESP-IDF 5.5.5 | `~/esp/esp-idf-v5.5` → mbedTLS **3.6.6**. `& $HOME\esp\esp-idf-v5.5\export.ps1`. Installed for this spike; toolchain shares `~/.espressif` with 6.0.2's. |
+| Device | ESP32-D0WD-V3, serial on **COM5** with RTS auto-reset wiring. |
+| Sources to read | 3.6.6 at `~/esp/esp-idf-v5.5/components/mbedtls/mbedtls/`, 4.1.0 at `~/esp/esp-idf/components/mbedtls/mbedtls/` (crypto under `tf-psa-crypto/`). |
+
+Only one SDK can be active per shell, and `export.ps1` is not idempotent across versions — use a fresh shell to switch rather than sourcing both.
+
+### Flashing this spike destroys the device's firmware — read before the first flash
+
+It writes its own bootloader and its own default `single_app` partition table, so **the smolbase firmware, the custom layout from `partitions.csv`, and the NVS holding the WiFi credentials all go.** This is expected and fine; it is also not reversible by re-flashing the app alone. Recovery, when the measurements are done:
+
+```
+& $HOME\esp\esp-idf\export.ps1
+cd D:\source\smolbase
+idf.py '@smolbase.args' -p COM5 -b 460800 flash    # bootloader + partitions + app + fs
+```
+
+The filesystem image rides along because `littlefs_create_partition_image` is declared `FLASH_IN_PROJECT`. The device then needs re-provisioning through the captive portal, by hand, on a phone.
+
+`run.ps1` does nothing destructive without `-Flash`, which is why `-Flash` is not the default.
+
+### What to actually type
+
+One run, the highest-value one first — mbedTLS 3.6.6 with the accelerator **off**, the cell §5.2 identifies as the single most valuable measurement in this document and the one the precompiled Arduino libraries made unreachable:
+
+```
+& $HOME\esp\esp-idf-v5.5\export.ps1
+cd D:\source\smolbase\spike\mbedtls-perf
+.\run.ps1 -Runs idf5-mpi-off -Flash
+```
+
+Then the other three `idf5-*` in the same shell, and the four `idf6-*` in a fresh shell with the 6.0.2 export. `.\run.ps1 -ParseOnly` collates every capture in `results/` into `results/results.csv`. Rebuilding is only needed if the harness source changes — all eight binaries are already on disk under `build/`.
+
+### Before believing any number
+
+- **`[ok] wrap active` must be in the capture.** A `-Wl,--wrap` that resolves nothing reports zero calls, which is indistinguishable from "this version never calls it".
+- **`[vec] sig_r` / `sig_s` must be identical between the 3.6.6 and 4.1.0 captures.** RFC 6979 signing makes the signature a function of key and hash alone, so a difference means the two versions are not verifying the same thing and every `ecdsa_verify` row is incomparable.
+- **`[id]` is the ground truth for what was measured** — `hw_mul` and `fixed_point` come from the compiled macros, not from the argfile name. `run.ps1` also asserts them in the generated `sdkconfig` before flashing, because a lever that failed to take reads as a perfectly plausible measurement of the wrong thing.
+- **`[done]` must be present**, or the capture was truncated and its rows are partial.
+- **`rc=0` on every row.** A primitive that errors out returns early and times as a suspiciously fast one.
+
+### Then finish the job
+
+§6.4 is the decision table: it maps each possible observation onto which of C2 and C3 it confirms or refutes. §6.6 is the definition of done. If C2 falls — and §3 already says the static evidence argues against it — **the comment block in `sdkconfig.defaults` and the "Hard-won facts" section of [idf6-migration-continuation.md](idf6-migration-continuation.md) both assert it as established and must be corrected.** That correction is part of the spike, not a follow-up.
 
 ---
 
@@ -19,8 +77,8 @@
 
 Both mbedTLS source trees are **on disk** and can be diffed and built:
 
-- 3.6.6 — `~/.platformio/packages/framework-espidf/components/mbedtls/mbedtls/` (IDF 5.5)
-- 4.1.0 — `~/esp/esp-idf/components/mbedtls/mbedtls/` (IDF 6.0.2)
+- 3.6.6 — `~/esp/esp-idf-v5.5/components/mbedtls/mbedtls/` (IDF 5.5.5), the **buildable** copy, installed for this spike. Also at `~/.platformio/packages/framework-espidf/components/mbedtls/mbedtls/`, which is the same 5.5.5 but readable only — PlatformIO ships the libraries precompiled, which is exactly why the accelerator-off cell for mbedTLS 3 was unmeasurable before (§5.2).
+- 4.1.0 — `~/esp/esp-idf/components/mbedtls/mbedtls/` (IDF 6.0.2). The crypto is under `tf-psa-crypto/`; `bignum.c`, `ecp.c` and `ecdsa.c` are in `tf-psa-crypto/drivers/builtin/src/`, and their headers under `drivers/builtin/include/mbedtls/private/`.
 
 The Arduino build's own generated IDF config is also on disk, which is what made the config elimination in §4 possible:
 `~/.platformio/packages/framework-arduinoespressif32-libs/esp32/sdkconfig`
@@ -176,20 +234,28 @@ Benchmarks, each timed over enough iterations to swamp `esp_timer` granularity:
 
 1. `mbedtls_ecdsa_verify` on secp256r1 with a fixed key/hash/signature vector — the operation the handshake actually spends its time on.
 2. `mbedtls_ecp_mul` on secp256r1 with a fixed scalar — isolates point multiplication.
-3. `mbedtls_mpi_mul_mpi` on two fixed 256-bit operands — **the per-call cost at ECC size**, which is C3's crux.
-4. `mbedtls_mpi_exp_mod` with 2048-bit and 4096-bit operands — confirms the accelerator still earns its place for RSA, and quantifies what turning it off costs there.
+3. `mbedtls_mpi_mul_mpi` on fixed operands at **256, 512, 1024, 2048 and 4096 bits** — **the per-call cost across sizes**, which is C3's crux. The plan asked only for 256 bits; the sweep is the improvement, because if C3 holds there is a crossover size above which the peripheral genuinely wins, and the ESP port applies no lower threshold. One number at 256 bits says the accelerator loses there; the curve says where it starts to pay, which is the difference between a measurement and an explanation.
+4. `mbedtls_mpi_exp_mod` with 2048-bit and 4096-bit operands, `e = 65537` — an RSA *verify*, which is what a certificate chain actually does and what #119 was about. Confirms the accelerator still earns its place for RSA, and quantifies what turning it off costs there.
 5. `mbedtls_mpi_inv_mod` on a 256-bit modulus — tests the inversion path (C1's remnant) in both versions.
+6. `mpi_mul_hooked`: the same 256-bit multiply through the `--wrap` hook. Its margin over benchmark 3 is the instrumentation's own cost, which is what licenses reading `mul_ns_per_op` as a real number rather than an artefact. Every other benchmark calls the unwrapped symbol directly.
 
-Pin the benchmark task to **core 1** and stop the touch filter, to remove confound 5.4. Report min/mean/max, not just mean.
+The benchmark task is pinned to **core 1**, and confound 5.4 is gone by construction rather than by stopping anything — this app has no touch filter, no WiFi and no display. Batch sizes are calibrated at run time so each benchmark is timed over ~200 ms regardless of how expensive one operation is, and min/mean/max over five batches is reported so a scheduler hiccup is visible instead of averaged in.
+
+Two deliberate departures from the plan's sketch, both in §6.1's favour: the hooks are not `volatile` (one writer, a pinned task, nothing else in the app touches mbedTLS), and there is no hashing at all — a fixed 32-byte array stands in for the digest, since ECDSA verify does not care and it avoids a second compat shim for the one API that genuinely changed.
 
 ### 6.2 Counting calls without patching IDF
 
 `mbedtls_mpi_mul_mpi` and `mbedtls_mpi_exp_mod` are global symbols the ESP port overrides, so they can be counted non-invasively with linker wrapping:
 
+The planned form — `target_link_options(${COMPONENT_LIB} INTERFACE ...)` — was replaced by a build property, because it has to reach the final executable link on both IDF 5.5 and 6.0. **It must come before `project()`**; after it the option is accepted in silence and the link then fails on `__real_mbedtls_mpi_mul_mpi`. What `spike/mbedtls-perf/CMakeLists.txt` actually does:
+
 ```cmake
-target_link_options(${COMPONENT_LIB} INTERFACE
-    -Wl,--wrap=mbedtls_mpi_mul_mpi
-    -Wl,--wrap=mbedtls_mpi_exp_mod)
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+
+idf_build_set_property(LINK_OPTIONS "-Wl,--wrap=mbedtls_mpi_mul_mpi" APPEND)
+idf_build_set_property(LINK_OPTIONS "-Wl,--wrap=mbedtls_mpi_exp_mod" APPEND)
+
+project(mbedtls_perf)
 ```
 
 ```c
@@ -212,16 +278,20 @@ Note `ecp.c` has an internal `mul_count` behind `INC_MUL_COUNT`, but it is `stat
 
 ### 6.3 Runs
 
-Four builds minimum, all five benchmarks each:
+The plan called for four builds and a conditional repeat with `ECP_FIXED_POINT_OPTIM=y`. All eight exist instead: the two levers interact (§2.1), and a cold build per cell is cheaper than deciding later that the crossed cells were needed after all. **Built: all eight. Captured: none.**
 
-| Run | IDF / mbedTLS | `HARDWARE_MPI` | Purpose |
-|---|---|---|---|
-| 1 | 6.0.2 / 4.1.0 | on | subject, as originally shipped |
-| 2 | 6.0.2 / 4.1.0 | off | subject, as now shipped |
-| 3 | 5.5 / 3.6.6 | on | reference, matching Arduino |
-| **4** | **5.5 / 3.6.6** | **off** | **the missing cell (5.2)** |
+| Argfile | IDF / mbedTLS | `HARDWARE_MPI` | `FIXED_POINT` | Purpose |
+|---|---|---|---|---|
+| `idf6-mpi-on.args` | 6.0.2 / 4.1.0 | on | off | subject, as originally shipped |
+| `idf6-mpi-off-fp.args` | 6.0.2 / 4.1.0 | off | on | subject, as now shipped |
+| `idf5-mpi-on.args` | 5.5.5 / 3.6.6 | on | off | reference, matching Arduino |
+| **`idf5-mpi-off.args`** | **5.5.5 / 3.6.6** | **off** | **off** | **the missing cell (§5.2) — run this one first** |
+| `idf6-mpi-off.args` · `idf6-mpi-on-fp.args` | 6.0.2 / 4.1.0 | | | the remaining v4 corners |
+| `idf5-mpi-off-fp.args` · `idf5-mpi-on-fp.args` | 5.5.5 / 3.6.6 | | | the remaining v3 corners |
 
-Then repeat 1–4 with `ECP_FIXED_POINT_OPTIM=y` if the interaction in §2.1 needs explaining.
+Each argfile carries its own `-B build/<tag>` and its own `SDKCONFIG=build/<tag>/sdkconfig`, so no two configurations can ever share a generated config.
+
+Binary sizes, as a sanity check that the levers did something: v3 189,152 (off/off) → 224,960 (on/on); v4 170,480 → 194,544. Fixed-point ECP is the ~23–35 KB of precomputation tables; the accelerator is a few hundred bytes either way.
 
 ### 6.4 What each outcome would mean
 
@@ -242,13 +312,17 @@ Then repeat 1–4 with `ECP_FIXED_POINT_OPTIM=y` if the interaction in §2.1 nee
 - **`-Wl,--wrap` must be set before `project()`.** `idf_build_set_property(LINK_OPTIONS ...)` after it is accepted silently and then fails at link with `undefined reference to __real_mbedtls_mpi_mul_mpi`. That is the good failure; the bad one is a `--wrap` that resolves nothing and reports zero calls, which `bench.c` checks for at run time before any count is trusted.
 - **`CONFIG_MBEDTLS_COMPILER_OPTIMIZATION_*` exists only in IDF 6**, where it defaults to SIZE. IDF 5.5 has no per-component override and mbedTLS inherits the global level. Both SDKs land on `-Os`, by different routes; naming the IDF 6 symbol in a shared `sdkconfig.defaults` makes IDF 5.5 warn about an unknown Kconfig symbol.
 - **Serial is on COM5** with RTS auto-reset. Read it with `ReadBufferSize >= 262144` and a tight `ReadExisting()` loop — a default `SerialPort` drops bytes during a burst and produces plausible-but-wrong text.
-- **Any `sdkconfig.defaults` change means deleting `build/<app>/sdkconfig`** and a full ~280 s rebuild; defaults cannot override an existing generated config. A warm no-op build is ~4 s.
-- **A Kconfig `choice` needs the current pick explicitly unset** (`# CONFIG_X_SIZE is not set` *then* `CONFIG_X_PERF=y`), and you must assert the value landed in the generated `sdkconfig` before believing any number. Both traps produced silently wrong measurements during the original work.
-- Existing harness scripts worth reusing or adapting live in this session's scratchpad: `tls_cost.ps1` (timed request + watchdog counting), `perm_matrix.ps1` (config permutation driver). They are not in the repo; recreate or lift as needed.
+- **Editing any of the three `sdkconfig.*` files means deleting the affected `build/<tag>/sdkconfig`** before rebuilding; defaults cannot override an existing generated config. That is the one trap the per-cell build directories do *not* protect against, because it is about editing a fragment after a cell has already been configured.
+- **A Kconfig `choice` needs the current pick explicitly unset** (`# CONFIG_X_SIZE is not set` *then* `CONFIG_X_PERF=y`). Neither lever in this spike is a choice, so it does not bite here — but `MBEDTLS_COMPILER_OPTIMIZATION` is one, and reaching for `-O2` (§2.2) would meet it.
+- **`run.ps1` is the driver** — flash, capture, parse, collate. The earlier `tls_cost.ps1` and `perm_matrix.ps1` from the migration sessions were scratch files, never in the repo, and are gone; nothing here depends on them.
 
 ### 6.6 Definition of done
 
 The spike is finished when there is a table of per-operation timings and call counts for all four runs, and each of C2 and C3 is marked confirmed or refuted **with the number that decided it**. If the conclusion is "the accelerator was always wrong and the version gap is elsewhere", that is a successful spike — it corrects the record. A spike that merely reproduces the wall-clock numbers from §2 has not done its job.
+
+Concretely, done means: `spike/mbedtls-perf/results/` holds a `<tag>.log` per captured run and the collated `results.csv`; §3's status table has C2 and C3 resolved with their deciding numbers; and if C2 falls, `sdkconfig.defaults` and [idf6-migration-continuation.md](idf6-migration-continuation.md) no longer assert it. Commit the captures — they are the evidence, and a table without them is a claim.
+
+The harness reports one `[bench]` line per benchmark, with `min_ns`/`mean_ns`/`max_ns`, `mul_calls_per_op` and `mul_ns_per_op` (both scaled ×1000, integers because newlib-nano's `printf` drops `%f`), plus `mpi_mul_hooked` whose margin over `mpi_mul`/256 prices the instrumentation itself. `--wrap` only sees cross-translation-unit calls, so multiplies made from inside the defining TU are invisible; `ecp.c` is a separate TU, so the path the stack samples implicated is counted.
 
 ---
 
