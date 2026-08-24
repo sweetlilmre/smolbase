@@ -1,0 +1,6 @@
+-B
+build/idf6-mpi-on-fp
+-D
+SDKCONFIG=build/idf6-mpi-on-fp/sdkconfig
+-D
+SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.fixed-point

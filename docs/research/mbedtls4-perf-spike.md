@@ -166,7 +166,13 @@ If mbedTLS 3 is *also* substantially faster with the accelerator off, then the a
 
 ### 6.1 Harness
 
-A standalone project, `spike/mbedtls-perf/`, that builds **unchanged** under both IDF 5.5 (mbedTLS 3.6.6) and IDF 6.0.2 (4.1.0). Only public mbedTLS APIs, so the same source compiles against both. Benchmarks, each timed over enough iterations to swamp `esp_timer` granularity:
+**Built, and green on both SDKs.** `spike/mbedtls-perf/` exists, with its own [README](../../spike/mbedtls-perf/README.md); all eight configurations compile warning-clean and their generated `sdkconfig`s have been asserted. Nothing has been flashed or measured yet — that step erases the smolbase firmware and is the operator's call.
+
+A standalone project that builds **unchanged** under both IDF 5.5.5 (mbedTLS 3.6.6) and IDF 6.0.2 (4.1.0) — whichever `export.ps1` is sourced picks the version.
+
+**This paragraph originally claimed the five primitives were public API in both versions, so one source file would compile against each. That is wrong.** In mbedTLS 4.1.0 the crypto moved into TF-PSA-Crypto and `bignum.h`, `ecp.h` and `ecdsa.h` are all under `mbedtls/private/`, reachable only with `MBEDTLS_ALLOW_PRIVATE_ACCESS` defined. The symbols themselves are unchanged and still exported, so it is purely an include-path and visibility problem, absorbed by `main/compat.h` — which discriminates on `MBEDTLS_VERSION_MAJOR` from `build_info.h`, *not* on IDF's `MBEDTLS_MAJOR_VERSION` compile definition, because IDF 6 exports that and IDF 5.5 does not. Hashing was dropped from the harness entirely (a fixed 32-byte array stands in for the digest) rather than write a second shim for the one API that genuinely changed.
+
+Benchmarks, each timed over enough iterations to swamp `esp_timer` granularity:
 
 1. `mbedtls_ecdsa_verify` on secp256r1 with a fixed key/hash/signature vector — the operation the handshake actually spends its time on.
 2. `mbedtls_ecp_mul` on secp256r1 with a fixed scalar — isolates point multiplication.
@@ -231,7 +237,10 @@ Then repeat 1–4 with `ECP_FIXED_POINT_OPTIM=y` if the interaction in §2.1 nee
 
 ### 6.5 Practical notes
 
-- **IDF 5.5**: install alongside as `~/esp/esp-idf-v5.5` rather than reusing the PlatformIO package tree, so both have working toolchains and `export.ps1`. The PlatformIO copy is the source of truth for *reading* 3.6.6, not for building.
+- **IDF 5.5 is installed**, at `~/esp/esp-idf-v5.5` (tag `v5.5.5`, matching the PlatformIO package's 5.5.5 and therefore its mbedTLS 3.6.6), with its toolchain in the shared `~/.espressif` alongside 6.0.2's. Activate with `& $HOME\esp\esp-idf-v5.5\export.ps1`. The PlatformIO copy remains the source of truth for *reading* 3.6.6, not for building.
+- **Each configuration gets its own build directory and its own generated `sdkconfig`** (the eight `idf{5,6}-*.args` argfiles), which is what makes the `sdkconfig.defaults`-cannot-override-`sdkconfig` trap below structurally impossible rather than merely documented.
+- **`-Wl,--wrap` must be set before `project()`.** `idf_build_set_property(LINK_OPTIONS ...)` after it is accepted silently and then fails at link with `undefined reference to __real_mbedtls_mpi_mul_mpi`. That is the good failure; the bad one is a `--wrap` that resolves nothing and reports zero calls, which `bench.c` checks for at run time before any count is trusted.
+- **`CONFIG_MBEDTLS_COMPILER_OPTIMIZATION_*` exists only in IDF 6**, where it defaults to SIZE. IDF 5.5 has no per-component override and mbedTLS inherits the global level. Both SDKs land on `-Os`, by different routes; naming the IDF 6 symbol in a shared `sdkconfig.defaults` makes IDF 5.5 warn about an unknown Kconfig symbol.
 - **Serial is on COM5** with RTS auto-reset. Read it with `ReadBufferSize >= 262144` and a tight `ReadExisting()` loop — a default `SerialPort` drops bytes during a burst and produces plausible-but-wrong text.
 - **Any `sdkconfig.defaults` change means deleting `build/<app>/sdkconfig`** and a full ~280 s rebuild; defaults cannot override an existing generated config. A warm no-op build is ~4 s.
 - **A Kconfig `choice` needs the current pick explicitly unset** (`# CONFIG_X_SIZE is not set` *then* `CONFIG_X_PERF=y`), and you must assert the value landed in the generated `sdkconfig` before believing any number. Both traps produced silently wrong measurements during the original work.

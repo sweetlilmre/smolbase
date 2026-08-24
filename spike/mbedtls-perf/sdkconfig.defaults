@@ -1,0 +1,45 @@
+# Baseline for the mbedTLS perf spike: the accelerator ON, fixed-point ECP OFF.
+# That is the configuration both the arduino-esp32 build and the first IDF 6
+# build shipped, so it is the cell every other measurement is compared against.
+#
+# Every line is here so the two SDKs cannot silently differ, even where the value
+# matches the IDF default -- a default that moved between 5.5 and 6.0 would
+# otherwise turn up as a version effect.
+
+CONFIG_IDF_TARGET="esp32"
+
+# ---- Match the firmware's execution environment -------------------------
+# The numbers only transfer to the real handshake if the CPU clock, the flash
+# mode and the mbedTLS optimisation level are the firmware's. Flash mode matters
+# because the one unexplained result in the original work (-O2 making TLS
+# slower) was attributed to flash-cache pressure.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_40M=y
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+# There is deliberately NO CONFIG_MBEDTLS_COMPILER_OPTIMIZATION_SIZE line. That
+# choice exists only in IDF 6, where it defaults to SIZE; IDF 5.5 has no
+# per-component override and mbedTLS inherits the global level above. Both SDKs
+# therefore compile mbedTLS at -Os, by different routes, and naming the IDF 6
+# symbol here makes IDF 5.5 warn about an unknown Kconfig symbol. bench.c prints
+# the level it was actually built at, so this is checkable rather than assumed.
+
+# ---- The levers under test ----------------------------------------------
+# Both match the IDF default in 5.5 and 6.0; stated anyway, because the whole
+# spike is a comparison across these two lines and an implicit value is one
+# nobody checks.
+CONFIG_MBEDTLS_HARDWARE_MPI=y
+CONFIG_MBEDTLS_ECP_FIXED_POINT_OPTIM=n
+
+# RFC 6979 signing, so the test signature is a function of (key, hash) alone and
+# is provably the same in both versions -- bench.c prints r and s for exactly
+# that comparison.
+CONFIG_MBEDTLS_ECDSA_DETERMINISTIC=y
+
+# ---- Console ------------------------------------------------------------
+# The results come out over the UART on COM5 and are parsed by run.ps1.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
