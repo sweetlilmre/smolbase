@@ -24,6 +24,15 @@ Size, on the same build. This patch on its own makes mbedtls_ct_uint_lt() smalle
 
 So this patch alone costs +13 bytes for the pair and does not remove the calls; only patch 1/3 does that, and then the out-of-line copy disappears entirely and the pair ends up 34 bytes smaller than stock. The whole firmware image grows by 16 bytes in both cases, because these primitives have other callers that also inline them.
 
+Also measured on an ESP32-S3 (Xtensa LX7), separate device, same harness. The regression is worse on the newer core and the series recovers most of it:
+
+                        3.6.6      4.1.0      with 1/3 and 3/3
+    ecdsa_verify P-256  189.38 ms  266.97 ms  193.97 ms   (+2.4% vs 3.6.6)
+    ecp_mul      P-256   87.40 ms  122.22 ms   89.57 ms   (+2.5%)
+    mpi_inv_mod  P-256    7.40 ms   10.68 ms    6.82 ms   (-7.9%)
+
+Chip coverage: the gate is __XTENSA__, so this serves ESP32 (LX6, measured), ESP32-S3 (LX7, measured) and ESP32-S2 (LX7, built and codegen-checked, not run). It uses only base Xtensa Core ISA instructions, which is why LX6 and LX7 take it unchanged. The RISC-V Espressif parts - C2, C3, C5, C6, H2, P4 - are NOT covered by this patch and keep the full regression; a RISC-V path would be a separate piece of work that I have not done.
+
 Applies on top of patch 1/3, which it extends by one line: Xtensa joins the list of architectures whose primitives are force-inlined.
 
 A pure-C fix was tried first and rejected. Rewriting the generic mbedtls_ct_uint_lt() as the branchless six-operation sequence without barriers is faster, but clang 22 -O2 recognises the idiom, re-derives "x < y" and emits a conditional branch. Barriers on the two inputs alone do not help either, because a barrier hides a value and not the structure of an expression. Both were caught with MBEDTLS_TEST_CONSTANT_FLOW_MEMSAN and a negative control: a plain-C carry fails, unmodified upstream passes, and both C rewrites fail. That is what led to assembly, which is opaque to the optimiser by construction.

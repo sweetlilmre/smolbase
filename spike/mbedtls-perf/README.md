@@ -53,6 +53,8 @@ Quote the `@` in PowerShell — bare `@` is the splatting operator.
 ./run.ps1 -ParseOnly           # collate results/*.log into results/results.csv
 ```
 
+**`idf.py flash` rebuilds, so the source tree must be in the intended state at FLASH time, not just at build time.** This produced a silently wrong result once: a patched cell was built, the patch was then reverted, and `run.ps1` recompiled it unpatched during the flash step and captured that. The numbers came back byte-identical to the unpatched run, which is the only reason it was caught. Always disassemble the flashed ELF afterwards and confirm the change is actually in it.
+
 `run.ps1` refuses a run whose tag does not match the active `IDF_PATH`, and asserts `CONFIG_MBEDTLS_HARDWARE_MPI` and `CONFIG_MBEDTLS_ECP_FIXED_POINT_OPTIM` in the *generated* `sdkconfig` before flashing. Both checks are there because a Kconfig value that failed to take reads as a perfectly plausible measurement of the wrong thing, which has already cost this project a day.
 
 Serial is COM5 with RTS auto-reset wiring. The capture loop uses a 512 KB receive buffer and does nothing but `ReadExisting()` — a default `SerialPort` drops bytes during the boot burst and produces plausible-but-wrong text.

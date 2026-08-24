@@ -271,6 +271,25 @@ The series uses a portable `MBEDTLS_CT_INLINE` macro rather than a bare `__attri
 
 Rebuilt from the split series and re-measured on the device: identical to the pre-split build (`ecdsa_verify` 243.19 ms, `ecp_mul` 113.99 ms, `mpi_inv_mod` 7.59 ms), `rc=0`, vectors matching 3.6.6, `core_sub` branch-free with zero calls.
 
+### Which chips the assembly covers
+
+Gated on `__XTENSA__`, so: **ESP32** (LX6) and **ESP32-S3** (LX7) — both measured on hardware — and **ESP32-S2** (LX7), which builds clean with codegen verified but was not run. It uses only base Xtensa Core ISA instructions (`xor`, `sub`, `movi`, `and`, `or`, `neg`, `srai`), which is why both cores take it unchanged; on S2 and S3 it inlines to the same 95-byte `core_sub` with one branch and no calls as on LX6.
+
+**The RISC-V Espressif parts — C2, C3, C5, C6, H2, P4 — get nothing.** They have no assembly path either, so patch 0001 is a no-op for them too, and they keep the full regression. A RISC-V path is the obvious follow-up and I have not written one.
+
+ESP32-S3, separate device, same harness:
+
+| bench | 3.6.6 | 4.1.0 | gap | +series | vs 3.6.6 |
+|---|---|---|---|---|---|
+| `ecdsa_verify` P-256 | 189.38 ms | 266.97 ms | **+41.0%** | 193.97 ms | +2.4% |
+| `ecp_mul` P-256 | 87.40 ms | 122.22 ms | +39.8% | 89.57 ms | +2.5% |
+| `mpi_inv_mod` P-256 | 7.40 ms | 10.68 ms | +44.3% | 6.82 ms | −7.9% |
+| `mpi_mul` 256-bit | 7.30 µs | 8.74 µs | +19.7% | 7.36 µs | +0.8% |
+
+**The regression is worse on the newer core** — +41.0% against LX6's +33.7% — and the series recovers 94% of it there, against 100% on LX6.
+
+One methodological note, because it produced a silently wrong result before being caught: `idf.py flash` **rebuilds**. The first S3 "fixed" run was built patched, the patch was then reverted, and the flash step recompiled it unpatched and captured that. It returned numbers identical to the unpatched run *to the millisecond*, which is the only reason it was noticed. Every result above was re-verified by disassembling the flashed ELF and confirming `calls=0`.
+
 **A gap this exposed in upstream's own coverage:** `test_suite_bignum_core`'s `mpi_core_sub`/`mpi_core_mla` cases compare the returned carry while inputs are still `TEST_CF_SECRET`. The carry is secret-derived, so under MemSan they report for *any* implementation — verified, stock and the plain-C revert give byte-identical reports. On x86 with `MBEDTLS_HAVE_ASM` the inline assembly launders the poison and they pass. So the generic C path is never actually constant-flow tested upstream.
 
 ## What this does not establish

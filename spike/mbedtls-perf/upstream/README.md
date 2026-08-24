@@ -60,17 +60,45 @@ x86-64 inlines regardless, which is presumably why this went unnoticed — and i
 
 Net effect on ESP32: **mbedTLS 4.1.0 is 15–41% slower than 3.6.6 per primitive**, at identical call counts.
 
+## Which chips this covers
+
+The Xtensa path is gated on `__XTENSA__`, so it serves the **Xtensa** ESP32 parts and nothing else:
+
+| chip | core | status |
+|---|---|---|
+| ESP32 | Xtensa LX6 | **measured on hardware** |
+| ESP32-S3 | Xtensa LX7 | **measured on hardware** |
+| ESP32-S2 | Xtensa LX7 | builds clean, codegen verified, not run |
+| ESP32-C2/C3/C5/C6/H2, P4 | RISC-V | **not covered** — still take the generic C path |
+
+The assembly uses only base Xtensa Core ISA instructions (`xor`, `sub`, `movi`, `and`, `or`, `neg`, `srai`), which is why LX6 and LX7 both take it unchanged. On S2 and S3 it inlines to the same 95-byte `mbedtls_mpi_core_sub()` with one branch and no calls, identical to LX6.
+
+**The RISC-V ESP32 parts get nothing from patch 0002** and keep the full regression. They do benefit from patch 0001 only if they have an assembly path, which they do not — so for C3/C6 and friends this series fixes nothing. A RISC-V path is the obvious follow-up and I have not written one.
+
 ## Measurements
 
 ESP32-D0WD-V3, Xtensa LX6 @ 240 MHz, GCC 14.2, `-Os`, RSA/MPI accelerator off (so this is pure upstream C, no ESP bignum port involved). Offline: no WiFi, no TLS, fixed operands, one task pinned to core 1, `esp_timer`, batches sized to ~200 ms, min/mean/max over 5 batches. Reference is mbedTLS 3.6.6 from ESP-IDF v5.5.5, same device, same harness.
 
-| bench | 3.6.6 | 4.1.0 | gap | **4.1.0 + patch** | vs 3.6.6 |
+**ESP32 (Xtensa LX6), 240 MHz:**
+
+| bench | 3.6.6 | 4.1.0 | gap | **4.1.0 + series** | vs 3.6.6 |
 |---|---|---|---|---|---|
 | `ecdsa_verify` P-256 | 245.12 ms | 327.75 ms | +33.7% | **243.19 ms** | −0.8% |
 | `ecp_mul` P-256 | 113.92 ms | 151.56 ms | +33.0% | **113.99 ms** | +0.1% |
 | `mpi_inv_mod` P-256 | 8.66 ms | 12.23 ms | +41.2% | **7.59 ms** | −12.3% |
 | `mpi_exp_mod` 2048-bit | 61.77 ms | 74.50 ms | +20.6% | **63.45 ms** | +2.7% |
 | `mpi_mul` 256-bit | 9.78 µs | 11.28 µs | +15.4% | **9.80 µs** | +0.2% |
+
+**ESP32-S3 (Xtensa LX7), 240 MHz** — same harness, same method, separate device:
+
+| bench | 3.6.6 | 4.1.0 | gap | **4.1.0 + series** | vs 3.6.6 |
+|---|---|---|---|---|---|
+| `ecdsa_verify` P-256 | 189.38 ms | 266.97 ms | **+41.0%** | **193.97 ms** | +2.4% |
+| `ecp_mul` P-256 | 87.40 ms | 122.22 ms | +39.8% | **89.57 ms** | +2.5% |
+| `mpi_inv_mod` P-256 | 7.40 ms | 10.68 ms | +44.3% | **6.82 ms** | −7.9% |
+| `mpi_mul` 256-bit | 7.30 µs | 8.74 µs | +19.7% | **7.36 µs** | +0.8% |
+
+The regression is **worse on the newer core** (+41.0% against +33.7%), and the series recovers 94% of it there against 100% on LX6. Both were verified after the fact by disassembling the flashed image: `mbedtls_mpi_core_sub()` with zero calls and one branch.
 
 Attribution is exact: reverting just the three changed lines to 3.6.6's plain C recovers the whole gap (`ecdsa_verify` 243.96 ms), which is what pins the cause to those lines and nothing else.
 
