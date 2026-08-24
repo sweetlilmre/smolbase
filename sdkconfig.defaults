@@ -52,11 +52,25 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # The ESP32 has no ECC accelerator at all - MBEDTLS_HARDWARE_ECC and
 # MBEDTLS_HARDWARE_ECDSA_VERIFY both depend on SOC caps this chip lacks - so an
 # ECDHE-ECDSA handshake is software elliptic-curve maths either way. What the
-# accelerator does is intercept mbedtls_mpi_mul_mpi, and mbedTLS 4's ECP code
-# calls that far more often than 3.x did, on 256-bit operands where the
-# peripheral's per-operation setup and locking cost more than they save. Turning
-# it off is worth ~0.9 s; the fixed-point tables are worth a further ~1.7 s, but
-# only once the accelerator is out of the way (with it on they buy 0.35 s).
+# accelerator does is intercept mbedtls_mpi_mul_mpi, and at the 256-bit operands
+# ECDSA works on, the peripheral's per-call setup and locking cost about TWICE a
+# software multiply - 19.5 us against 9.8 us, measured on-device offline. The
+# crossover is between 256 and 512 bits: from 512 bits up the peripheral wins,
+# and at 2048/4096 bits it is 3.7-4.0x faster, which is why it exists.
+#
+# This is NOT a mbedTLS 4 behaviour. An earlier version of this comment said v4's
+# ECP calls mul_mpi far more often than 3.x did; that was inference and it is now
+# measured false - both versions make exactly 5817 calls per P-256 verify (3912
+# with the fixed-point tables). mbedTLS 3.6.6 is 17.8% faster with the
+# accelerator off too. The peripheral is simply wrong for ECC-sized operands on
+# this chip, in every version. Evidence and method:
+# docs/research/mbedtls4-perf-spike.md.
+#
+# Turning it off is worth ~0.9 s end to end; the fixed-point tables are worth a
+# further ~1.7 s. Offline the two levers are independent multiplicative wins; the
+# much larger interaction the end-to-end matrix appeared to show is probably an
+# artefact of the watchdog tripping in three of those four cells and not in the
+# fourth.
 #
 # #119 IS STILL SAFE, by a simpler route. The failure was the RSA accelerator
 # being unable to complete the 4096-bit verify in GitHub's ISRG Root X1

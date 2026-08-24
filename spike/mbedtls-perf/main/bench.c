@@ -379,9 +379,10 @@ static void bench_task(void *arg)
 {
     (void)arg;
 
-    printf("\n[id] mbedtls=%s idf=%s hw_mul=%d hw_exp=%d fixed_point=%d "
+    printf("\n[id] mbedtls=%s idf=%s hw_mul=%d hw_exp=%d fixed_point=%d wrap=%d "
            "cpu_mhz=%d opt=%s core=%d free_internal=%u\n",
            MBEDTLS_VERSION_STRING, IDF_VER, SPIKE_HW_MUL, SPIKE_HW_EXP, SPIKE_FIXED_POINT,
+           SPIKE_NO_WRAP ? 0 : 1,
            CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ,
            // IDF 6 has a per-component mbedTLS optimisation choice; IDF 5.5 does
            // not, and there mbedTLS inherits the global level. Test both so the
@@ -416,7 +417,11 @@ static void bench_task(void *arg)
         if (i == 0) {
             spike_counters_t c;
             spike_counters_read(&c);
-            if (c.mul_calls == 0) {
+            if (SPIKE_NO_WRAP) {
+                printf("[ok] no-wrap control build: hooks are not linked, so "
+                       "every call count and mul_ns_per_op below reads zero by "
+                       "construction. Timings here carry no instrumentation.\n");
+            } else if (c.mul_calls == 0) {
                 printf("[fail] -Wl,--wrap=mbedtls_mpi_mul_mpi did not take: an "
                        "ECDSA verify recorded zero calls. Every call count below "
                        "is meaningless.\n");

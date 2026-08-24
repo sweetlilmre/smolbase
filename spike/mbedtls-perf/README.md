@@ -4,6 +4,8 @@ The harness for [docs/research/mbedtls4-perf-spike.md](../../docs/research/mbedt
 
 It exists because the migration produced a working TLS fix whose *reason* is not established. The end-to-end numbers are solid; the mechanism is inference, one part of it already falsified. This measures the mechanism directly.
 
+**It has been run.** All twelve cells are captured in `results/`. **C2 refuted** — both versions make exactly 5817 `mul_mpi` calls per P-256 verify. **C3 confirmed** — 19.49 µs hardware against 9.78 µs software at 256 bits, with the crossover between 256 and 512 bits. **The missing cell says the accelerator was always wrong**: mbedTLS 3.6.6 is 17.8% faster without it too. Full write-up in §8 of the [research doc](../../docs/research/mbedtls4-perf-spike.md).
+
 ## What it answers
 
 **C2 — does mbedTLS 4's ECP call `mbedtls_mpi_mul_mpi` more often per verify than 3.6.6?** `mul_calls_per_op` on the `ecdsa_verify_p256` row, in both versions. The claim currently written into `sdkconfig.defaults` says yes; nobody has ever counted.
@@ -35,7 +37,9 @@ idf.py '@idf6-mpi-on.args' build      # also @idf6-mpi-off, -on-fp, -off-fp
 idf.py '@idf5-mpi-on.args' build      # and the three idf5-* variants
 ```
 
-Eight argfiles, one per (SDK × accelerator × fixed-point) cell, each with **its own build directory and its own generated `sdkconfig`**. That is deliberate: `sdkconfig.defaults` only supplies values *absent* from an existing generated `sdkconfig`, so sharing a build directory between configurations silently measures the first one four times. Separate directories cost a cold build each and cannot go wrong.
+Eight argfiles, one per (SDK × accelerator × fixed-point) cell, plus four `*-nowrap` cells built with `-D SPIKE_NO_WRAP=1` — the uninstrumented control, which omits the `-Wl,--wrap` link options and compiles the hooks out entirely. That control exists because the hook's cost had to be established independently of the hook, and it is what proved the `mpi_mul_hooked` margin above to be an artefact. Its captures report `wrap=0` in `[id]` and zero for every call count, by construction.
+
+Each argfile carries **its own build directory and its own generated `sdkconfig`**. That is deliberate: `sdkconfig.defaults` only supplies values *absent* from an existing generated `sdkconfig`, so sharing a build directory between configurations silently measures the first one four times. Separate directories cost a cold build each and cannot go wrong.
 
 Quote the `@` in PowerShell — bare `@` is the splatting operator.
 
@@ -66,7 +70,7 @@ Serial is COM5 with RTS auto-reset wiring. The capture loop uses a 512 KB receiv
 - **`[vec]`'s `sig_r`/`sig_s` must match between the 3.6.6 and 4.1.0 runs.** RFC 6979 signing makes the signature a function of key and hash alone, so a difference means the two versions are not verifying the same thing and the verify rows are not comparable.
 - **`[ok] wrap active` must appear.** A `-Wl,--wrap` that resolves nothing reports zero calls, which is indistinguishable from "this version never calls it". The check is on the ECDSA benchmark, which provably calls the hooked symbol.
 - **`mul_calls_per_op` and `exp_calls_per_op` are scaled by 1000** — `4271` means 4.271 calls per operation. They are integers because newlib-nano's `printf` silently drops `%f`.
-- **`mpi_mul_hooked` prices the instrumentation.** Its mean minus `mpi_mul`/256's mean is the hook's own cost per call, which is what licenses reading `mul_ns_per_op` as a real number.
+- **`mpi_mul_hooked` does NOT price the instrumentation, despite what this README used to say.** Its margin over `mpi_mul`/256 is ~9.8 µs with the accelerator on and ~1.2 µs with it off — and a `SPIKE_NO_WRAP` build, which links no hook at all, reproduces exactly the same margin. It is a benchmark-ordering artefact: `mpi_mul_hooked` runs after the 256→4096 sweep and shares the destination MPI `g_mul_x`, which the 4096-bit multiply has left oversized. Use the no-wrap control to price the hook; it costs 0.21–1.30 µs per call. Fixing the ordering is an open follow-up.
 - `--wrap` only redirects references the linker resolves, so calls made from *within* the defining translation unit are invisible. `ecp.c` is a separate TU, so the ECP multiply path — the one the stack samples implicated — is counted.
 
 ## Files
@@ -80,6 +84,7 @@ sdkconfig.defaults        baseline: accelerator on, fixed-point off
 sdkconfig.mpi-off         accelerator off
 sdkconfig.fixed-point     fixed-point ECP on
 idf{5,6}-mpi-{on,off}[-fp].args   the eight cells
+idf{5,6}-mpi-{on,off}-nowrap.args the four uninstrumented controls
 run.ps1                   flash, capture, collate
 ```
 

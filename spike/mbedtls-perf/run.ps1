@@ -23,7 +23,13 @@ param(
     [string]$Port = 'COM5',
     [string[]]$Runs = @(
         'idf5-mpi-on', 'idf5-mpi-off', 'idf5-mpi-on-fp', 'idf5-mpi-off-fp',
-        'idf6-mpi-on', 'idf6-mpi-off', 'idf6-mpi-on-fp', 'idf6-mpi-off-fp'
+        'idf6-mpi-on', 'idf6-mpi-off', 'idf6-mpi-on-fp', 'idf6-mpi-off-fp',
+        # The uninstrumented control. The hook costs 2.33 us per call with the
+        # accelerator off and 11.08 us with it on, and an ECDSA verify makes
+        # thousands of hooked calls -- so the accelerator on-vs-off comparison at
+        # the verify level is only trustworthy from these four.
+        'idf5-mpi-on-nowrap', 'idf5-mpi-off-nowrap',
+        'idf6-mpi-on-nowrap', 'idf6-mpi-off-nowrap'
     ),
     [string]$OutDir = 'results',
     [int]$TimeoutSec = 300,
@@ -107,6 +113,10 @@ function Parse-Run {
                 mbedtls          = $id['mbedtls']
                 hw_mul           = $id['hw_mul']
                 fixed_point      = $id['fixed_point']
+                # Captures taken before the no-wrap control existed have no
+                # wrap= field in their [id] line; every one of them was
+                # instrumented, so absent means 1.
+                wrap             = if ($id.ContainsKey('wrap')) { $id['wrap'] } else { '1' }
                 bench            = $f['name']
                 bits             = [int]$f['bits']
                 iters            = [int]$f['iters']

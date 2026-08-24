@@ -32,7 +32,18 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 # reference to __real_mbedtls_mpi_mul_mpi", which is the good failure mode; the
 # bad one is a --wrap that resolves nothing and reports zero calls, which
 # main/bench.c checks for explicitly.
-idf_build_set_property(LINK_OPTIONS "-Wl,--wrap=mbedtls_mpi_mul_mpi" APPEND)
-idf_build_set_property(LINK_OPTIONS "-Wl,--wrap=mbedtls_mpi_exp_mod" APPEND)
+#
+# -D SPIKE_NO_WRAP=1 omits the hooks entirely. It exists because the hook turned
+# out to cost 2.33 us per call with the accelerator off but 11.08 us with it on,
+# and an ECDSA verify makes thousands of hooked calls -- so the instrumentation
+# is the same order as the accelerator effect the verify rows are meant to
+# measure, and the on-vs-off comparison needs an uninstrumented control. Call
+# counts and the unhooked mul sweep are unaffected either way.
+if(SPIKE_NO_WRAP)
+  idf_build_set_property(COMPILE_DEFINITIONS "SPIKE_NO_WRAP=1" APPEND)
+else()
+  idf_build_set_property(LINK_OPTIONS "-Wl,--wrap=mbedtls_mpi_mul_mpi" APPEND)
+  idf_build_set_property(LINK_OPTIONS "-Wl,--wrap=mbedtls_mpi_exp_mod" APPEND)
+endif()
 
 project(mbedtls_perf)

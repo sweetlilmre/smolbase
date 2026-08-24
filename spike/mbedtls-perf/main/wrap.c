@@ -2,15 +2,23 @@
 
 #include "esp_timer.h"
 
+#if SPIKE_NO_WRAP
+// The uninstrumented control build: no --wrap, so there is no __real_ symbol and
+// nothing to count. The plain symbols ARE the real ones here.
+#define __real_mbedtls_mpi_mul_mpi mbedtls_mpi_mul_mpi
+#define __real_mbedtls_mpi_exp_mod mbedtls_mpi_exp_mod
+#else
 // Provided by the linker because of -Wl,--wrap in the project CMakeLists.
 int __real_mbedtls_mpi_mul_mpi(mbedtls_mpi *X, const mbedtls_mpi *A, const mbedtls_mpi *B);
 int __real_mbedtls_mpi_exp_mod(mbedtls_mpi *X, const mbedtls_mpi *A, const mbedtls_mpi *E,
                               const mbedtls_mpi *N, mbedtls_mpi *prec_RR);
+#endif
 
 // Not volatile and not atomic: the benchmark task is the only writer, it is
 // pinned to one core, and nothing else in this app touches mbedTLS.
 static spike_counters_t s_c;
 
+#if !SPIKE_NO_WRAP
 int __wrap_mbedtls_mpi_mul_mpi(mbedtls_mpi *X, const mbedtls_mpi *A, const mbedtls_mpi *B)
 {
     const int64_t t0 = esp_timer_get_time();
@@ -29,6 +37,7 @@ int __wrap_mbedtls_mpi_exp_mod(mbedtls_mpi *X, const mbedtls_mpi *A, const mbedt
     s_c.exp_calls++;
     return rc;
 }
+#endif
 
 void spike_counters_reset(void)
 {
