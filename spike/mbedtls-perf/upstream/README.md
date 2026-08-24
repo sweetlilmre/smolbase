@@ -26,11 +26,16 @@ They are three separate decisions and a reviewer should be able to take them sep
 
 Measured contribution of each, ESP32, P-256 ECDSA verify (3.6.6 reference: 245.12 ms; unpatched 4.1.0: 327.75 ms):
 
-| applied | result |
-|---|---|
-| 0002 alone | 278.02 ms |
-| 0001 + 0002 | **243.19 ms** |
-| 0003 | ~1.2% in the one configuration where it was isolated |
+| applied | ECDSA verify | `core_sub` + `ct_uint_lt` | calls per limb |
+|---|---|---|---|
+| stock 4.1.0 | 327.75 ms | 129 B | 2 |
+| 0002 alone | 278.02 ms | 142 B (**+13**) | 2 |
+| 0001 + 0002 | **243.19 ms** | 95 B (**−34**) | **0** |
+| 0003 | ~1.2% in the one configuration where it was isolated | — | — |
+
+Worth reading that middle row carefully: **the assembly patch on its own costs size and does not remove the calls.** The assembly is more compact than the generic C, so `mbedtls_ct_uint_lt()` shrinks 41 → 30 bytes, but `mbedtls_mpi_core_sub()` grows 88 → 112 because the surrounding generic-C selection is still inlined into it — and both calls per limb remain. It buys 50 ms of the 83 ms gap and nothing else.
+
+Only patch 0001 removes the calls, and once it does the out-of-line copy disappears and the pair ends up **34 bytes smaller than stock**. The whole firmware image is +16 bytes either way, because these primitives have other callers that also inline them. So the two patches are worth having together, but the size story belongs to 0001, not 0002.
 
 0001 alone does nothing on Xtensa — there is no asm path for it to act on until 0002. Its standalone value is on Arm, where I have codegen and size figures but no timing.
 

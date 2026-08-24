@@ -247,6 +247,16 @@ Scope of the attribute, measured on Arm thumb `-Os` (whole translation unit `.te
 
 Which is why the patch gates `MBEDTLS_CT_INLINE` on an asm path being in use and leaves the generic C fallback alone: +8 bytes is free, +396 is a judgement call that belongs to the maintainers.
 
+And on Xtensa, per patch — this is the row that shows the two patches need each other:
+
+| Xtensa `-Os` | ECDSA verify | `core_sub` | `ct_uint_lt` | pair | calls per limb |
+|---|---|---|---|---|---|
+| stock 4.1.0 | 327.75 ms | 88 B | 41 B | 129 B | 2 |
+| **asm only (0002)** | 278.02 ms | 112 B | 30 B | **142 B (+13)** | **2** |
+| asm + inline (0001+0002) | **243.19 ms** | 95 B | 0 (inlined away) | **95 B (−34)** | **0** |
+
+The assembly patch on its own **costs 13 bytes and removes neither call**. The assembly is more compact than the generic C, so `mbedtls_ct_uint_lt()` shrinks, but `mbedtls_mpi_core_sub()` grows because the surrounding generic-C selection is still inlined into it. It buys 50 ms of the 83 ms gap and no size. Only the inline patch removes the calls, and then the out-of-line copy disappears entirely and the pair ends up smaller than stock. Whole firmware image: +16 bytes in both cases, since these primitives have other callers.
+
 The fix ships as a **three-patch series** in [`spike/mbedtls-perf/upstream/`](../../spike/mbedtls-perf/upstream/), all verified `git apply` clean against upstream `main` in order:
 
 | patch | what | standalone? |
