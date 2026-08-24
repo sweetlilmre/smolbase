@@ -1,0 +1,8 @@
+-B
+build/idf6-mpi-off-varf
+-D
+SDKCONFIG=build/idf6-mpi-off-varf/sdkconfig
+-D
+SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.mpi-off
+-D
+SPIKE_NO_WRAP=1

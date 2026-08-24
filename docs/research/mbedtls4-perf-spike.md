@@ -439,6 +439,8 @@ Two things fall out. **`mpi_inv_mod` is the worst single regression at +41%** �
 
 And the `mpi_mul` regression **shrinks monotonically as operands grow**, +15.3% at 256 bits down to +2.0% at 4096. That is the signature of added *per-call* cost — entry validation, parameter marshalling, the TF-PSA-Crypto indirection — rather than slower inner loops, since a fixed overhead is a large fraction of a 9.8 µs multiply and a negligible one of a 1467 µs multiply. **This is a hypothesis consistent with the shape, not a measurement**; isolating it would mean profiling inside `mbedtls_mpi_mul_mpi`, which this spike does not do. I am flagging it rather than repeating the C2 mistake of promoting a plausible mechanism to a found one.
 
+> **That hypothesis was wrong, and flagging it is what caught it.** The cost is not per-call: expressed per limb it is flat at ~180–226 ns (~44 cycles), i.e. an added **O(n) linear pass**, and the relative shrink with size is only because the multiply itself is O(n²). Dividing the deltas by limb count rather than eyeballing the percentages is what showed it. The root cause is now found, proven by patch-and-measure, and fixed — three lines in `mbedtls_mpi_core_sub()` and `mbedtls_mpi_core_mla()` that call a constant-time helper with no fast path on Xtensa. See **[mbedtls4-ct-bignum-root-cause.md](mbedtls4-ct-bignum-root-cause.md)**.
+
 ### 8.5 The two levers are independent, and §2.1's interaction is probably an artefact
 
 §2.1 reported a strong interaction: fixed-point ECP worth 0.35 s with the accelerator on but 1.67 s with it off. Offline, the primitives say the two levers are **independent multiplicative factors**:
@@ -481,9 +483,11 @@ The conclusion is the one §6.6 explicitly named as a successful outcome: *"the 
 
 ### 8.8 What is still open
 
-- **The `mpi_mul_hooked` ordering defect** (§8.6) — mechanism unconfirmed, fix is a small harness change.
-- **Where mbedTLS 4's per-call overhead lives** (§8.4) — the monotonic shrink with operand size implicates per-call cost, but nothing was measured inside `mbedtls_mpi_mul_mpi`.
-- **`mpi_inv_mod`'s +41%** (§8.4) — the largest single regression, unexplained. C1 died on the question of whether the code was *new*; nobody has asked why the same algorithm is 41% slower.
-- **The upstream report** — now worth filing with the corrected figure (23–34% per P-256 verify at identical call counts, plus the separate finding that the ESP RSA accelerator is a ~2× loss at ECC operand sizes in every version). Still search before asserting anything is undiscovered.
+**Most of this list has since been closed** by [mbedtls4-ct-bignum-root-cause.md](mbedtls4-ct-bignum-root-cause.md), which found the mechanism and fixed it. Left standing here as written, with the outcome noted:
+
+- **The `mpi_mul_hooked` ordering defect** (§8.6) — mechanism still unconfirmed, fix is a small harness change. **Still open.**
+- **Where mbedTLS 4's per-call overhead lives** (§8.4) — ~~the monotonic shrink with operand size implicates per-call cost~~. **Closed, and the premise was wrong**: it is an O(n) pass at ~44 cycles/limb, caused by three lines calling `mbedtls_ct_uint_lt()`, which has no assembly path on Xtensa and does not inline at `-Os`.
+- **`mpi_inv_mod`'s +41%** (§8.4) — **closed as to cause** (same three lines: `core_sub` is on the inversion path). Newly open: with the fix applied it is 15.4% *faster* than 3.6.6, which is unexplained.
+- **The upstream report** — **now worth filing with a root cause and a patch**, not just a number. See the root-cause doc: present in `main`, absent from the 3.6 LTS, no matching report found, affects every target without an Arm/x86 assembly path. The separate finding that the ESP RSA accelerator is a ~2× loss at ECC operand sizes in every version still stands and is independent of it.
 
 What the spike can change is the *explanation* recorded in `sdkconfig.defaults` and [idf6-migration-continuation.md](idf6-migration-continuation.md), both of which currently assert C2 as though it were established. **If the spike refutes C2, those comments must be corrected.**
