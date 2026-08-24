@@ -213,7 +213,7 @@ Run afterwards, and it changed the answer. Setup: TF-PSA-Crypto `main` (`c5467ad
 
 **The barrier-free C fix is not constant time.** clang recognises the branchless idiom, re-derives `x < y`, and emits a conditional branch. Barriers on the inputs do not save it either: a barrier hides a *value*, not the *structure* of an expression. Upstream's six-barrier construction is load-bearing, and the assembly paths exist for exactly this reason — Xtensa just never got one.
 
-**The corrected fix is Xtensa assembly**, mirroring the existing Arm sequences, plus `always_inline` (assembly is already opaque, but `-Os` still leaves it out of line, and each Xtensa call costs a register-window entry plus spills), plus the `_if_else_0` call sites. Measured on the device:
+**The corrected fix is Xtensa assembly**, mirroring the existing Arm sequences, plus forced inlining, plus the `_if_else_0` call sites. Measured on the device:
 
 | bench | 3.6.6 | 4.1.0 | asm only | **asm + inline** | vs 3.6.6 |
 |---|---|---|---|---|---|
@@ -223,7 +223,31 @@ Run afterwards, and it changed the answer. Setup: TF-PSA-Crypto `main` (`c5467ad
 
 `rc=0` throughout and the ECDSA test vector matches 3.6.6 exactly. `mbedtls_mpi_core_sub()` disassembles to **one** conditional branch (the loop back-edge on the public limb count, identical to stock) and **zero** calls; the plain-C version has three branches.
 
-The patch is [`spike/mbedtls-perf/upstream/0001-ct-xtensa-asm.patch`](../../spike/mbedtls-perf/upstream/0001-ct-xtensa-asm.patch), verified `git apply --check` clean against upstream `main`.
+### The inlining half is not an Xtensa problem
+
+I first wrote the `always_inline` off as an Xtensa workaround. That was wrong, and checking it is what found the more interesting result. The existing asm paths never carried the attribute — so if the out-of-line call is real, those architectures should suffer it too. They do. Same function, `mbedtls_mpi_core_sub()`, which calls `mbedtls_ct_uint_lt()` twice per limb:
+
+| toolchain | `-Os` | `-O2` |
+|---|---|---|
+| `arm-none-eabi-gcc -mthumb -mcpu=cortex-m4` | **2 calls, not inlined** | 0 calls |
+| `arm-none-eabi-gcc -marm -mcpu=arm7tdmi` | **2 calls, not inlined** | 0 calls |
+| `xtensa-esp-elf-gcc` | **2 calls, not inlined** | — |
+| x86-64 gcc *and* clang | 0 calls | 0 calls |
+
+So this is an **`-Os` problem, not an Xtensa one, and existing Arm Cortex-M builds pay it today.** x86-64 inlines regardless — and does so for the *generic C* body too, which shows the difference is the target rather than the code. On Xtensa a call is merely worse than elsewhere, because of the register-window entry and spills.
+
+Scope of the attribute, measured on Arm thumb `-Os` (whole translation unit `.text`):
+
+| | calls | `core_sub` | `.text` |
+|---|---|---|---|
+| asm path, stock | 2 | 98 B | 2904 B |
+| **asm path + `always_inline`** | **0** | 112 B | 2912 B (**+8**) |
+| generic C, stock | 2 | 98 B | 3180 B |
+| generic C + `always_inline` | 0 | 216 B | 3576 B (**+396**) |
+
+Which is why the patch gates `MBEDTLS_CT_INLINE` on an asm path being in use and leaves the generic C fallback alone: +8 bytes is free, +396 is a judgement call that belongs to the maintainers.
+
+The patch is [`spike/mbedtls-perf/upstream/0001-ct-xtensa-asm.patch`](../../spike/mbedtls-perf/upstream/0001-ct-xtensa-asm.patch), verified `git apply --check` clean against upstream `main`. It uses a portable `MBEDTLS_CT_INLINE` macro rather than a bare `__attribute__((always_inline))`: mbedTLS supports MSVC (`_MSC_VER` is handled in this very file), MSVC compiles the generic C branch, and `__attribute__` is GNU-only — so the bare attribute would have broken the MSVC build.
 
 **A gap this exposed in upstream's own coverage:** `test_suite_bignum_core`'s `mpi_core_sub`/`mpi_core_mla` cases compare the returned carry while inputs are still `TEST_CF_SECRET`. The carry is secret-derived, so under MemSan they report for *any* implementation — verified, stock and the plain-C revert give byte-identical reports. On x86 with `MBEDTLS_HAVE_ASM` the inline assembly launders the poison and they pass. So the generic C path is never actually constant-flow tested upstream.
 

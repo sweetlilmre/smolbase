@@ -6,7 +6,7 @@ Everything needed to file this with [Mbed-TLS/TF-PSA-Crypto](https://github.com/
 |---|---|
 | `0001-ct-xtensa-asm.patch` | the proposed fix, submission-ready. Verified `git apply --check` clean against TF-PSA-Crypto `main` (`c5467adc`, 2026-08-13). |
 | `BASE-COMMIT.txt` | the mbedTLS commit the patch was developed against, as vendored in ESP-IDF v6.0.2. |
-| `apply_xtensa.py` | generates the assembly half of the patch from a pristine tree — useful for rebasing. |
+| `apply_fix.py` | regenerates the whole patch in a pristine tree — useful for rebasing. |
 | `constant-flow/` | the MemSan constant-flow harness and variant driver (below). |
 | `../results/*.log` | the device captures every timing here comes from. |
 
@@ -14,9 +14,22 @@ Full narrative, including how the root cause was found: [docs/research/mbedtls4-
 
 ## The claim, in one paragraph
 
-`mbedtls_ct_bool()`, `mbedtls_ct_if()` and `mbedtls_ct_uint_lt()` have hand-written assembly for Arm, AArch64, x86-64 and x86. Every other architecture gets generic C built from `mbedtls_ct_compiler_opaque()` barriers — six of them for one `mbedtls_ct_mpi_uint_if(mbedtls_ct_uint_lt(a, b), 1, 0)`. On Xtensa that costs ~44 cycles where mbedTLS 3.6 used one compare, because the barriers also stop GCC inlining at `-Os`, so each use becomes an out-of-line call with a register-window entry and spills. Since [`4b4869a15`](https://github.com/Mbed-TLS/mbedtls/commit/4b4869a15) and [`77bd4798`](https://github.com/Mbed-TLS/TF-PSA-Crypto/commit/77bd47982527ac98b5c1f37dc4dcdddbc06208b1) made `mbedtls_mpi_core_sub()` and `mbedtls_mpi_core_mla()` constant time, that lands on the bignum hot path. Net effect on ESP32: **mbedTLS 4.1.0 is 15–41% slower than 3.6.6 per primitive**, at identical call counts.
+There are **two independent problems**, both landing on the bignum hot path since [`4b4869a15`](https://github.com/Mbed-TLS/mbedtls/commit/4b4869a15) and [`77bd4798`](https://github.com/Mbed-TLS/TF-PSA-Crypto/commit/77bd47982527ac98b5c1f37dc4dcdddbc06208b1) made `mbedtls_mpi_core_sub()` and `mbedtls_mpi_core_mla()` constant time.
 
-Affects every target without one of the four assembly paths — RISC-V, MIPS, PowerPC, SPARC, Xtensa — and any Arm build without `MBEDTLS_HAVE_ASM`.
+**1. Xtensa has no assembly path.** `mbedtls_ct_bool()`, `mbedtls_ct_if()` and `mbedtls_ct_uint_lt()` have hand-written assembly for Arm, AArch64, x86-64 and x86; everything else uses generic C built from `mbedtls_ct_compiler_opaque()` barriers — six of them for one `mbedtls_ct_mpi_uint_if(mbedtls_ct_uint_lt(a, b), 1, 0)`. Affects RISC-V, MIPS, PowerPC, SPARC and Xtensa.
+
+**2. At `-Os` these functions are not inlined — on Arm as well as Xtensa.** This one affects targets that *do* have an assembly path, and is already costing existing Arm Cortex-M builds. Measured on `mbedtls_mpi_core_sub()`, which calls `mbedtls_ct_uint_lt()` twice per limb:
+
+| toolchain | `-Os` | `-O2` |
+|---|---|---|
+| `arm-none-eabi-gcc -mthumb -mcpu=cortex-m4` | **2 calls, not inlined** | 0 calls |
+| `arm-none-eabi-gcc -marm -mcpu=arm7tdmi` | **2 calls, not inlined** | 0 calls |
+| `xtensa-esp-elf-gcc` | **2 calls, not inlined** | — |
+| x86-64 gcc *and* clang | 0 calls | 0 calls |
+
+x86-64 inlines regardless, which is presumably why this went unnoticed — and it holds for the generic C body too, so it is a property of the target, not of the code. On Xtensa a call is especially expensive because of the register-window entry and spills.
+
+Net effect on ESP32: **mbedTLS 4.1.0 is 15–41% slower than 3.6.6 per primitive**, at identical call counts.
 
 ## Measurements
 
@@ -50,7 +63,9 @@ Both were caught by MemSan constant-flow testing, with a negative control:
 | branchless C, barriers on inputs only | **FAIL** |
 | `_if_else_0` call-site change alone | **PASS** |
 
-So the existing design is right and the assembly paths are load-bearing. Xtensa simply never got one. The patch adds it.
+So the existing design is right and the assembly paths are load-bearing. Xtensa simply never got one. The patch adds it, and separately forces inlining where an assembly path exists.
+
+`MBEDTLS_CT_INLINE` is scoped to the assembly paths on purpose. On the Arm thumb `-Os` measurement it costs **+8 bytes** of `.text`; applying it to the generic C fallback instead costs **+396 bytes**, which is a trade-off for the maintainers to make rather than a clear win.
 
 The Xtensa assembly itself cannot be MemSan-tested — there is no MemSan for Xtensa. It rests on the same argument as the Arm and x86 paths (assembly is opaque to the optimiser), plus a disassembly check: with the patch, `mbedtls_mpi_core_sub()` contains **one** conditional branch, the loop back-edge on the public limb count, identical to stock; a plain-C implementation has three. It also contains **no calls**, versus two in stock.
 
@@ -80,6 +95,14 @@ bash constant-flow/cf_configure.sh          # clone TF-PSA-Crypto main, cmake Me
 bash constant-flow/cf_prove.sh revert       # negative control -> must FAIL
 bash constant-flow/cf_prove.sh stock        # unmodified upstream -> must PASS
 bash constant-flow/cf_prove.sh callsites    # the _if_else_0 change -> must PASS
+```
+
+Inlining behaviour, no hardware needed:
+
+```
+bash constant-flow/inline_probe.sh          # x86-64, asm and generic C, -Os and -O2
+bash constant-flow/arm_probe.sh             # Arm thumb/arm, -Os vs -O2
+bash constant-flow/arm_probe2.sh            # size cost of always_inline on Arm
 ```
 
 `cf_configure.sh` unsets `MBEDTLS_HAVE_ASM` deliberately: with it set, `mbedtls_ct_uint_lt()` takes the x86-64 assembly path and the generic C — the code actually under test — is never compiled. It also unsets `MBEDTLS_AESNI_C`/`AESCE`/`PADLOCK`, which `#error` without assembly.
