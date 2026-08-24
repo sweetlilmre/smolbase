@@ -1,0 +1,91 @@
+# Upstream report: mbedTLS 4 constant-time primitives have no Xtensa path
+
+Everything needed to file this with [Mbed-TLS/TF-PSA-Crypto](https://github.com/Mbed-TLS/TF-PSA-Crypto): the patch, the evidence, and the harness that produced both.
+
+| file | what it is |
+|---|---|
+| `0001-ct-xtensa-asm.patch` | the proposed fix, submission-ready. Verified `git apply --check` clean against TF-PSA-Crypto `main` (`c5467adc`, 2026-08-13). |
+| `BASE-COMMIT.txt` | the mbedTLS commit the patch was developed against, as vendored in ESP-IDF v6.0.2. |
+| `apply_xtensa.py` | generates the assembly half of the patch from a pristine tree — useful for rebasing. |
+| `constant-flow/` | the MemSan constant-flow harness and variant driver (below). |
+| `../results/*.log` | the device captures every timing here comes from. |
+
+Full narrative, including how the root cause was found: [docs/research/mbedtls4-ct-bignum-root-cause.md](../../../docs/research/mbedtls4-ct-bignum-root-cause.md).
+
+## The claim, in one paragraph
+
+`mbedtls_ct_bool()`, `mbedtls_ct_if()` and `mbedtls_ct_uint_lt()` have hand-written assembly for Arm, AArch64, x86-64 and x86. Every other architecture gets generic C built from `mbedtls_ct_compiler_opaque()` barriers — six of them for one `mbedtls_ct_mpi_uint_if(mbedtls_ct_uint_lt(a, b), 1, 0)`. On Xtensa that costs ~44 cycles where mbedTLS 3.6 used one compare, because the barriers also stop GCC inlining at `-Os`, so each use becomes an out-of-line call with a register-window entry and spills. Since [`4b4869a15`](https://github.com/Mbed-TLS/mbedtls/commit/4b4869a15) and [`77bd4798`](https://github.com/Mbed-TLS/TF-PSA-Crypto/commit/77bd47982527ac98b5c1f37dc4dcdddbc06208b1) made `mbedtls_mpi_core_sub()` and `mbedtls_mpi_core_mla()` constant time, that lands on the bignum hot path. Net effect on ESP32: **mbedTLS 4.1.0 is 15–41% slower than 3.6.6 per primitive**, at identical call counts.
+
+Affects every target without one of the four assembly paths — RISC-V, MIPS, PowerPC, SPARC, Xtensa — and any Arm build without `MBEDTLS_HAVE_ASM`.
+
+## Measurements
+
+ESP32-D0WD-V3, Xtensa LX6 @ 240 MHz, GCC 14.2, `-Os`, RSA/MPI accelerator off (so this is pure upstream C, no ESP bignum port involved). Offline: no WiFi, no TLS, fixed operands, one task pinned to core 1, `esp_timer`, batches sized to ~200 ms, min/mean/max over 5 batches. Reference is mbedTLS 3.6.6 from ESP-IDF v5.5.5, same device, same harness.
+
+| bench | 3.6.6 | 4.1.0 | gap | **4.1.0 + patch** | vs 3.6.6 |
+|---|---|---|---|---|---|
+| `ecdsa_verify` P-256 | 245.12 ms | 327.75 ms | +33.7% | **243.19 ms** | −0.8% |
+| `ecp_mul` P-256 | 113.92 ms | 151.56 ms | +33.0% | **113.99 ms** | +0.1% |
+| `mpi_inv_mod` P-256 | 8.66 ms | 12.23 ms | +41.2% | **7.59 ms** | −12.3% |
+| `mpi_exp_mod` 2048-bit | 61.77 ms | 74.50 ms | +20.6% | **63.45 ms** | +2.7% |
+| `mpi_mul` 256-bit | 9.78 µs | 11.28 µs | +15.4% | **9.80 µs** | +0.2% |
+
+Attribution is exact: reverting just the three changed lines to 3.6.6's plain C recovers the whole gap (`ecdsa_verify` 243.96 ms), which is what pins the cause to those lines and nothing else.
+
+The regression is O(n), ~44 cycles per limb, flat from 256 to 4096 bits. `mbedtls_mpi_core_mul()` calls `mla` once per limb of B with `excess_len == 1`, so an n×n multiply runs the changed line exactly n times; `mbedtls_mpi_core_montmul()` does 6n such operations. Because the multiply is O(n²) the *relative* cost shrinks with operand size (+15.4% at 256 bits, +2.0% at 4096) — worst exactly where ECC lives.
+
+## Why the fix is assembly and not C
+
+This is the part worth reading, because the obvious fix is wrong.
+
+The generic `mbedtls_ct_uint_lt()` can be written as the same six-operation branchless sequence the Arm path uses (`eor`/`sub`/`bic`/`and`/`orr`/`asr`), with no barriers at all. It is much faster. **It is also not constant time:** clang 22 at `-O2` recognises the idiom, re-derives `x < y`, and emits a conditional branch. Keeping barriers on the two inputs does not help either — a barrier hides a *value*, not the *structure* of the expression.
+
+Both were caught by MemSan constant-flow testing, with a negative control:
+
+| variant | constant flow |
+|---|---|
+| plain-C carry (mbedTLS 3.6 style) | **FAIL** — the negative control; proves the harness detects the property |
+| **unmodified upstream 4.1.0** | **PASS** |
+| branchless C, no barriers | **FAIL** |
+| branchless C, barriers on inputs only | **FAIL** |
+| `_if_else_0` call-site change alone | **PASS** |
+
+So the existing design is right and the assembly paths are load-bearing. Xtensa simply never got one. The patch adds it.
+
+The Xtensa assembly itself cannot be MemSan-tested — there is no MemSan for Xtensa. It rests on the same argument as the Arm and x86 paths (assembly is opaque to the optimiser), plus a disassembly check: with the patch, `mbedtls_mpi_core_sub()` contains **one** conditional branch, the loop back-edge on the public limb count, identical to stock; a plain-C implementation has three. It also contains **no calls**, versus two in stock.
+
+## A gap in upstream's own coverage
+
+`test_suite_bignum_core`'s `mpi_core_sub` / `mpi_core_mla` cases cannot be used to test the generic C path as they stand. They compare the returned carry (`test_suite_bignum_core.function:825`) while the inputs are still `TEST_CF_SECRET`, and the carry is secret-derived by construction — so under MemSan they report for *any* implementation, unmodified upstream included. Verified: stock and the plain-C revert produce byte-identical reports there.
+
+On x86 builds with `MBEDTLS_HAVE_ASM` the inline assembly launders the MemSan poison and the cases pass. The consequence is that **the generic C constant-time path is currently not covered by upstream constant-flow testing at all** — it is only ever exercised on architectures that do not use it. That seems worth fixing independently of this patch.
+
+The harness in `constant-flow/` works around it by unpoisoning outputs before touching them, so a report can only come from a branch or memory access *inside* the function.
+
+## Reproducing
+
+Timings, on hardware (see [the harness README](../README.md) — flashing erases the device's firmware):
+
+```
+& $HOME\esp\esp-idf-v5.5\export.ps1
+cd spike\mbedtls-perf; .\run.ps1 -Runs idf5-mpi-off-nowrap -Flash   # 3.6.6 reference
+& $HOME\esp\esp-idf\export.ps1
+.\run.ps1 -Runs idf6-mpi-off-nowrap -Flash                          # 4.1.0 subject
+```
+
+Constant flow, on a Linux host with clang (no valgrind needed, no packages to install):
+
+```
+bash constant-flow/cf_configure.sh          # clone TF-PSA-Crypto main, cmake MemSanDbg
+bash constant-flow/cf_prove.sh revert       # negative control -> must FAIL
+bash constant-flow/cf_prove.sh stock        # unmodified upstream -> must PASS
+bash constant-flow/cf_prove.sh callsites    # the _if_else_0 change -> must PASS
+```
+
+`cf_configure.sh` unsets `MBEDTLS_HAVE_ASM` deliberately: with it set, `mbedtls_ct_uint_lt()` takes the x86-64 assembly path and the generic C — the code actually under test — is never compiled. It also unsets `MBEDTLS_AESNI_C`/`AESCE`/`PADLOCK`, which `#error` without assembly.
+
+## Before filing
+
+- **Search first.** No matching report was found in `Mbed-TLS/mbedtls`, `Mbed-TLS/TF-PSA-Crypto` or `espressif/esp-idf`, but that was a keyword search. `Mbed-TLS/mbedtls#10671` ("RSA Performance regression in v4.1.0") is a *different* cause — `mbedtls_rsa_check_privkey()` in key parsing — and should not be conflated with this.
+- **Scope honestly.** Measured on one chip, one compiler, one optimisation level. RISC-V/MIPS/PowerPC are implicated by the preprocessor conditions, not by measurement.
+- **The 3.6 LTS is unaffected** — it still has the plain-C version and never had this backported.
