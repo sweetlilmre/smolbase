@@ -1,14 +1,38 @@
-# Upstream report: mbedTLS 4 constant-time primitives have no Xtensa path
+# Upstream report: mbedTLS 4 constant-time primitives on embedded targets
 
-Everything needed to file this with [Mbed-TLS/TF-PSA-Crypto](https://github.com/Mbed-TLS/TF-PSA-Crypto): the patch, the evidence, and the harness that produced both.
+Everything needed to file this with [Mbed-TLS/TF-PSA-Crypto](https://github.com/Mbed-TLS/TF-PSA-Crypto): a three-patch series, the evidence, and the harness that produced both.
 
 | file | what it is |
 |---|---|
-| `0001-ct-xtensa-asm.patch` | the proposed fix, submission-ready. Verified `git apply --check` clean against TF-PSA-Crypto `main` (`c5467adc`, 2026-08-13). |
-| `BASE-COMMIT.txt` | the mbedTLS commit the patch was developed against, as vendored in ESP-IDF v6.0.2. |
-| `apply_fix.py` | regenerates the whole patch in a pristine tree — useful for rebasing. |
-| `constant-flow/` | the MemSan constant-flow harness and variant driver (below). |
+| `0001-ct-force-inline-asm-paths.patch` | force inlining on the **existing** asm paths. Independent; fixes an Arm `-Os` cost that exists today. |
+| `0002-ct-xtensa-asm-path.patch` | the new Xtensa assembly. Applies on top of 0001 (it adds Xtensa to 0001's macro list). |
+| `0003-bignum-core-if-else-0.patch` | `_if_else_0` at two call sites. Independent of both; **the one to drop first**. |
+| `BASE-COMMIT.txt` | the mbedTLS commit the series was developed against, as vendored in ESP-IDF v6.0.2. |
+| `gen_patches.py`, `gen_series.sh` | regenerate the series in a pristine tree — useful for rebasing. |
+| `constant-flow/` | the MemSan constant-flow harness and the inlining probes (below). |
 | `../results/*.log` | the device captures every timing here comes from. |
+
+All three verified `git apply` clean against TF-PSA-Crypto `main` (`c5467adc`, 2026-08-13), in order.
+
+## Why three patches
+
+They are three separate decisions and a reviewer should be able to take them separately.
+
+**0001 is arch-neutral and helps existing users.** It changes codegen on Arm, AArch64 and x86, which is a bigger blast radius than the Xtensa work but also the broader win — Arm Cortex-M `-Os` builds pay a call per constant-time comparison today. It needs its own size/speed judgement, and that judgement is not about Xtensa at all.
+
+**0002 is new architecture support.** Purely additive `#elif` branches; it cannot affect any architecture that already has a path.
+
+**0003 is a 1.2% improvement to constant-time bignum code.** That is a poor ratio of review burden to benefit, and it is the piece most likely to be argued about. It is last, it is independent, and dropping it costs the series almost nothing. It should not be able to hold up 0001 and 0002.
+
+Measured contribution of each, ESP32, P-256 ECDSA verify (3.6.6 reference: 245.12 ms; unpatched 4.1.0: 327.75 ms):
+
+| applied | result |
+|---|---|
+| 0002 alone | 278.02 ms |
+| 0001 + 0002 | **243.19 ms** |
+| 0003 | ~1.2% in the one configuration where it was isolated |
+
+0001 alone does nothing on Xtensa — there is no asm path for it to act on until 0002. Its standalone value is on Arm, where I have codegen and size figures but no timing.
 
 Full narrative, including how the root cause was found: [docs/research/mbedtls4-ct-bignum-root-cause.md](../../../docs/research/mbedtls4-ct-bignum-root-cause.md).
 
@@ -63,11 +87,11 @@ Both were caught by MemSan constant-flow testing, with a negative control:
 | branchless C, barriers on inputs only | **FAIL** |
 | `_if_else_0` call-site change alone | **PASS** |
 
-So the existing design is right and the assembly paths are load-bearing. Xtensa simply never got one. The patch adds it, and separately forces inlining where an assembly path exists.
+So the existing design is right and the assembly paths are load-bearing. Xtensa simply never got one. Patch 0002 adds it; patch 0001 separately forces inlining where an assembly path exists.
 
-`MBEDTLS_CT_INLINE` is scoped to the assembly paths on purpose. On the Arm thumb `-Os` measurement it costs **+8 bytes** of `.text`; applying it to the generic C fallback instead costs **+396 bytes**, which is a trade-off for the maintainers to make rather than a clear win.
+`MBEDTLS_CT_INLINE` (patch 0001) is scoped to the assembly paths on purpose. On the Arm thumb `-Os` measurement it costs **+8 bytes** of `.text`; applying it to the generic C fallback instead costs **+396 bytes**, which is a trade-off for the maintainers to make rather than a clear win.
 
-The Xtensa assembly itself cannot be MemSan-tested — there is no MemSan for Xtensa. It rests on the same argument as the Arm and x86 paths (assembly is opaque to the optimiser), plus a disassembly check: with the patch, `mbedtls_mpi_core_sub()` contains **one** conditional branch, the loop back-edge on the public limb count, identical to stock; a plain-C implementation has three. It also contains **no calls**, versus two in stock.
+The Xtensa assembly itself cannot be MemSan-tested — there is no MemSan for Xtensa. It rests on the same argument as the Arm and x86 paths (assembly is opaque to the optimiser), plus a disassembly check: with the series applied, `mbedtls_mpi_core_sub()` contains **one** conditional branch, the loop back-edge on the public limb count, identical to stock; a plain-C implementation has three. It also contains **no calls**, versus two in stock.
 
 ## A gap in upstream's own coverage
 

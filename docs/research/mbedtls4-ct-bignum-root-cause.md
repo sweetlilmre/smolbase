@@ -2,15 +2,15 @@
 
 **Written:** 2026-08-24, after running the experiment described below on hardware. **Status: root cause identified, proven by patch-and-measure, fixed, and the fix proven constant-time-preserving by MemSan constant-flow testing with a working negative control.** The first fix I proposed was refuted by that testing; the corrected one is Xtensa assembly.
 **Companions:** [mbedtls4-perf-spike.md](mbedtls4-perf-spike.md) (the spike that measured the gap and established it was real) · [idf6-migration-continuation.md](idf6-migration-continuation.md)
-**Harness:** `spike/mbedtls-perf/` · **Captures:** `spike/mbedtls-perf/results/*.log` · **Patch:** [`spike/mbedtls-perf/upstream/0001-ct-xtensa-asm.patch`](../../spike/mbedtls-perf/upstream/0001-ct-xtensa-asm.patch) · **Report to file:** [`upstream/README.md`](../../spike/mbedtls-perf/upstream/README.md)
+**Harness:** `spike/mbedtls-perf/` · **Captures:** `spike/mbedtls-perf/results/*.log` · **Patches:** [`spike/mbedtls-perf/upstream/`](../../spike/mbedtls-perf/upstream/) (a three-patch series) · **Report to file:** [`upstream/README.md`](../../spike/mbedtls-perf/upstream/README.md)
 
 ## The finding in one paragraph
 
-mbedTLS 4.1.0 is 15–41% slower than 3.6.6 per bignum primitive on ESP32, at **identical call counts**. The entire gap comes from **three lines** changed in 2024 by two commits that made `mbedtls_mpi_core_sub()` and `mbedtls_mpi_core_mla()` constant-time. Those lines call `mbedtls_ct_uint_lt()`, which has hand-written assembly for Arm, AArch64, x86-64 and x86 — and **for every other architecture falls back to a generic C implementation built on six `asm volatile` optimisation barriers**. On Xtensa that generic version is additionally too complex for GCC to inline at `-Os`, so each use becomes an out-of-line `call8` with a register-window entry and four stack spills. The result is ~44 CPU cycles where mbedTLS 3.6.6 used a single compare. Reverting the three lines recovers 100% of the gap, which is what pins the cause to them.
+mbedTLS 4.1.0 is 15–41% slower than 3.6.6 per bignum primitive on ESP32, at **identical call counts**. The entire gap comes from **three lines** changed in 2024 by two commits that made `mbedtls_mpi_core_sub()` and `mbedtls_mpi_core_mla()` constant-time. Those lines call `mbedtls_ct_uint_lt()`, which has hand-written assembly for Arm, AArch64, x86-64 and x86 — and **for every other architecture falls back to a generic C implementation built on six `asm volatile` optimisation barriers**. On top of that, at `-Os` the compiler leaves these primitives out of line, so each use becomes a call — on Xtensa a `call8` with a register-window entry and four stack spills. The result is ~44 CPU cycles where mbedTLS 3.6.6 used a single compare. Reverting the three lines recovers 100% of the gap, which is what pins the cause to them.
 
-**The fix is an Xtensa assembly path** for the three constant-time primitives, mirroring the ones Arm and x86 already have, plus `always_inline` and a free simplification at the two call sites. That restores parity — `ecdsa_verify` 243.19 ms against 3.6.6's 245.12 ms — while remaining constant-time. A pure-C fix was tried first, was faster still, and was **refuted by constant-flow testing**: clang re-derives the comparison from the branchless idiom and emits a branch. That refutation is the most important result here, and it is why the answer is assembly.
+**The fix is a three-patch series:** force inlining where an assembly path exists, add an Xtensa assembly path, and stop asking for a two-way select where only one side is used. Together they restore parity — `ecdsa_verify` 243.19 ms against 3.6.6's 245.12 ms — while remaining constant-time. A pure-C fix was tried first, was faster still, and was **refuted by constant-flow testing**: clang re-derives the comparison from the branchless idiom and emits a branch. That refutation is the most important result here, and it is why the answer is assembly.
 
-**This is not an ESP32 problem.** Any target without one of the four assembly paths is affected: RISC-V, MIPS, PowerPC, SPARC, Xtensa, and any Arm build compiled without `MBEDTLS_HAVE_ASM`.
+**This is not an ESP32 problem, and it is not even only a no-assembly-path problem.** The missing assembly path affects RISC-V, MIPS, PowerPC, SPARC and Xtensa. The `-Os` inlining loss is separate and affects targets that *do* have an assembly path — **Arm Cortex-M `-Os` builds pay a call per constant-time comparison today**. x86-64 is the only thing measured here that escapes both.
 
 ## Environment
 
@@ -247,7 +247,19 @@ Scope of the attribute, measured on Arm thumb `-Os` (whole translation unit `.te
 
 Which is why the patch gates `MBEDTLS_CT_INLINE` on an asm path being in use and leaves the generic C fallback alone: +8 bytes is free, +396 is a judgement call that belongs to the maintainers.
 
-The patch is [`spike/mbedtls-perf/upstream/0001-ct-xtensa-asm.patch`](../../spike/mbedtls-perf/upstream/0001-ct-xtensa-asm.patch), verified `git apply --check` clean against upstream `main`. It uses a portable `MBEDTLS_CT_INLINE` macro rather than a bare `__attribute__((always_inline))`: mbedTLS supports MSVC (`_MSC_VER` is handled in this very file), MSVC compiles the generic C branch, and `__attribute__` is GNU-only — so the bare attribute would have broken the MSVC build.
+The fix ships as a **three-patch series** in [`spike/mbedtls-perf/upstream/`](../../spike/mbedtls-perf/upstream/), all verified `git apply` clean against upstream `main` in order:
+
+| patch | what | standalone? |
+|---|---|---|
+| `0001-ct-force-inline-asm-paths` | `MBEDTLS_CT_INLINE` on the existing asm paths | yes — and it fixes an Arm `-Os` cost that exists today |
+| `0002-ct-xtensa-asm-path` | the new Xtensa assembly | needs 0001 (adds Xtensa to its macro list) |
+| `0003-bignum-core-if-else-0` | `_if_else_0` at two call sites | yes — and it is the one to drop first |
+
+Splitting them matters: 0003 is a ~1.2% gain that touches constant-time bignum code, which is the worst ratio of review burden to benefit in the set. It should not be able to hold up the other two. 0001 is the one with the widest blast radius (it changes Arm/AArch64/x86 codegen) and deserves its own size/speed judgement.
+
+The series uses a portable `MBEDTLS_CT_INLINE` macro rather than a bare `__attribute__((always_inline))`: mbedTLS supports MSVC (`_MSC_VER` is handled in this very file), MSVC compiles the generic C branch, and `__attribute__` is GNU-only — so the bare attribute would have broken the MSVC build.
+
+Rebuilt from the split series and re-measured on the device: identical to the pre-split build (`ecdsa_verify` 243.19 ms, `ecp_mul` 113.99 ms, `mpi_inv_mod` 7.59 ms), `rc=0`, vectors matching 3.6.6, `core_sub` branch-free with zero calls.
 
 **A gap this exposed in upstream's own coverage:** `test_suite_bignum_core`'s `mpi_core_sub`/`mpi_core_mla` cases compare the returned carry while inputs are still `TEST_CF_SECRET`. The carry is secret-derived, so under MemSan they report for *any* implementation — verified, stock and the plain-C revert give byte-identical reports. On x86 with `MBEDTLS_HAVE_ASM` the inline assembly launders the poison and they pass. So the generic C path is never actually constant-flow tested upstream.
 
