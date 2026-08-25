@@ -303,6 +303,29 @@ So the PSA rewrite costs ~84 ms, about 10% of that step. Real, and a genuine IDF
 
 The arithmetic to the arduino-esp32 baseline remains open, and cannot be closed by measuring our build alone. What is now known is where *our* time goes; what is not known is where *its* time went. The one way to settle it is to rebuild v0.3.3 from source — `platformio.ini` at that tag pins the pioarduino platform, which is still installed — instrument it identically, and measure the same phases. Until that is done, every arduino-vs-ours statement in this project remains a cross-session comparison against a number nobody can reproduce.
 
+## Apples to apples: the arduino build rebuilt from source and measured beside ours
+
+The prebuilt v0.3.3 release binary fails today, but **the same tag rebuilt from source works** (HTTP 200). `platformio.ini` at `v0.3.3` pins the pioarduino platform, which is still installed, so the baseline is reproducible after all. Both builds were then instrumented with the same phase split and measured on the same device, same network, within minutes of each other, in the **same configuration** (RSA/MPI accelerator ON, fixed-point off).
+
+| | TCP connect | TCP+TLS | handshake | body | total |
+|---|---|---|---|---|---|
+| **arduino v0.3.3**, mbedTLS 3.6.6, IDF 5.5 | 38–43 ms | 3302–3408 ms | **~3300 ms** | ~197 ms | ~3408 ms |
+| **ours**, mbedTLS 4.1.0, IDF 6.0.2 | 28–58 ms | 5935–6026 ms | **~5950 ms** | ~165 ms | ~6211 ms |
+
+**The entire difference is handshake computation: +2650 ms, +80%.** Network is identical and negligible on both — a plain TCP connect to the same host and port is ~40 ms either way. The body read is equivalent, so the `ClientReader` is not implicated. HTTP framing is not implicated.
+
+### Configuration is eliminated, again and properly
+
+§4 compared the two `sdkconfig`s during the migration, but our config has changed since. Re-checked against the live generated configs of both builds, every performance-critical option is identical: `MBEDTLS_ECP_NIST_OPTIM=y`, `MBEDTLS_ECP_FIXED_POINT_OPTIM` unset, `MBEDTLS_HARDWARE_MPI=y`, `HARDWARE_SHA`/`HARDWARE_AES=y`, `ECDSA_DETERMINISTIC=y`, `ECP_RESTARTABLE` unset, and `MPI_USE_INTERRUPT`, `ECP_WINDOW_SIZE`, `ECP_MAX_BITS`, `MPI_WINDOW_SIZE` absent on both.
+
+So the same chip, chain, network and configuration produce a handshake 80% slower. The only remaining variables are the mbedTLS version and the ESP-IDF version.
+
+### And the known causes do not add up to it
+
+Two contributions are measured: mbedTLS 4's constant-time regression is **+23%** on `ecdsa_verify` and `ecp_mul` in exactly this configuration, and IDF 6's PSA rewrite of the certificate check costs **84 ms**. A 23% regression on the crypto predicts a handshake of about 4060 ms. The measurement is 5950 ms. **Roughly 1900 ms is still unattributed.**
+
+The most likely place for it, and the next thing to measure, is **P-384**. Certificate validation is 58% of the handshake and its dominant single operation is a P-384 ECDSA verify (`sig_md=10`, SHA-384) costing 865–949 ms. Every primitive benchmark in this spike used P-256. The constant-time overhead is per limb, and P-384 has 12 limbs against P-256's 8, so the regression on the larger curve could be materially worse than the 23% measured on the smaller one. That is a hypothesis with a clear test: benchmark a P-384 verify on both SDKs in the existing harness.
+
 ## Constant-flow testing, and what it refuted
 
 Run afterwards, and it changed the answer. Setup: TF-PSA-Crypto `main` (`c5467adc`), `MBEDTLS_TEST_CONSTANT_FLOW_MEMSAN`, clang 22, `CMAKE_BUILD_TYPE=MemSanDbg`, `MBEDTLS_HAVE_ASM` **unset** so the generic C path is the code actually under test. Harness and driver: [`spike/mbedtls-perf/upstream/constant-flow/`](../../spike/mbedtls-perf/upstream/constant-flow/).

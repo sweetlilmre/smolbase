@@ -8,8 +8,47 @@
 #include <esp_http_client.h>
 #include <esp_log.h>    // SPIKE: temporary phase-split instrumentation
 #include <esp_timer.h>  // SPIKE: temporary phase-split instrumentation
+#include <esp_tls.h>    // SPIKE
+#include <lwip/netdb.h> // SPIKE
+#include <lwip/sockets.h> // SPIKE
 
 namespace Http {
+
+// SPIKE: split TCP connect from the TLS handshake, mirroring the probe added to
+// the arduino-esp32 v0.3.3 build so the two can be compared. A plain TCP
+// connect to the same host and port gives the network cost; a full esp_tls
+// connection gives network + handshake; the difference is the handshake.
+static void spikeConnectSplit() {
+  const char* host = "api.github.com";
+  {
+    const int64_t a = esp_timer_get_time();
+    struct addrinfo hints = {};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    struct addrinfo* res = nullptr;
+    int ok = -1;
+    if (getaddrinfo(host, "443", &hints, &res) == 0 && res) {
+      const int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+      if (fd >= 0) {
+        ok = connect(fd, res->ai_addr, res->ai_addrlen);
+        close(fd);
+      }
+      freeaddrinfo(res);
+    }
+    ESP_LOGW("spike", "tcp_connect=%lld ms ok=%d",
+             (esp_timer_get_time() - a) / 1000, ok == 0 ? 1 : 0);
+  }
+  {
+    esp_tls_cfg_t cfg = {};
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;
+    const int64_t a = esp_timer_get_time();
+    esp_tls_t* t = esp_tls_init();
+    const int r = t ? esp_tls_conn_new_sync(host, (int)strlen(host), 443, &cfg, t) : -1;
+    const int64_t b = esp_timer_get_time();
+    if (t) esp_tls_conn_destroy(t);
+    ESP_LOGW("spike", "tcp+tls_connect=%lld ms ok=%d", (b - a) / 1000, r);
+  }
+}
 
 namespace {
 
@@ -130,6 +169,7 @@ Result json(const Request& req, JsonDocument& out) {
     esp_http_client_set_post_field(c, req.body, (int)bodyLen);
   }
 
+  spikeConnectSplit();                           // SPIKE
   const int64_t t_spike0 = esp_timer_get_time(); // SPIKE
   esp_err_t err = esp_http_client_open(c, (int)bodyLen);
   const int64_t t_spike1 = esp_timer_get_time(); // SPIKE: connect + TLS handshake
