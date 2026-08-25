@@ -157,7 +157,7 @@ if (-not $ParseOnly) {
         # of the wrong thing, and that has already happened once in this project.
         $cfg = Get-Content (Join-Path $buildDir 'sdkconfig')
         $wantMpi = -not $tag.Contains('mpi-off')
-        $wantFp = $tag.EndsWith('-fp')
+        $wantFp = $tag.EndsWith('-fp') -or $tag.Contains('-fp-')
         $haveMpi = [bool]($cfg -match '^CONFIG_MBEDTLS_HARDWARE_MPI=y$')
         $haveFp = [bool]($cfg -match '^CONFIG_MBEDTLS_ECP_FIXED_POINT_OPTIM=y$')
         if ($haveMpi -ne $wantMpi) { throw "${tag}: HARDWARE_MPI is $haveMpi in the generated sdkconfig, expected $wantMpi" }

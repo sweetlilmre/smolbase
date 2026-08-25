@@ -21,7 +21,7 @@ The practical consequence is larger than the bookkeeping one: **the same handsha
 
 The original question — why the arduino-esp32 build was faster than the native IDF build — is **answered with measurements rather than inference**. The whole gap is TLS handshake computation: network, HTTP framing, JSON parsing and Kconfig differences are each eliminated by direct measurement. Certificate chain verification is the largest single component, and it turns out to be *nothing but* its two ECDSA signature verifies — the "chain-walk overhead" that looked like the answer never existed, and the arithmetic that produced it mixed two incompatible rulers. The real correction is [Part 1a](#part-1a--the-ruler-was-wrong-scheduling-not-crypto): elliptic-curve maths on core 0 costs 1.75× what the same call costs on core 1, because the WiFi stack deschedules it, and a whole handshake goes 3.8 s → 2.1 s when moved. A separate strand produced a three-patch series now open as a **draft PR upstream**; it fixes a bignum constant-time regression that is a minority of the problem. There is now a working, instrumented arduino baseline that can be rebuilt and flashed at will — that capability did not exist before and is what made the comparison possible.
 
-**Both builds have now been measured on one ruler** — see [Part 1b](#part-1b--both-builds-on-one-ruler-at-last). The headline: in the arduino build's own configuration the two libraries are level on P-256 (612 ms against 601 ms) and mbedTLS 4 is 1.83× slower on P-384, the curve GitHub's root uses; and the shipped configuration is worth 2.6× on P-256 and 2.1× on P-384, so the shipped firmware beats the arduino baseline at every level — primitive, chain, and whole handshake.
+**The version regression, in the configuration we ship, is a uniform ~30% on both curves** — see [Part 1d](#part-1d--the-shipped-configuration-on-the-ruler-that-transfers-a-uniform-30). `ecdsa_verify` P-256 goes 172.7 → 230.5 ms and P-384 goes 365.3 → 475.0 ms between 3.6.6 and 4.1.0, and the firmware reads 237 and 505 for the same calls, so these numbers describe what ships. The shipped configuration also beats the arduino baseline at every level — primitive, chain, and whole handshake — because turning the accelerator off is worth more than the regression costs. [Part 1b](#part-1b--both-builds-on-one-ruler-at-last)'s "1.83× on P-384" was measured in the accelerator-on configuration and is retracted; see Part 1d.
 
 ## Environment
 
@@ -176,6 +176,9 @@ Every attribution in this document that subtracted a `spike/mbedtls-perf/` figur
 
 # Part 1b — Both builds on one ruler at last
 
+> **Partly retracted by [Part 1d](#part-1d--the-shipped-configuration-on-the-ruler-that-transfers-a-uniform-30).** Everything here is measured in the accelerator-**on** configuration, the one configuration where the harness and the firmware are known to disagree by 2×. The conclusion that mbedTLS 4 is 1.83× slower on P-384 while level on P-256 does not survive being measured with the accelerator off, where the regression is a uniform 30%. What survives: the identical multiply counts, PSA costing the same as the legacy API, the core-0 penalty, and the shipped build beating the arduino baseline.
+
+
 `src/core/spike_psa_vs_legacy.cpp` compiled into the v0.3.3 worktree unchanged and the arduino build was flashed to the device to run it. Every figure below is an in-firmware measurement of the *same source* on the *same device*, pinned, priority 5, two consecutive requests each, and every cell reproduced to within a few milliseconds. The arduino build was then removed and the shipped firmware restored by full serial flash.
 
 ## ECDSA verify with no contention (pinned core 1)
@@ -212,6 +215,9 @@ With the accelerator **off**, the harness (234 ms) and the firmware on core 1 (2
 ---
 
 # Part 1c — Counting the multiplies: it is not the ECP layer, and it is not the accelerator
+
+> **Partly retracted by [Part 1d](#part-1d--the-shipped-configuration-on-the-ruler-that-transfers-a-uniform-30).** The timings here are accelerator-**on**, so the per-field-operation table and the size-dependence puzzle it poses are artefacts of that configuration. The call counts, the per-call multiply prices, the `grp.modp` check and the conclusion that the regression lives in the non-multiply arithmetic all stand.
+
 
 Part 1b left one question: **why is mbedTLS 4 1.83× slower on P-384 when the two libraries are level on P-256?** The harness says both curves are about 40% slower, so the firmware and the harness disagree about the *shape* of the regression, not only its size.
 
@@ -255,6 +261,47 @@ The **size dependence**. Our figure is flat — 95 µs at P-256, 99 µs at P-384
 So the open question has moved and narrowed. It is no longer "why is mbedTLS 4 slow on P-384". It is: **why is mbedTLS 3.6.6's non-multiply work per field operation roughly half as expensive at P-384 as at P-256, when mbedTLS 4's is flat?** Whatever 3.6.6 does there, mbedTLS 4 lost it, and the loss shows up only on the larger curve.
 
 The next step is to instrument the reduction and the add/subtract paths in our SDK tree, per curve, and then read 3.6.6's source for the same functions to see what changed. Our side can be instrumented directly; the arduino side cannot, so the comparison has to be *our* P-256-versus-P-384 profile against what 3.6.6's source does differently. `--wrap` will not help here: `ecp.c` reaches these paths through the public MPI API, and the core helpers are called from inside `bignum.c`, where the linker cannot see them.
+
+---
+
+# Part 1d — The shipped configuration, on the ruler that transfers: a uniform 30%
+
+Part 1c localised the regression to the non-multiply arithmetic and left one thing unexplained: why it looked size-dependent — 13% on P-256 and 128% on P-384. Then a check of the results table showed why the question was malformed.
+
+**Every P-384 number in this entire investigation, harness and firmware, came from the accelerator-ON configuration.** The harness only ever ran the P-384 benchmarks in the two `mpi-on-nowrap` cells. And the accelerator-on configuration is exactly the one where the harness and the firmware disagree by 2× ([Part 1b](#part-1b--both-builds-on-one-ruler-at-last), last section), while the accelerator-off configuration is the one where they agree to 1.5%. P-384 had never been measured on the ruler that transfers.
+
+So it was measured. Two new harness cells, `idf5-mpi-off-fp-nowrap` and `idf6-mpi-off-fp-nowrap`: accelerator **off**, fixed-point **on** — the shipped levers — with no `--wrap` hook, on both SDKs.
+
+| | mbedTLS 3.6.6 | mbedTLS 4.1.0 | 4.1.0 ÷ 3.6.6 |
+|---|---|---|---|
+| `ecdsa_verify` P-256 | 172.7 ms | 230.5 ms | **1.34** |
+| `ecdsa_verify` P-384 | 365.3 ms | 475.0 ms | **1.30** |
+| `ecp_mul` P-256 | 41.3 ms | 53.9 ms | 1.31 |
+| `ecp_mul` P-384 | 87.5 ms | 101.2 ms | 1.16 |
+
+**The regression is uniform: about 30% on both curves.** P-384 is not disproportionately affected — very slightly less so, if anything. That is precisely the shape a per-limb constant-time penalty should have, and it is the first direct support for the upstream patch series being correctly sized as well as correctly aimed.
+
+The ruler check holds. The firmware, core 1, shipped configuration, reads 237 ms (P-256) and 505 ms (P-384) against the harness's 230.5 and 475.0 — 3% and 6%. The harness transfers here, and these are the numbers that describe what ships.
+
+## What this retracts
+
+**[Part 1b](#part-1b--both-builds-on-one-ruler-at-last)'s "P-384 is 1.83× slower and is the whole regression" is wrong**, and so is the claim built on it that Part 2's "P-384 is not disproportionately affected" had been reversed. Part 2 was right. The 1.83× was measured in the accelerator-on configuration, which we do not ship, and which is the one configuration known to behave differently in a firmware from how it behaves in the harness. Part 1c's per-field-operation table inherits the same contamination for the same reason.
+
+What survives from Parts 1b and 1c, because it was measured in more than one configuration or does not depend on one:
+
+- Identical `mul_mpi` call counts between versions on both curves — 5817 and 8569. A count is a count.
+- PSA and the legacy API cost the same, in both libraries.
+- The core-0 scheduling penalty, in every build, removed by priority in every build.
+- The shipped configuration beats the arduino baseline at every level.
+- The regression lives in the non-multiply arithmetic, not the multiply, not the ECP layer, and not a missing fast reduction.
+
+## What is left of the accelerator-on anomaly
+
+It is now a historical curiosity rather than a live question. With the accelerator on, the firmware costs roughly twice what the harness says, by an amount that varies with the build and the curve; with it off, they agree. Nothing ships with it on — it was measured off on other grounds long before this. The only thing it still contaminates is the arduino-vs-ours comparison, because the arduino build's mbedTLS is precompiled with `MBEDTLS_MPI_MUL_MPI_ALT` baked in and **cannot** be run with the accelerator off. That comparison therefore has no clean form, and Part 1d's version numbers — 3.6.6 against 4.1.0 in the shipped configuration, both from source — are the closest thing to one.
+
+## The rule this earns, which is the same rule as before
+
+Part 1a's lesson was that a primitive benchmark measures a primitive, not a program. This is its second half: **a benchmark matrix with holes in it will let you compare two cells that share no configuration.** Every P-384 figure sat in one column of that matrix, and nothing in the numbers said so — the tables printed them beside P-256 figures drawn from cells with different levers. Filling the hole took two builds and twenty minutes, and it reversed a conclusion.
 
 ---
 
@@ -375,7 +422,7 @@ A default `SerialPort` drops bytes during a burst and produces plausible-but-wro
 
 ### Primitive benchmarks
 
-`spike/mbedtls-perf/`, with its own [README](../../spike/mbedtls-perf/README.md). `run.ps1 -Runs <tag> -Flash`; captures land in `results/` and collate to `results.csv`. **Flashing it erases the smolbase firmware** — own bootloader and `single_app` partition table. Recover with the full serial flash above. WiFi credentials survive in practice: NVS sits at `0x9000` in both layouts and the spike never writes it.
+`spike/mbedtls-perf/`, with its own [README](../../spike/mbedtls-perf/README.md). Two cells were added for Part 1d — `idf5-mpi-off-fp-nowrap` and `idf6-mpi-off-fp-nowrap`, the shipped levers with no hook — because the original matrix had P-384 in the accelerator-on cells only. `run.ps1 -Runs <tag> -Flash`; captures land in `results/` and collate to `results.csv`. **Flashing it erases the smolbase firmware** — own bootloader and `single_app` partition table. Recover with the full serial flash above. WiFi credentials survive in practice: NVS sits at `0x9000` in both layouts and the spike never writes it.
 
 ### Constant-flow testing
 
@@ -438,11 +485,12 @@ The same failure mode is the live risk for both open questions: **size a compone
 
 ## What is left, in the order it is worth doing
 
-1. **Decide what to do about core 0** (see *What to do about core 0* in Part 1a). Every build pays the penalty and priority 24 removes it in every build, so both fixes are live. Measure whichever is chosen against the App loop's frame budget, not just against the handshake.
-2. **Find out why 3.6.6's non-multiply field work is half as expensive at P-384 as at P-256** (Part 1c). The multiply counts, the multiply price and the fast reduction are all identical between the two libraries, so the whole regression is in the reduction and add/subtract paths — which is where the upstream patch already points. What is unexplained is why the loss shows up almost entirely on the larger curve. Instrument those paths in our SDK tree per curve, then read 3.6.6's source for the same functions.
-3. **Re-derive the attribution table** in Part 1. Every row built by subtracting a harness figure from a firmware figure is on the wrong ruler; Part 1b supplies the right ones.
-4. **The accelerator-on harness discrepancy** (Part 1b, last section) — a loose end, and the reason the accelerator-on rows of Part 2 should not be read as firmware costs.
-5. **Fix the benchmark ordering defect** in `mpi_mul_hooked` (Part 2). Affects nothing above.
+1. **Decide what to do about core 0** (see *What to do about core 0* in Part 1a). This is the only item with a shipping consequence: 3.8 s against 2.1 s for a handshake. Every build pays the penalty and priority removes it in every build, so both fixes are live. Measure whichever is chosen against the App loop's frame budget, not just against the handshake.
+2. **Re-derive the attribution table** in Part 1 from Part 1a and Part 1d, which supply the right rulers.
+3. **The accelerator-on anomaly** (Part 1b, last section; Part 1d, *What is left of the accelerator-on anomaly*). Historical only — nothing ships with the accelerator on. Worth an hour if the arduino-vs-ours comparison ever needs to be exact.
+4. **Fix the benchmark ordering defect** in `mpi_mul_hooked` (Part 2). Affects nothing above.
+
+The version question is closed: a uniform ~30% on both curves in the shipped configuration, which is the shape a per-limb constant-time penalty should have, and which supports the upstream series being both correctly aimed and correctly sized.
 
 The `MBEDTLS_DEBUG` handshake timeline is still the right tool for sizing anything inside the handshake that is not certificate work.
 

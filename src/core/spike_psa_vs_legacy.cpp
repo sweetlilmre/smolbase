@@ -34,6 +34,7 @@
 #include "mbedtls/ecp.h"
 #endif
 
+#include "mbedtls/platform.h"
 #include "psa/crypto.h"
 
 #include <esp_timer.h>
@@ -41,6 +42,7 @@
 #include <freertos/task.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* printf rather than ESP_LOGW so the file is byte-identical in both builds:
@@ -83,6 +85,50 @@ int __wrap_mbedtls_mpi_mul_mpi(mbedtls_mpi *X, const mbedtls_mpi *A,
 #define SPIKE_MUL_RESET() ((void) 0)
 #define SPIKE_MUL_COUNT() (0u)
 #endif
+
+/* SPIKE: how much of a verify is heap traffic?
+ *
+ * Non-multiply work costs 95 us per field operation in our firmware and 32 us
+ * in the harness, for the same library and the same lever settings. 95 us is
+ * ~22,700 cycles at 240 MHz, which is far more than a P-256 fast reduction can
+ * possibly be. Something with per-call overhead dominates, and the obvious
+ * candidate is malloc: every MPI operation grows and frees limb buffers, the
+ * harness runs on an almost empty heap, and the firmware runs on one shared
+ * with WiFi, LittleFS, PsychicHttp and the panel.
+ *
+ * mbedtls_platform_set_calloc_free is public API in both 3.6.6 and 4.1.0 and
+ * MBEDTLS_PLATFORM_MEMORY is on in both builds, so this needs no library
+ * patch and works on the arduino side too. */
+extern "C" {
+static unsigned spike_alloc_calls, spike_free_calls;
+static unsigned long long spike_alloc_cyc;
+static unsigned long long spike_alloc_bytes;
+
+static inline unsigned spike_cc(void)
+{
+    unsigned r;
+    __asm__ __volatile__ ("rsr %0, ccount" : "=a" (r));
+    return r;
+}
+
+static void *spikeCountingCalloc(size_t n, size_t sz)
+{
+    const unsigned a = spike_cc();
+    void *p = calloc(n, sz);
+    spike_alloc_cyc += (unsigned long long) (unsigned) (spike_cc() - a);
+    spike_alloc_calls++;
+    spike_alloc_bytes += (unsigned long long) n * sz;
+    return p;
+}
+
+static void spikeCountingFree(void *p)
+{
+    const unsigned a = spike_cc();
+    free(p);
+    spike_alloc_cyc += (unsigned long long) (unsigned) (spike_cc() - a);
+    spike_free_calls++;
+}
+}
 
 namespace {
 
@@ -166,13 +212,23 @@ void benchCurve(const char *label, mbedtls_ecp_group_id gid,
         /* ---- legacy: what mbedTLS 3.6.6 without PSA does, and what
          * spike/mbedtls-perf/ measures on both versions ---- */
         SPIKE_MUL_RESET();
+        spike_alloc_calls = spike_free_calls = 0;
+        spike_alloc_cyc = spike_alloc_bytes = 0;
+        mbedtls_platform_set_calloc_free(spikeCountingCalloc, spikeCountingFree);
         int64_t t0 = nowUs();
         int vrc = 0;
         for (int i = 0; i < ITERS; i++) {
             vrc |= mbedtls_ecdsa_verify(&grp, hash, hash_len, &Q, &r, &s);
         }
         int64_t t1 = nowUs();
+        mbedtls_platform_set_calloc_free(calloc, free);
         const unsigned legacy_muls = SPIKE_MUL_COUNT() / (unsigned) ITERS;
+        const unsigned a_calls = spike_alloc_calls / (unsigned) ITERS;
+        const unsigned f_calls = spike_free_calls / (unsigned) ITERS;
+        const unsigned long a_us =
+            (unsigned long) (spike_alloc_cyc / 240ULL / (unsigned) ITERS);
+        const unsigned long a_kb =
+            (unsigned long) (spike_alloc_bytes / 1024ULL / (unsigned) ITERS);
 
         vTaskDelay(pdMS_TO_TICKS(20));
 
@@ -220,6 +276,10 @@ void benchCurve(const char *label, mbedtls_ecp_group_id gid,
                       legacy_us ? psa_us / legacy_us : 0UL,
                       legacy_us ? (psa_us * 100UL / legacy_us) % 100UL : 0UL,
                       legacy_muls, psa_muls, vrc, (int)st);
+        SPIKE_PSA_LOG("[spike-heap] %s allocs=%u frees=%u heap_time=%lu us "
+                      "(%lu%% of verify) bytes=%luKB",
+                      label, a_calls, f_calls, a_us,
+                      legacy_us ? (a_us * 100UL / legacy_us) : 0UL, a_kb);
     }
 
 done:
