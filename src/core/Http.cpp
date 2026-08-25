@@ -14,6 +14,12 @@
 
 namespace Http {
 
+// SPIKE: identical X.509 benchmark to the one in the arduino-esp32 v0.3.3
+// build. See spike_x509.inc.
+#define SPIKE_LOG(fmt, ...) ESP_LOGW("spike", fmt, ##__VA_ARGS__)
+#define SPIKE_MS() ((unsigned long)(esp_timer_get_time() / 1000))
+#include "spike_x509.inc"
+
 // SPIKE: split TCP connect from the TLS handshake, mirroring the probe added to
 // the arduino-esp32 v0.3.3 build so the two can be compared. A plain TCP
 // connect to the same host and port gives the network cost; a full esp_tls
@@ -169,6 +175,7 @@ Result json(const Request& req, JsonDocument& out) {
     esp_http_client_set_post_field(c, req.body, (int)bodyLen);
   }
 
+  spike_x509_bench();                            // SPIKE
   spikeConnectSplit();                           // SPIKE
   const int64_t t_spike0 = esp_timer_get_time(); // SPIKE
   esp_err_t err = esp_http_client_open(c, (int)bodyLen);

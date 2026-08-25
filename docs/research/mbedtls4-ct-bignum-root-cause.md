@@ -359,6 +359,35 @@ Adding the P-384 benchmarks changed the *P-256* result on 4.1.0 from 366.86 ms t
 
 That means the measured "regression percentage" is partly a property of the whole image rather than of the function, and it is consistent with flash-cache pressure on a part that executes from cached external flash — the same mechanism that would explain why mbedTLS at `-O2` measured slower than `-Os` here, and why the proposed patch is a win in one configuration and a loss in another. It also means absolute figures from different harness revisions must not be compared, only figures from the same build.
 
+## The largest single cause, measured on both builds with the same certificates
+
+GitHub's live chain was dumped from the device as DER (three certificates: 1009, 867 and 842 bytes) and compiled into **both** builds, so the identical bytes go through the identical public mbedTLS calls. The arduino build's mbedTLS is precompiled and cannot be instrumented, so this had to be an application-level benchmark rather than library instrumentation.
+
+| | arduino, 3.6.6 | ours, 4.1.0 | delta |
+|---|---|---|---|
+| `mbedtls_x509_crt_parse_der` × 3 certs | 8.5 ms | 5.5 ms | −3 ms |
+| **`mbedtls_x509_crt_verify`** (chain walk) | **1270 ms** | **2527 ms** | **+1257 ms, +99%** |
+
+**Parsing is irrelevant and mbedTLS 4 is slightly faster at it. Chain verification is twice as slow, and it is the single largest contributor to the handshake gap.**
+
+Note also what the chain verification costs *relative to its own signature checks*. It performs two verifies, which the primitive benchmarks put at roughly 1156 ms in 4.1.0 and 817 ms in 3.6.6 — so on both versions the chain walk carries around 400–1400 ms of cost beyond the raw signature arithmetic, and that overhead roughly triples between versions.
+
+### Accounting for the +2650 ms handshake gap
+
+| contribution | ms |
+|---|---|
+| chain verification, measured on identical DER | 1257 |
+| remaining EC operations: ServerKeyExchange verify + 2 × `ecp_mul` | 230 |
+| **explained** | **1487** |
+| measured handshake delta | 2650 |
+| **residual, still unattributed** | **1163** |
+
+So the certificate chain walk is the biggest single cause and accounts for roughly half the regression. The residual is real and not yet explained; the remaining unexamined work in a handshake is the key-exchange and record-layer path, which no measurement here has isolated.
+
+### The original symptom, reproduced by accident
+
+Running five chain verifications back to back on the arduino build **triggered the task watchdog and panicked the device** — arduino-esp32 ships `CONFIG_ESP_TASK_WDT_PANIC=y`. That is precisely the failure that started this whole investigation: certificate verification outrunning the watchdog. It is worth recording that the old firmware was closer to that edge than anyone realised, at 1270 ms per chain verification against a 5 s budget shared with everything else.
+
 ## Constant-flow testing, and what it refuted
 
 Run afterwards, and it changed the answer. Setup: TF-PSA-Crypto `main` (`c5467adc`), `MBEDTLS_TEST_CONSTANT_FLOW_MEMSAN`, clang 22, `CMAKE_BUILD_TYPE=MemSanDbg`, `MBEDTLS_HAVE_ASM` **unset** so the generic C path is the code actually under test. Harness and driver: [`spike/mbedtls-perf/upstream/constant-flow/`](../../spike/mbedtls-perf/upstream/constant-flow/).
