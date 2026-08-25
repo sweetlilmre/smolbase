@@ -23,6 +23,59 @@
 #error "define SPIKE_MS() returning milliseconds before including"
 #endif
 
+/* Counters exported by the temporarily instrumented library-side
+ * x509_crt.c. Only our ESP-IDF build can define this: the arduino build's
+ * mbedTLS is precompiled, so the same source compiles there with the dump
+ * reduced to nothing. */
+#ifdef SPIKE_X509_LIB_PROF
+extern "C" {
+extern unsigned long long spike_x509_cyc_hash, spike_x509_cyc_verify;
+extern unsigned long long spike_x509_cyc_cando, spike_x509_cyc_parent;
+extern unsigned long long spike_x509_cyc_namecmp, spike_x509_cyc_chain;
+extern unsigned spike_x509_n_hash, spike_x509_n_verify;
+extern unsigned spike_x509_n_cando, spike_x509_n_parent, spike_x509_n_namecmp;
+extern unsigned long long spike_pk_cyc_import, spike_pk_cyc_verify;
+extern unsigned long long spike_pk_cyc_destroy, spike_pk_cyc_der2raw;
+extern unsigned spike_pk_n_verify;
+}
+/* 240 MHz core clock: cycles / 240 = microseconds. */
+#define SPIKE_US(c) ((unsigned long)((c) / 240ULL))
+/* The counters are free-running from boot, so a single bench has to zero
+ * them or it reads every handshake since. */
+#define SPIKE_X509_RESET_LIB_PROF()                                           \
+    do {                                                                      \
+        spike_x509_cyc_hash = spike_x509_cyc_verify = 0;                      \
+        spike_x509_cyc_cando = spike_x509_cyc_parent = 0;                     \
+        spike_x509_cyc_namecmp = spike_x509_cyc_chain = 0;                    \
+        spike_x509_n_hash = spike_x509_n_verify = 0;                          \
+        spike_x509_n_cando = spike_x509_n_parent = spike_x509_n_namecmp = 0;  \
+        spike_pk_cyc_import = spike_pk_cyc_verify = 0;                        \
+        spike_pk_cyc_destroy = spike_pk_cyc_der2raw = 0;                      \
+        spike_pk_n_verify = 0;                                                \
+    } while (0)
+#define SPIKE_X509_DUMP_LIB_PROF()                                            \
+    do {                                                                      \
+        SPIKE_LOG("[spike-x509] pk: import=%lu us | psa_verify=%lu us | "     \
+                  "der2raw=%lu us | destroy=%lu us | n=%u",                   \
+                  SPIKE_US(spike_pk_cyc_import),                              \
+                  SPIKE_US(spike_pk_cyc_verify),                              \
+                  SPIKE_US(spike_pk_cyc_der2raw),                             \
+                  SPIKE_US(spike_pk_cyc_destroy), spike_pk_n_verify);         \
+        SPIKE_LOG("[spike-x509] lib: chain=%lu us | verify_ext=%lu us x%u | " \
+                  "hash=%lu us x%u | can_do=%lu us x%u | "                    \
+                  "check_parent=%lu us x%u (name_cmp=%lu us x%u)",            \
+                  SPIKE_US(spike_x509_cyc_chain),                             \
+                  SPIKE_US(spike_x509_cyc_verify), spike_x509_n_verify,       \
+                  SPIKE_US(spike_x509_cyc_hash), spike_x509_n_hash,           \
+                  SPIKE_US(spike_x509_cyc_cando), spike_x509_n_cando,         \
+                  SPIKE_US(spike_x509_cyc_parent), spike_x509_n_parent,       \
+                  SPIKE_US(spike_x509_cyc_namecmp), spike_x509_n_namecmp);    \
+    } while (0)
+#else
+#define SPIKE_X509_DUMP_LIB_PROF() do { } while (0)
+#define SPIKE_X509_RESET_LIB_PROF() do { } while (0)
+#endif
+
 #define SPIKE_PARSE_ITERS  20
 /* One iteration only: the arduino-esp32 build ships
  * CONFIG_ESP_TASK_WDT_PANIC=y, and five chain verifications in a row
@@ -63,6 +116,7 @@ static void spike_x509_bench(void)
     } else {
         uint32_t flags = 0;
         int vrc = 0;
+        SPIKE_X509_RESET_LIB_PROF();
         t0 = SPIKE_MS();
         for (int i = 0; i < SPIKE_VERIFY_ITERS; i++) {
             flags = 0;
@@ -74,6 +128,7 @@ static void spike_x509_bench(void)
                   SPIKE_VERIFY_ITERS, (unsigned long)(t1 - t0),
                   (unsigned long)((t1 - t0) / SPIKE_VERIFY_ITERS), vrc,
                   (unsigned)flags);
+        SPIKE_X509_DUMP_LIB_PROF();
     }
 
     mbedtls_x509_crt_free(&chain);

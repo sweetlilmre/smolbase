@@ -1,23 +1,27 @@
 # mbedTLS 4 TLS performance — spike record and handover
 
 **Written:** 2026-08-24/25. **Read this first if you are picking this up with no context.** It is the single document for the TLS performance work: what was asked, what is measured and settled, what is still open, and how to continue.
-**Branch:** `idf6-migration`. Working tree clean except the temporary probes under *Dirty state*, which are deliberate and still needed.
+**Branch:** `idf6-migration`. Working tree clean except the temporary probes under *Dirty state*, which are deliberate and still needed. **The IDF 6 SDK tree is instrumented too** — see that section before trusting any measurement.
 **Companion:** [mbedtls4-ct-bignum-root-cause.md](mbedtls4-ct-bignum-root-cause.md) is the detailed evidence log for the constant-time strand and the upstream patch. [idf6-migration-continuation.md](idf6-migration-continuation.md) is the wider migration state.
 
 > This file previously held the original spike's pre-registration (its plan, hypotheses and decision tables, written before any measurement). That text is preserved in git history; its conclusions are carried forward below. It was folded together with the handover note so there is one document rather than three.
 
 ---
 
-## The two open questions
+## The two open questions — both now answered, and the answer is the same for both
 
-Everything below exists to serve these. Nothing else about this work is outstanding.
+They were: *where is the residual 1163 ms?* and *why did `mbedtls_x509_crt_verify` double?* Both were artefacts of one measurement error, described in full in **[Part 1a](#part-1a--the-ruler-was-wrong-scheduling-not-crypto)**. In short:
 
-1. **Where is the residual 1163 ms?** The arduino-vs-ours handshake gap is +2650 ms and 1487 ms of it is attributed. The unexamined paths are the **ECDHE key exchange** (server key exchange parse and verify, client key share, shared-secret derivation) and the **record layer** (encryption, MAC, buffer handling). Nothing here has isolated either.
-2. **Why did `mbedtls_x509_crt_verify` double?** 1270 ms on mbedTLS 3.6.6, 2527 ms on 4.1.0, on identical certificate bytes. Its two signature verifies only account for ~1156 ms (4.1.0) and ~817 ms (3.6.6), so several hundred milliseconds of non-signature chain-walk overhead roughly triples between versions. Cause unknown.
+1. **`mbedtls_x509_crt_verify` has no chain-walk overhead to find.** Measured inside the library, it is **99.8% its two ECDSA signature verifies**. Parsing, name comparison, the CA-bit and key-usage checks, the hash of the TBS, the PSA key import and destroy — all of it together is **4 ms out of 1440 ms**. The "several hundred milliseconds of non-signature overhead" was arithmetic across two different rulers.
+2. **The missing time is scheduling, not crypto.** An ECDSA verify costs 237 ms on core 1 and **418 ms on core 0**, same binary, same operands, same instant. Core 0 is where the WiFi driver and lwIP live; the crypto is being descheduled, not slowed down. `spike/mbedtls-perf/` pins its benchmark task to core 1 with WiFi absent, so **every number in it under-reads the running firmware by ~1.75×** — and every attribution built by subtracting a harness figure from a firmware figure inherited that error.
+
+The practical consequence is larger than the bookkeeping one: **the same handshake to `api.github.com` takes 3.8 s on core 0 and 2.1 s on core 1.** See *What to do about core 0* below — the choice is a real trade-off, not a free win.
 
 ## State in one paragraph
 
-The original question — why the arduino-esp32 build was faster than the native IDF build — is **half answered with measurements rather than inference**. The whole gap is TLS handshake computation: network, HTTP framing, JSON parsing and Kconfig differences are each eliminated by direct measurement. The largest identified cause is certificate chain verification being twice as slow. A separate strand produced a three-patch series now open as a **draft PR upstream**; it fixes a bignum constant-time regression that turns out to be a minority of the problem. There is now a working, instrumented arduino baseline that can be rebuilt and flashed at will — that capability did not exist before and is what made the comparison possible.
+The original question — why the arduino-esp32 build was faster than the native IDF build — is **answered with measurements rather than inference**. The whole gap is TLS handshake computation: network, HTTP framing, JSON parsing and Kconfig differences are each eliminated by direct measurement. Certificate chain verification is the largest single component, and it turns out to be *nothing but* its two ECDSA signature verifies — the "chain-walk overhead" that looked like the answer never existed, and the arithmetic that produced it mixed two incompatible rulers. The real correction is [Part 1a](#part-1a--the-ruler-was-wrong-scheduling-not-crypto): elliptic-curve maths on core 0 costs 1.75× what the same call costs on core 1, because the WiFi stack deschedules it, and a whole handshake goes 3.8 s → 2.1 s when moved. A separate strand produced a three-patch series now open as a **draft PR upstream**; it fixes a bignum constant-time regression that is a minority of the problem. There is now a working, instrumented arduino baseline that can be rebuilt and flashed at will — that capability did not exist before and is what made the comparison possible.
+
+**What is still open.** Nothing about *our* build. What has not been done is re-running the corrected measurement on the arduino side: `spike_psa_vs_legacy.cpp`'s legacy half compiles unchanged against 3.6.6, so the same core-0/core-1 pair of ECDSA verifies can be measured in the v0.3.3 firmware, which would price the version gap on one ruler for the first time. That needs the arduino build flashed to the device, which displaces the current firmware.
 
 ## Environment
 
@@ -63,12 +67,14 @@ diff <(grep -E '^(CONFIG_MBEDTLS|# CONFIG_MBEDTLS)' ~/.platformio/packages/frame
 
 ### Attribution of the gap
 
+**Superseded — kept because the numbers in it are still real, but the arithmetic is not.** The "how" column mixes two rulers: the first row is a firmware measurement on core 0, the second is a primitive benchmark on a core-1 task with no WiFi, and [Part 1a](#part-1a--the-ruler-was-wrong-scheduling-not-crypto) measures the difference between those contexts at 1.75×. The residual is an artefact of the mismatch.
+
 | cause | ms | how |
 |---|---|---|
 | `x509_crt_verify` chain walk | **1257** | same DER compiled into both builds, application-level benchmark |
-| remaining EC ops (ServerKeyExchange verify + 2 × `ecp_mul`) | 230 | primitive benchmarks |
+| remaining EC ops (ServerKeyExchange verify + 2 × `ecp_mul`) | 230 | primitive benchmarks — **on the wrong ruler, multiply by ~1.75** |
 | **explained** | **1487** | |
-| **residual — open question 1** | **1163** | |
+| **residual — was open question 1** | **1163** | not a residual: scheduling on core 0 |
 
 ### X.509, identical certificate bytes in both builds
 
@@ -79,7 +85,7 @@ GitHub's live chain was dumped from the device as DER (three certificates: 1009,
 | `x509_crt_parse_der` × 3 certs | 8.5 ms | 5.5 ms |
 | **`x509_crt_verify`** | **1270 ms** | **2527 ms** |
 
-Parsing is irrelevant and 4.1.0 is *faster* at it. The doubling is inside the chain walk — **open question 2**.
+Parsing is irrelevant and 4.1.0 is *faster* at it. The doubling looked like it was inside the chain walk; [Part 1a](#part-1a--the-ruler-was-wrong-scheduling-not-crypto) shows there is no chain walk to speak of — `x509_crt_verify` is 99.8% its two signature verifies, in both the measurement and the source.
 
 ### Handshake shape (shipped config, `MBEDTLS_DEBUG` level 3)
 
@@ -90,6 +96,81 @@ IDF 6 rewrote `esp_crt_check_signature()` to use PSA (`mbedtls_pk_get_psa_attrib
 ### The original symptom, reproduced by accident
 
 Running five chain verifications back to back on the **arduino** build triggered the task watchdog and panicked the device — arduino-esp32 ships `CONFIG_ESP_TASK_WDT_PANIC=y`. That is precisely the failure this whole investigation started from. The old firmware was closer to that edge than anyone realised: 1270 ms per chain verification against a 5 s budget shared with everything else.
+
+---
+
+# Part 1a — The ruler was wrong: scheduling, not crypto
+
+All of this is one session on one binary, 2026-08-25, in the shipped configuration (`HARDWARE_MPI` off, `ECP_FIXED_POINT_OPTIM` on). Every figure is reproduced across two consecutive `/api/update/check` requests.
+
+## Taking `x509_crt_verify` apart from the inside
+
+The arduino build's mbedTLS is precompiled, but ours is not, so the chain walk was instrumented directly: cycle counters (`rsr ccount`, no component dependency) around `psa_hash_compute`, `mbedtls_pk_can_do_psa`, `mbedtls_pk_verify_ext` and `x509_crt_check_parent` in `library/x509_crt.c`, and around `psa_import_key` / `psa_verify_hash` / `mbedtls_ecdsa_der_to_raw` / `psa_destroy_key` in `tf-psa-crypto/extras/pk_wrap.c`. The counters are zeroed immediately before the benchmark's single `mbedtls_x509_crt_verify`, because free-running from boot they read every handshake since.
+
+| inside one `mbedtls_x509_crt_verify` (1436 ms) | | calls |
+|---|---|---|
+| `mbedtls_pk_verify_ext` | **1434.9 ms** | 2 |
+|  → `psa_verify_hash` | **1432.3 ms** | 2 |
+|  → `psa_import_key` | 2.1 ms | 2 |
+|  → `psa_destroy_key` | 0.21 ms | 2 |
+|  → `mbedtls_ecdsa_der_to_raw` | 0.13 ms | 2 |
+| `psa_hash_compute` (TBS) | 1.0 ms | 2 |
+| `mbedtls_pk_can_do_psa` | 0.15 ms | 2 |
+| `x509_crt_check_parent` | 0.10 ms | 3 |
+|  → `x509_name_cmp` | 0.05 ms | 3 |
+
+**There is nothing else in there.** The chain walk, the name comparison, the CA-bit and key-usage checks and the per-certificate PSA key import together cost 0.3% of the call. The earlier "~1370 ms of chain-walk overhead" came from subtracting `spike/mbedtls-perf/`'s primitive figures from a firmware measurement, and those two numbers are not on the same scale.
+
+## PSA is not the culprit either
+
+mbedTLS 4 routes every certificate signature check through PSA; the arduino build's 3.6.6 does not have `MBEDTLS_USE_PSA_CRYPTO` defined at all (checked in `framework-arduinoespressif32-libs/esp32/include/.../mbedtls_config.h`) and so uses the legacy `mbedtls_ecdsa_verify`. That looked like a promising asymmetry. It is not one. `src/core/spike_psa_vs_legacy.cpp` verifies the *same* signature both ways in the same binary, on the RFC 6979 keys the harness uses:
+
+| | legacy `mbedtls_ecdsa_verify` | PSA import+verify+destroy | ratio |
+|---|---|---|---|
+| P-256, core 1 | 237.4 ms | 240.3 ms | 1.01 |
+| P-384, core 1 | 504.5 ms | 508.6 ms | 1.01 |
+
+The two APIs cost the same to within 1%. The PSA route adds a key import and a destroy, and together they are ~2 ms.
+
+## Where the time actually goes: core 0
+
+The same benchmark, same binary, same operands, differing only in which task runs it:
+
+| P-256 ECDSA verify | legacy | PSA |
+|---|---|---|
+| pinned core 1, priority 5 | **237 ms** | 240 ms |
+| pinned core 0, priority 5 | **418 ms** | 419–492 ms |
+| on the httpd task (unpinned, behaves as core 0) | 406–506 ms | 411–496 ms |
+| **pinned core 0, priority 24** | **236.7 ms** | 240.2 ms |
+| `spike/mbedtls-perf/` harness, `idf6-mpi-off-fp` | 234 ms | — |
+
+Two things fall out. The harness figure and the core-1 figure agree to 1.5%, so **the harness was always right** — it just measures a context the firmware never runs in. And at priority 24, above the WiFi task (23) and the lwIP task (18), core 0 becomes exactly as fast as core 1. **The crypto is not slower on core 0; it is descheduled.** Roughly 44% of the wall clock of a certificate verify on core 0 is spent running the network stack instead — and this is with WiFi merely associated and idle, no TLS traffic in flight, since the benchmark touches no socket.
+
+## And it carries through to a whole handshake
+
+Three full `esp_tls_conn_new_sync` handshakes to `api.github.com`, A-B-A in one session because cross-session comparisons here are worthless, repeated on two consecutive requests:
+
+| | run 1 | run 2 |
+|---|---|---|
+| core 0 (A) | 3869 ms | 3771 ms |
+| **core 1 (B)** | **2147 ms** | **2132 ms** |
+| core 0 (A again) | 3710 ms | 3800 ms |
+
+**A 44% reduction from a scheduling decision.** For scale, the arduino v0.3.3 baseline this whole investigation was chasing is a 3.3 s handshake, and it runs on core 0 too — `Web.cpp:118` in the v0.3.3 worktree pins httpd to core 0 exactly as `Web.cpp:147` does today, so this is not the arduino-vs-ours difference. It is a cost both builds have always paid.
+
+## What to do about core 0
+
+Not a free win, and not this document's call to make. `httpServer.config.core_id = 0` is deliberate — ADR 0001 puts network work on core 0 precisely so consumer code keeps core 1. Moving a 2.1 s handshake onto core 1 moves a 2.1 s stall onto the task that drives the panel. Three options, none yet measured against the App loop:
+
+- **Run only the update/TLS work on core 1**, on its own task, leaving the rest of the web server on core 0. Buys the 1.7 s; costs the App loop whatever it costs.
+- **Raise the priority of the task doing the handshake** while it handshakes. Measured to be exactly as effective, and considerably more dangerous: priority 24 starves the WiFi task, and the benchmark held it for 240 ms at a time, not 2 s.
+- **Accept it.** 3.8 s with no watchdog trips is a working system, and this is one HTTP request a day.
+
+## What this changes about everything above
+
+Every attribution in this document that subtracted a `spike/mbedtls-perf/` figure from a firmware measurement is understated by roughly the same 1.75×, including the 1487 ms "explained" row and the 230 ms attributed to the remaining EC operations. The primitive numbers themselves are unaffected — they are correct, internally consistent, and reproduce exactly when the firmware runs the same call in the same context. What was wrong was treating them as the price the firmware pays.
+
+**The rule this earns:** a primitive benchmark measures a primitive, not a program. Before subtracting one from the other, measure the same call in both contexts and find out what the context costs.
 
 ---
 
@@ -234,17 +315,19 @@ python3 framework/scripts/code_style.py --fix --uncrustify ~/uncrustify-build/un
 
 | file | what |
 |---|---|
-| `src/core/Http.cpp` | phase split (open/headers/body), TCP-vs-TLS connect split, `spike_x509_bench()` call — 15 `SPIKE` markers |
-| `src/core/spike_x509.inc` | the X.509 benchmark, identical source in both builds |
+| `src/core/Http.cpp` | phase split (open/headers/body), TCP-vs-TLS connect split, the core-0/core-1/core-0 handshake matrix, and the three bench calls — `SPIKE` markers throughout |
+| `src/core/spike_x509.inc` | the X.509 benchmark, identical source in both builds, plus the library-counter dump |
 | `src/core/spike_chain.h` | GitHub's live chain as DER, captured 2026-08-25 |
-| `D:\source\smolbase-v033` | the same two files plus instrumentation in `src/core/GhUpdate.cpp`, **uncommitted** |
+| `src/core/spike_psa_vs_legacy.cpp` | PSA-vs-legacy ECDSA verify and the core/priority matrix. Own translation unit because `MBEDTLS_ALLOW_PRIVATE_ACCESS` must precede every mbedTLS include and `Http.cpp` has already pulled in `esp_tls.h` |
+| `D:\source\smolbase-v033` | the same files plus instrumentation in `src/core/GhUpdate.cpp`, **uncommitted** |
 
-Both SDK trees are **pristine**. Always check `git status` in `~/esp/esp-idf/components/mbedtls/mbedtls` before trusting a measurement.
+**The IDF 6 SDK tree is no longer pristine.** `library/x509_crt.c` and `tf-psa-crypto/extras/pk_wrap.c` under `~/esp/esp-idf/components/mbedtls/mbedtls` carry the cycle counters described in Part 1a; every addition is marked `SPIKE`. Revert with `git checkout` in that tree when done. The IDF 5.5 tree is untouched. Always check `git status` in both before trusting a measurement.
 
 ## Traps that cost real time
 
 - **`idf.py flash` rebuilds.** The tree must be in the intended state at *flash* time, not just build time. A patched cell was built, the patch reverted, and the flash step silently recompiled it unpatched; the numbers came back byte-identical to the unpatched run, which is the only reason it was caught. **Disassemble the flashed ELF and confirm the change is in it.**
 - **`xtensa-esp-elf-objdump` sometimes decodes an ELF as raw hex words.** `grep -c call8` then returns 0, indistinguishable from "no calls". A tool returning zero matches is not a tool returning a zero answer.
+- **A primitive benchmark is not a program.** `spike/mbedtls-perf/` pins to core 1 with no WiFi; the firmware runs the same call on core 0 with the WiFi task at priority 23 above it, and pays 1.75x. Both numbers are correct. Subtracting one from the other produced a 1163 ms "residual" and a phantom chain-walk overhead, and cost most of two sessions.
 - **Cross-session comparisons are worthless here.** Two conclusions were wrong because a fresh measurement was compared against a number recorded earlier. Measure A-B-A in one session.
 - **Validate the response body on every timing rep.** Several runs used `curl -o NUL` and measured only elapsed time; a failing request times differently from a succeeding one. Check for `"latest"`.
 - **Numbers move when the binary changes.** Adding P-384 benchmarks shifted the *P-256* result on 4.1.0 by 13.6% with no change to that code path — flash-cache pressure. This is why the version gap reads 23% in one build and 40% in another; both are correct for their own binary. **Compare only within one build.**
@@ -260,11 +343,14 @@ The spike measured bignum primitives exhaustively and never asked what fraction 
 
 The same failure mode is the live risk for both open questions: **size a component before benchmarking it.** The phase split in `core/Http.cpp` and the `MBEDTLS_DEBUG` timeline exist for exactly that.
 
-## Suggested attack on the two open questions
+## What is left, in the order it is worth doing
 
-**Question 2 (chain walk doubled) is the more tractable and the more valuable.** Both builds run the identical `spike_x509_bench()` over identical DER, so it is a clean A/B with no network involved. Take `mbedtls_x509_crt_verify` apart: two signature verifies account for ~1156 ms of the 2527, leaving ~1370 ms of chain-walk overhead. Candidates never examined: `mbedtls_pk_parse_public_key` per level; the PSA key-import path mbedTLS 4 routes `mbedtls_pk_verify` through — the same mechanism already measured at 84 ms in `esp_crt_check_signature`, but here it would be per certificate; name and constraint checking; the hash step in `x509_crt_check_signature`. Our side can be instrumented directly in `~/esp/esp-idf/components/mbedtls/mbedtls`; the arduino side cannot, so anything needing a per-build comparison must go through the public API from application code, as `spike_x509.inc` does.
+1. **Price the version gap on one ruler.** `src/core/spike_psa_vs_legacy.cpp`'s legacy half needs no changes to compile against 3.6.6 — the header compatibility is already handled the way `spike/mbedtls-perf/main/compat.h` handles it. Drop it into `D:\source\smolbase-v033`, flash, and read P-256 and P-384 verify on core 0 and core 1. That is the first arduino-vs-ours number that will not be contaminated by execution context. It displaces the current firmware from the device; recover with the full serial flash in *How to reproduce anything here*.
+2. **Decide what to do about core 0** (see *What to do about core 0* in Part 1a). Measure whatever option is chosen against the App loop's frame budget, not just against the handshake.
+3. **Re-derive the attribution table** in Part 1 once (1) is in. Every row built by subtracting a harness figure from a firmware figure is understated by roughly 1.75×.
+4. **Fix the benchmark ordering defect** in `mpi_mul_hooked` (Part 2). Affects nothing above; it is loose ends.
 
-**Question 1 (residual 1163 ms)** needs the handshake sized before it is benchmarked. Re-enable the debug timeline and read the client-state transitions. The two non-certificate blocks were 520 ms and 785 ms in the shipped config, both ECDHE work, neither compared against the arduino build. There is no timeline available on the arduino side, so the comparison again has to be an application-level benchmark of the same operation — `mbedtls_ecdh_*` over fixed inputs would be the analogue of what `spike_x509.inc` does for certificates.
+The `MBEDTLS_DEBUG` handshake timeline is still the right tool for sizing anything inside the handshake that is not certificate work, and Part 1a says nothing about the ECDHE key exchange or the record layer beyond the general 1.75× correction.
 
 ## Upstream PR — separate strand, do not conflate
 
