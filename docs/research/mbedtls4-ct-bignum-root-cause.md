@@ -326,6 +326,39 @@ Two contributions are measured: mbedTLS 4's constant-time regression is **+23%**
 
 The most likely place for it, and the next thing to measure, is **P-384**. Certificate validation is 58% of the handshake and its dominant single operation is a P-384 ECDSA verify (`sig_md=10`, SHA-384) costing 865–949 ms. Every primitive benchmark in this spike used P-256. The constant-time overhead is per limb, and P-384 has 12 limbs against P-256's 8, so the regression on the larger curve could be materially worse than the 23% measured on the smaller one. That is a hypothesis with a clear test: benchmark a P-384 verify on both SDKs in the existing harness.
 
+## P-384 measured: the hypothesis is refuted, and something else surfaces
+
+The suspicion was that mbedTLS 4's regression is worse on P-384 than on P-256, because the constant-time overhead is per limb and P-384 has 12 limbs against 8. Benchmarked on both SDKs, accelerator ON, same harness build, `rc=0` and `sig384_r` identical across versions:
+
+| bench | 3.6.6 | 4.1.0 | delta | gap |
+|---|---|---|---|---|
+| `ecdsa_verify_p256` | 297.88 ms | 416.92 ms | +119 ms | +40.0% |
+| `ecp_mul_p256` | 139.55 ms | 195.19 ms | +56 ms | +39.9% |
+| `ecdsa_verify_p384` | 519.25 ms | 738.58 ms | +219 ms | +42.2% |
+| `ecp_mul_p384` | 240.20 ms | 341.79 ms | +102 ms | +42.3% |
+
+**P-384 is not disproportionately affected: 42% against 40%.** The hypothesis is wrong.
+
+### The primitives do not explain the handshake, in either version
+
+A handshake performs roughly two P-256 verifies (leaf and ServerKeyExchange), one P-384 verify (root), and two P-256 `ecp_mul` for ECDHE:
+
+| | 3.6.6 | 4.1.0 |
+|---|---|---|
+| predicted EC primitive cost | 1394 ms | 1963 ms |
+| predicted delta | — | **+569 ms** |
+| **measured handshake delta** | — | **+2650 ms** |
+
+So **~2080 ms of the version gap is not in the EC primitives at all**. And the same arithmetic applied to 3.6.6 alone is just as telling: its handshake measures ~3300 ms against ~1394 ms of primitives, so **~1900 ms of *both* handshakes is something other than elliptic-curve arithmetic**. The spike has spent its entire life measuring a component that is well under half of what it set out to explain.
+
+The best remaining candidate is X.509 work. In the shipped config the certificate phase measured 2440 ms, of which only ~234 ms was the leaf verify and 949 ms the root verify — leaving roughly 1250 ms of parsing and chain-walking. That is the next thing to instrument, and unlike the primitives it has never been looked at.
+
+### A confound worth recording: the numbers move when the binary changes
+
+Adding the P-384 benchmarks changed the *P-256* result on 4.1.0 from 366.86 ms to 416.92 ms, a 13.6% shift, while 3.6.6's barely moved (298.22 → 297.88 ms). Nothing about the P-256 code path changed; only the size and layout of the binary around it did.
+
+That means the measured "regression percentage" is partly a property of the whole image rather than of the function, and it is consistent with flash-cache pressure on a part that executes from cached external flash — the same mechanism that would explain why mbedTLS at `-O2` measured slower than `-Os` here, and why the proposed patch is a win in one configuration and a loss in another. It also means absolute figures from different harness revisions must not be compared, only figures from the same build.
+
 ## Constant-flow testing, and what it refuted
 
 Run afterwards, and it changed the answer. Setup: TF-PSA-Crypto `main` (`c5467adc`), `MBEDTLS_TEST_CONSTANT_FLOW_MEMSAN`, clang 22, `CMAKE_BUILD_TYPE=MemSanDbg`, `MBEDTLS_HAVE_ASM` **unset** so the generic C path is the code actually under test. Harness and driver: [`spike/mbedtls-perf/upstream/constant-flow/`](../../spike/mbedtls-perf/upstream/constant-flow/).

@@ -48,6 +48,10 @@
 // answer is checked here.
 #define D_HEX "C9AFA9D845BA75166B5C215767B1D6934E50C3DB36E89B127B8A622B120F6721"
 
+// RFC 6979 A.2.6's P-384 private key, for the same reason as D_HEX above:
+// a published, unambiguous scalar known to be valid for this curve.
+#define D384_HEX "6B9D3DAD2E1B8C1C05B19875B6659F4DE23C3B667BF297BA9AA47740787137D896D5724E4C70A825F872C9EA60D2EDF5"
+
 // A fixed 32-byte "digest". ECDSA verify does not care whether this is the
 // output of a real hash, and not hashing keeps the harness free of the one API
 // that genuinely did change between the two versions (mbedtls_sha256_* ->
@@ -55,6 +59,15 @@
 static const unsigned char HASH32[32] = {
     0xaf, 0x2b, 0xdb, 0xe1, 0xaa, 0x9b, 0x6e, 0xc1, 0xe2, 0xad, 0xe1, 0xd6, 0x94, 0xf4, 0x1f, 0xc7,
     0x1a, 0x83, 0x1d, 0x02, 0x68, 0xe9, 0x89, 0x15, 0x62, 0x11, 0x3d, 0x8a, 0x62, 0xad, 0xd1, 0xbf,
+};
+
+// A fixed 48-byte "digest" for the P-384 benchmarks, for the same reason as
+// HASH32: ECDSA does not care whether it is a real hash.
+static const unsigned char HASH48[48] = {
+    0x9a, 0x9d, 0xd5, 0x1f, 0xe9, 0x50, 0x92, 0x2a, 0xed, 0x1e, 0x8a, 0x2b,
+    0x3b, 0x0d, 0x6a, 0x4c, 0x37, 0x77, 0x59, 0x18, 0x2b, 0xc1, 0x2a, 0x0e,
+    0x9d, 0x4c, 0x71, 0x2d, 0x6a, 0x1f, 0x53, 0x84, 0x2f, 0xd6, 0x8b, 0x77,
+    0x1c, 0x39, 0x0e, 0x55, 0x74, 0x2b, 0x9c, 0x11, 0x63, 0x8e, 0x0a, 0x52,
 };
 
 // ---- Deterministic RNG --------------------------------------------------
@@ -109,6 +122,13 @@ static mbedtls_ecp_point g_Q;   // public key, = d*G
 static mbedtls_ecp_point g_R;   // scratch output for ecp_mul
 static mbedtls_mpi g_d, g_r, g_s;
 
+// P-384. Added because GitHub's certificate chain is verified with a
+// P-384 root (ECDSA-SHA384), and that verify is the single most expensive
+// operation in the handshake -- while every other benchmark here is P-256.
+static mbedtls_ecp_group g_grp384;
+static mbedtls_ecp_point g_Q384, g_R384;
+static mbedtls_mpi g_d384, g_r384, g_s384;
+
 static mbedtls_mpi g_mul_a[5], g_mul_b[5], g_mul_x; // 256/512/1024/2048/4096
 static const size_t MUL_BITS[5] = {256, 512, 1024, 2048, 4096};
 
@@ -125,6 +145,19 @@ static int g_last_rc; // non-zero here means a benchmark silently failed
 static void op_ecdsa_verify(void)
 {
     g_last_rc |= mbedtls_ecdsa_verify(&g_grp, HASH32, sizeof(HASH32), &g_Q, &g_r, &g_s);
+}
+
+static void op_ecdsa_verify_384(void)
+{
+    g_last_rc |= mbedtls_ecdsa_verify(&g_grp384, HASH48, sizeof(HASH48), &g_Q384,
+                                      &g_r384, &g_s384);
+}
+
+static void op_ecp_mul_384(void)
+{
+    prng_seed(0x5eed4321u);
+    g_last_rc |= mbedtls_ecp_mul(&g_grp384, &g_R384, &g_d384, &g_grp384.G,
+                                 prng_fill, &g_prng);
 }
 
 static void op_ecp_mul(void)
@@ -177,6 +210,8 @@ typedef struct {
 static const bench_t BENCHES[] = {
     {"ecdsa_verify_p256", 256, op_ecdsa_verify},
     {"ecp_mul_p256", 256, op_ecp_mul},
+    {"ecdsa_verify_p384", 384, op_ecdsa_verify_384},
+    {"ecp_mul_p384", 384, op_ecp_mul_384},
     {"mpi_inv_mod_p256", 256, op_inv_256},
     {"mpi_mul", 256, op_mul_256},
     {"mpi_mul", 512, op_mul_512},
@@ -252,6 +287,48 @@ static int setup(void)
     // avoid.
     if ((rc = mbedtls_ecdsa_verify(&g_grp, HASH32, sizeof(HASH32), &g_Q, &g_r, &g_s)) != 0) {
         printf("[error] self-check verify rc=-0x%04x\n", (unsigned)-rc);
+        return rc;
+    }
+
+    // ---- P-384, mirroring the P-256 setup above exactly ----
+    mbedtls_ecp_group_init(&g_grp384);
+    mbedtls_ecp_point_init(&g_Q384);
+    mbedtls_ecp_point_init(&g_R384);
+    mbedtls_mpi_init(&g_d384);
+    mbedtls_mpi_init(&g_r384);
+    mbedtls_mpi_init(&g_s384);
+
+    if ((rc = mbedtls_ecp_group_load(&g_grp384, MBEDTLS_ECP_DP_SECP384R1)) != 0) {
+        printf("[error] ecp_group_load p384 rc=-0x%04x\n", (unsigned)-rc);
+        return rc;
+    }
+    if ((rc = mbedtls_mpi_read_string(&g_d384, 16, D384_HEX)) != 0) {
+        printf("[error] read d384 rc=-0x%04x\n", (unsigned)-rc);
+        return rc;
+    }
+    prng_seed(0xb6b6b6b6u);
+    if ((rc = mbedtls_ecp_mul(&g_grp384, &g_Q384, &g_d384, &g_grp384.G,
+                              prng_fill, &g_prng)) != 0) {
+        printf("[error] ecp_mul p384 (public key) rc=-0x%04x\n", (unsigned)-rc);
+        return rc;
+    }
+    prng_seed(0xfeedfaceu);
+#if defined(MBEDTLS_ECDSA_DETERMINISTIC)
+    rc = mbedtls_ecdsa_sign_det_ext(&g_grp384, &g_r384, &g_s384, &g_d384,
+                                    HASH48, sizeof(HASH48), MBEDTLS_MD_SHA384,
+                                    prng_fill, &g_prng);
+#else
+    rc = mbedtls_ecdsa_sign(&g_grp384, &g_r384, &g_s384, &g_d384,
+                            HASH48, sizeof(HASH48), prng_fill, &g_prng);
+#endif
+    if (rc != 0) {
+        printf("[error] ecdsa_sign p384 rc=-0x%04x\n", (unsigned)-rc);
+        return rc;
+    }
+    // Same gate as P-256: refuse to benchmark a verify that does not verify.
+    if ((rc = mbedtls_ecdsa_verify(&g_grp384, HASH48, sizeof(HASH48), &g_Q384,
+                                   &g_r384, &g_s384)) != 0) {
+        printf("[error] self-check verify p384 rc=-0x%04x\n", (unsigned)-rc);
         return rc;
     }
 
@@ -406,6 +483,8 @@ static void bench_task(void *arg)
     print_mpi("d", &g_d);
     print_mpi("sig_r", &g_r);
     print_mpi("sig_s", &g_s);
+    print_mpi("sig384_r", &g_r384);
+    print_mpi("sig384_s", &g_s384);
 
     for (size_t i = 0; i < sizeof(BENCHES) / sizeof(BENCHES[0]); i++) {
         run_bench(&BENCHES[i]);
