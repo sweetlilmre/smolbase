@@ -217,6 +217,28 @@ That 19.8% is larger than the primitive numbers alone would suggest, and the rea
 
 Two notes on method, both learned the hard way earlier in this work. The patched image was disassembled *before* flashing to confirm `mbedtls_mpi_core_sub()` had no calls, because `idf.py flash` rebuilds and a stale tree silently produces the wrong binary. And the reverted image was identified by size rather than disassembly, because `xtensa-esp-elf-objdump` decoded that particular ELF as raw words — a reminder that a tool returning zero matches is not the same as a tool returning a zero answer.
 
+### Would this patch alone have fixed the original migration problem? No
+
+The migration's original symptom was an 8.49 s handshake where arduino-esp32 did 4.12 s. It is tempting to read this patch as *the* fix for that. It is not. Measured directly, by putting the patched mbedTLS under the **original** pre-fix config (accelerator on, fixed-point off):
+
+| config | mbedTLS | handshake |
+|---|---|---|
+| original — accelerator ON, no fixed-point | unpatched | 6850 ms *(recorded during the migration)* |
+| original — accelerator ON, no fixed-point | **patched** | **7003 ms** |
+| shipped — accelerator OFF, fixed-point ON | unpatched | 4198 ms |
+| shipped — accelerator OFF, fixed-point ON | **patched** | **3391 ms** |
+| *arduino-esp32 v0.3.3 reference* | *3.6.6* | *4120 ms* |
+
+**With the original config the patch changes nothing** — 7003 ms against 6850 ms, the same within cross-session variance. The reason is mechanical: with `HARDWARE_MPI=y` the ESP port replaces `mbedtls_mpi_mul_mpi`, and the peripheral's per-call ceremony dominates so completely that the constant-time helpers' cost is lost in it. The patch only becomes visible once the accelerator is out of the way.
+
+So the original 8.49 s had **three independent causes**, and this patch addresses exactly one:
+
+1. **The unbuffered `ClientReader`** — ~2.07 s, our own bug, fixed separately. Untouched by this patch.
+2. **The accelerator being wrong for ECC-sized operands** — the dominant term, present in mbedTLS 3.6.6 equally, fixed by config. Untouched by this patch.
+3. **The mbedTLS 4 constant-time bignum regression** — ~0.8 s, fixed by this patch.
+
+The config change remains the load-bearing fix and this is complementary to it, not a replacement. What it does change is the verdict on the migration: with all three in place the handshake is **3391 ms against arduino-esp32's 4120 ms**, so the native build is now ~18% faster than the firmware it replaced rather than merely at parity.
+
 ## Constant-flow testing, and what it refuted
 
 Run afterwards, and it changed the answer. Setup: TF-PSA-Crypto `main` (`c5467adc`), `MBEDTLS_TEST_CONSTANT_FLOW_MEMSAN`, clang 22, `CMAKE_BUILD_TYPE=MemSanDbg`, `MBEDTLS_HAVE_ASM` **unset** so the generic C path is the code actually under test. Harness and driver: [`spike/mbedtls-perf/upstream/constant-flow/`](../../spike/mbedtls-perf/upstream/constant-flow/).
