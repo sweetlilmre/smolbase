@@ -259,6 +259,50 @@ So the original 8.49 s had **three independent causes**, and this patch addresse
 
 The config change remains the load-bearing fix and this is complementary to it, not a replacement. What it does change is the verdict on the migration: with all three in place the handshake is **3391 ms against arduino-esp32's 4120 ms**, so the native build is now ~18% faster than the firmware it replaced rather than merely at parity.
 
+## Where the handshake time actually goes
+
+The spike measured bignum primitives exhaustively without ever establishing what fraction of a handshake they are. Measured, on the shipped config, by instrumenting `core/Http` and enabling `MBEDTLS_DEBUG` at level 3:
+
+**Request phases** (four reps): `connect+TLS` 3971–4174 ms · headers 26–440 ms · **body 111–204 ms** · total 4171–4600 ms.
+
+The body read is 111–204 ms, so the buffered `ClientReader` works and byte-by-byte JSON parsing is not part of any unexplained time. Essentially the whole request is the TLS handshake.
+
+**Handshake phases**, from the mbedTLS client state timeline (debug logging inflates absolutes; the structure is the point):
+
+| transition | ms |
+|---|---|
+| CLIENT_HELLO → SERVER_HELLO | 74 |
+| SERVER_HELLO → SERVER_CERTIFICATE | 118 |
+| **SERVER_CERTIFICATE → SERVER_KEY_EXCHANGE** | **2445** |
+| SERVER_KEY_EXCHANGE → CERTIFICATE_REQUEST | 520 |
+| CLIENT_KEY_EXCHANGE → CERTIFICATE_VERIFY | 785 |
+| everything else | < 140 each |
+
+**Certificate chain validation is 2445 ms — around 58% of the handshake.** Instrumenting `esp_crt_bundle.c` splits it further:
+
+| step | ms |
+|---|---|
+| X.509 parse + chain walk, before the bundle callback | 1481 |
+| bundle root lookup (binary search over 146 certs) | 5 |
+| **root signature verify** | **949** |
+
+The bundle lookup is free. The root verify reports `sig_md=10` — **SHA-384** — so it is a **P-384** ECDSA verify. **This entire spike benchmarked P-256 only.** The single most expensive operation in the handshake is on a curve that was never measured.
+
+### One genuine ESP-IDF 6 regression found here
+
+`esp_crt_check_signature()` was rewritten between IDF 5.5 and 6.0.2. IDF 5.5 calls `mbedtls_pk_verify_ext` and contains **no PSA calls at all**; IDF 6.0.2 routes through PSA — `mbedtls_pk_get_psa_attributes`, `psa_import_key`, `psa_verify_hash` — importing the key on every verification. Substituting the older approach back in and re-measuring the same step on the same device:
+
+| implementation | root verify |
+|---|---|
+| IDF 6.0.2, PSA | 949 ms |
+| `mbedtls_pk_verify` (the 5.5 approach) | **865 ms** |
+
+So the PSA rewrite costs ~84 ms, about 10% of that step. Real, and a genuine IDF-6-only regression, but not the dominant term. Note the rewrite was probably forced rather than chosen: mbedTLS 4 removed `sig_opts` and changed `mbedtls_pk_verify_ext`'s signature, so the 5.5 code does not compile against it.
+
+### What this still does not settle
+
+The arithmetic to the arduino-esp32 baseline remains open, and cannot be closed by measuring our build alone. What is now known is where *our* time goes; what is not known is where *its* time went. The one way to settle it is to rebuild v0.3.3 from source — `platformio.ini` at that tag pins the pioarduino platform, which is still installed — instrument it identically, and measure the same phases. Until that is done, every arduino-vs-ours statement in this project remains a cross-session comparison against a number nobody can reproduce.
+
 ## Constant-flow testing, and what it refuted
 
 Run afterwards, and it changed the answer. Setup: TF-PSA-Crypto `main` (`c5467adc`), `MBEDTLS_TEST_CONSTANT_FLOW_MEMSAN`, clang 22, `CMAKE_BUILD_TYPE=MemSanDbg`, `MBEDTLS_HAVE_ASM` **unset** so the generic C path is the code actually under test. Harness and driver: [`spike/mbedtls-perf/upstream/constant-flow/`](../../spike/mbedtls-perf/upstream/constant-flow/).
