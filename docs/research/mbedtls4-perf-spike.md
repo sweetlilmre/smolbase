@@ -21,7 +21,7 @@ The practical consequence is larger than the bookkeeping one: **the same handsha
 
 The original question — why the arduino-esp32 build was faster than the native IDF build — is **answered with measurements rather than inference**. The whole gap is TLS handshake computation: network, HTTP framing, JSON parsing and Kconfig differences are each eliminated by direct measurement. Certificate chain verification is the largest single component, and it turns out to be *nothing but* its two ECDSA signature verifies — the "chain-walk overhead" that looked like the answer never existed, and the arithmetic that produced it mixed two incompatible rulers. The real correction is [Part 1a](#part-1a--the-ruler-was-wrong-scheduling-not-crypto): elliptic-curve maths on core 0 costs 1.75× what the same call costs on core 1, because the WiFi stack deschedules it, and a whole handshake goes 3.8 s → 2.1 s when moved. A separate strand produced a three-patch series now open as a **draft PR upstream**; it fixes a bignum constant-time regression that is a minority of the problem. There is now a working, instrumented arduino baseline that can be rebuilt and flashed at will — that capability did not exist before and is what made the comparison possible.
 
-**The accelerator-on anomaly is solved: it is instruction-cache misses** — see [Part 1e](#part-1e--the-accelerator-on-anomaly-it-is-instruction-fetch). The identical multiply call costs 22.9 µs in a tight loop and 49.0 µs inside a real verify, in one binary on one core, and doubling the flash clock removes a quarter of the verify while leaving the tight loop untouched. About 43% of an accelerator-on verify is waiting for flash. **The version regression, in the configuration we ship, is a uniform ~30% on both curves** — see [Part 1d](#part-1d--the-shipped-configuration-on-the-ruler-that-transfers-a-uniform-30). `ecdsa_verify` P-256 goes 172.7 → 230.5 ms and P-384 goes 365.3 → 475.0 ms between 3.6.6 and 4.1.0, and the firmware reads 237 and 505 for the same calls, so these numbers describe what ships. The shipped configuration also beats the arduino baseline at every level — primitive, chain, and whole handshake — because turning the accelerator off is worth more than the regression costs. [Part 1b](#part-1b--both-builds-on-one-ruler-at-last)'s "1.83× on P-384" was measured in the accelerator-on configuration and is retracted; see Part 1d.
+**The accelerator-on anomaly is solved, and so is the last of the arduino-vs-ours question: it is instruction-cache misses, and the arduino build's advantage is a code-layout accident** — see [Part 1e](#part-1e--the-accelerator-on-anomaly-it-is-instruction-fetch) and [Part 1f](#part-1f--why-the-arduino-build-wins-with-the-accelerator-on-code-layout-and-nothing-else) — see [Part 1e](#part-1e--the-accelerator-on-anomaly-it-is-instruction-fetch). The identical multiply call costs 22.9 µs in a tight loop and 49.0 µs inside a real verify, in one binary on one core, and doubling the flash clock removes a quarter of the verify while leaving the tight loop untouched. About 43% of an accelerator-on verify is waiting for flash. **The version regression, in the configuration we ship, is a uniform ~30% on both curves** — see [Part 1d](#part-1d--the-shipped-configuration-on-the-ruler-that-transfers-a-uniform-30). `ecdsa_verify` P-256 goes 172.7 → 230.5 ms and P-384 goes 365.3 → 475.0 ms between 3.6.6 and 4.1.0, and the firmware reads 237 and 505 for the same calls, so these numbers describe what ships. The shipped configuration also beats the arduino baseline at every level — primitive, chain, and whole handshake — because turning the accelerator off is worth more than the regression costs. [Part 1b](#part-1b--both-builds-on-one-ruler-at-last)'s "1.83× on P-384" was measured in the accelerator-on configuration and is retracted; see Part 1d.
 
 ## Environment
 
@@ -385,6 +385,53 @@ It also means the accelerator is worse in a real firmware than any benchmark wil
 
 ---
 
+# Part 1f — Why the arduino build wins with the accelerator on: code layout, and nothing else
+
+Part 1e showed that a large fraction of an ECDSA verify is instruction-cache misses. That left one question: **the arduino build pays that too, so why is it faster?** With the accelerator on it does P-384 in 570 ms where we take 1047 ms, while the two builds are level on P-256.
+
+The flash-clock test answers it. 40 MHz against 80 MHz halves what a cache miss costs and leaves a cached function untouched. Run on both builds, core 1, accelerator on:
+
+| | 40 MHz | 80 MHz | change |
+|---|---|---|---|
+| **arduino, P-256** | 601 ms | 441 ms | **−27%** |
+| **arduino, P-384** | 570 ms | **572 ms** | **none** |
+| ours, P-256 | 704 ms | 551 ms | −22% |
+| ours, P-384 | 1141 ms | 947 ms | −17% |
+
+**The arduino build's P-384 is the only cell in the matrix that does not care how fast the flash is.** Its code is resident in the instruction cache and stays there. Every other cell — including the arduino build's own P-256 — is fetching from flash and speeds up when the flash does.
+
+That is the whole of the arduino build's advantage. It is a linker accident.
+
+## Take the flash time out and the two libraries agree
+
+A cache miss costs a flash fetch, so doubling the clock removes about half the miss cost; the total is about twice the saving. Subtract it and what is left is the compute:
+
+| | miss cost | compute only | ours ÷ arduino |
+|---|---|---|---|
+| arduino, P-256 | ~320 ms (53%) | 281 ms | |
+| ours, P-256 | ~305 ms (43%) | 399 ms | **1.42** |
+| arduino, P-384 | **~0 ms (0%)** | 570 ms | |
+| ours, P-384 | ~388 ms (34%) | 753 ms | **1.32** |
+
+**A uniform 1.32–1.42×.** That is the mbedTLS 4 regression, and it is exactly what the harness reports for this configuration — 1.40 on P-256 and 1.42 on P-384. Every number in this investigation now reconciles.
+
+It also confirms Part 1d from a completely different direction: the version regression is uniform across curves. The apparent "1.83× on P-384" was the arduino build's P-384 running from cache while ours ran from flash.
+
+Compute-only also restores the sane curve ratio that the raw figures destroyed: P-384 against P-256 is 2.03× on the arduino build and 1.89× on ours. A bigger curve costs more, in both, once the cache noise is removed.
+
+## So, the whole answer to "why was the old firmware faster"
+
+With the accelerator **on**, in that configuration only:
+
+1. Roughly half of an ECDSA verify is waiting for instruction fetch, in **both** builds.
+2. In the arduino binary the P-384 reduction code happens to sit where it stays cached, so it pays none of that. In ours it does not.
+3. Remove the cache cost and mbedTLS 4 is a uniform ~1.35× slower — the known constant-time regression, with a patch already open upstream.
+4. None of this survives turning the accelerator off, which is what we ship, and where the harness and the firmware agree to 3%.
+
+The old firmware was not better engineered here. It got lucky with where the linker put one function, in a configuration that is the wrong configuration for both builds.
+
+---
+
 # Part 2 — The original spike: the accelerator and the constant-time regression
 
 This is the strand that ran first. Its conclusions stand; its scope was too narrow, which is the lesson in *What the spike got wrong*.
@@ -563,21 +610,23 @@ The spike measured bignum primitives exhaustively and never asked what fraction 
 
 The same failure mode is the live risk for both open questions: **size a component before benchmarking it.** The phase split in `core/Http.cpp` and the `MBEDTLS_DEBUG` timeline exist for exactly that.
 
-## What is left, in the order it is worth doing
+## What is left
 
-1. **Decide what to do about core 0** (see *What to do about core 0* in Part 1a). The only item with a shipping consequence: 3.8 s against 2.1 s for a handshake. Every build pays the penalty and priority removes it in every build. Measure whichever option is chosen against the App loop's frame budget, not just against the handshake.
-2. **Re-derive the attribution table** in Part 1 from Parts 1a, 1d and 1e, which supply the right rulers.
-3. **Revert the instrumentation** — the IDF 6 SDK tree, `Http.cpp` and the probe files, and the v0.3.3 worktree. All listed under *Dirty state*.
-4. **Fix the benchmark ordering defect** in `mpi_mul_hooked` (Part 2). Affects nothing above.
+**Nothing about the performance question. It is finished.** Every part of the original gap has a measured cause:
 
-Everything the spike set out to explain is now explained:
+| cause | size | where |
+|---|---|---|
+| our own unbuffered `ClientReader` | ~2.07 s | fixed |
+| the accelerator being wrong for ECC operands | the dominant term | fixed by config |
+| instruction-cache misses when the accelerator is on | ~43% of a verify | consequence of the above; gone with it |
+| the arduino build's apparent P-384 advantage | a linker accident | Part 1f |
+| the mbedTLS 4 constant-time regression | uniform ~30% | patch open upstream |
+| running the handshake on core 0 | 3.8 s against 2.1 s | **open decision** |
 
-- The +1163 ms "residual" — scheduling on core 0 (Part 1a).
-- The doubled `x509_crt_verify` — arithmetic across two rulers; the call is 99.8% its two signature verifies (Part 1a).
-- The version regression — a uniform ~30% on both curves in the shipped configuration, in the non-multiply arithmetic, which is where the upstream patch points (Parts 1c, 1d).
-- The accelerator-on anomaly — instruction-cache misses from interleaving the ESP peripheral driver with the ECP code 5817 times per verify (Part 1e).
+Two things remain, and only the first is a decision:
 
-The `MBEDTLS_DEBUG` handshake timeline is still the right tool for sizing anything inside the handshake that is not certificate work.
+1. **Core 0 or core 1 for the handshake.** 3.8 s against 2.1 s. ADR 0001 puts network work on core 0 so consumer code keeps core 1; moving a 2.1 s handshake moves a 2.1 s stall onto the task that drives the Screen. Measure whichever option is chosen against the App loop's frame budget.
+2. **Revert the instrumentation** — the IDF 6 SDK tree, `Http.cpp` and the probe files, and the v0.3.3 worktree. All listed under *Dirty state*. The attribution table in Part 1 should be re-derived from Parts 1a, 1d, 1e and 1f at the same time, or deleted.
 
 ## Upstream PR — separate strand, do not conflate
 
