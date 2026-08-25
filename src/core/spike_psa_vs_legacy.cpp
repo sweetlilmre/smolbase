@@ -36,12 +36,18 @@
 
 #include "psa/crypto.h"
 
-#include <esp_log.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include <stdio.h>
 #include <string.h>
+
+/* printf rather than ESP_LOGW so the file is byte-identical in both builds:
+ * arduino-esp32 compiles ESP_LOG* out below its own core debug level, and the
+ * whole point of this probe is that the two builds run the same source.
+ * Both SDKs route printf to UART0. */
+#define SPIKE_PSA_LOG(fmt, ...) printf("W spike: " fmt "\n", ##__VA_ARGS__)
 
 namespace {
 
@@ -110,7 +116,7 @@ void benchCurve(const char *label, mbedtls_ecp_group_id gid,
     rc |= mbedtls_ecp_mul(&grp, &Q, &d, &grp.G, prngFill, &prng);
     rc |= mbedtls_ecdsa_sign(&grp, &r, &s, &d, hash, hash_len, prngFill, &prng);
     if (rc != 0) {
-        ESP_LOGW("spike", "[spike-psa] %s setup failed rc=%d", label, rc);
+        SPIKE_PSA_LOG("[spike-psa] %s setup failed rc=%d", label, rc);
         goto done;
     }
 
@@ -137,7 +143,7 @@ void benchCurve(const char *label, mbedtls_ecp_group_id gid,
         prc |= mbedtls_mpi_write_binary(&r, sig, coord_len);
         prc |= mbedtls_mpi_write_binary(&s, sig + coord_len, coord_len);
         if (prc != 0) {
-            ESP_LOGW("spike", "[spike-psa] %s export failed rc=%d", label, prc);
+            SPIKE_PSA_LOG("[spike-psa] %s export failed rc=%d", label, prc);
             goto done;
         }
 
@@ -162,13 +168,12 @@ void benchCurve(const char *label, mbedtls_ecp_group_id gid,
 
         const unsigned long legacy_us = (unsigned long)((t1 - t0) / ITERS);
         const unsigned long psa_us = (unsigned long)((t3 - t2) / ITERS);
-        ESP_LOGW("spike",
-                 "[spike-psa] %s legacy=%lu us psa=%lu us ratio=%lu.%02lu "
-                 "(legacy rc=%d psa st=%d)",
-                 label, legacy_us, psa_us,
-                 legacy_us ? psa_us / legacy_us : 0UL,
-                 legacy_us ? (psa_us * 100UL / legacy_us) % 100UL : 0UL,
-                 vrc, (int)st);
+        SPIKE_PSA_LOG("[spike-psa] %s legacy=%lu us psa=%lu us ratio=%lu.%02lu "
+                      "(legacy rc=%d psa st=%d)",
+                      label, legacy_us, psa_us,
+                      legacy_us ? psa_us / legacy_us : 0UL,
+                      legacy_us ? (psa_us * 100UL / legacy_us) % 100UL : 0UL,
+                      vrc, (int)st);
     }
 
 done:
@@ -210,8 +215,7 @@ void runPinned(int core, const char *l256, const char *l384, int prio = 5)
     PinnedArgs args = {xTaskGetCurrentTaskHandle(), l256, l384};
     if (xTaskCreatePinnedToCore(pinnedTask, "spikepin", 16384, &args, prio,
                                 nullptr, core) != pdPASS) {
-        ESP_LOGW("spike", "[spike-psa] pinned task create failed (core %d)",
-                 core);
+        SPIKE_PSA_LOG("[spike-psa] pinned task create failed (core %d)", core);
         return;
     }
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
