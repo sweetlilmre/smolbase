@@ -217,7 +217,27 @@ That 19.8% is larger than the primitive numbers alone would suggest, and the rea
 
 Two notes on method, both learned the hard way earlier in this work. The patched image was disassembled *before* flashing to confirm `mbedtls_mpi_core_sub()` had no calls, because `idf.py flash` rebuilds and a stale tree silently produces the wrong binary. And the reverted image was identified by size rather than disassembly, because `xtensa-esp-elf-objdump` decoded that particular ELF as raw words — a reminder that a tool returning zero matches is not the same as a tool returning a zero answer.
 
-### Would this patch alone have fixed the original migration problem? No
+### Status of the original premise: partly satisfied, and the rest is now unreachable
+
+The spike existed to explain why the native build was slower than the arduino-esp32 build. That question has two halves, and only one of them is answered.
+
+**Answered: the mbedTLS 3.6.6 → 4.1.0 gap is entirely those three lines, in *both* accelerator configurations.** The revert control was originally run only with the accelerator off, which left the original comparison's own configuration untested. Run with the accelerator **on**:
+
+| bench | 3.6.6 | 4.1.0 | 4.1.0 + revert | gap | recovered |
+|---|---|---|---|---|---|
+| `ecdsa_verify` | 298.22 ms | 366.86 ms | 292.37 ms | +23.0% | **109%** |
+| `ecp_mul` | 139.68 ms | 170.46 ms | 136.80 ms | +22.0% | 109% |
+| `mpi_inv_mod` | 8.66 ms | 12.23 ms | 8.62 ms | +41.2% | 101% |
+
+The patch recovers it too in that configuration (`ecdsa_verify` 366.86 → 290.57 ms, 111%). So the attribution holds everywhere, not just where it was first tested.
+
+**Not answered: the arduino-vs-ours end-to-end gap is much larger than that, and the difference is unaccounted for.** In the accelerator-on configuration the primitives predict the version difference is worth roughly 300 ms per handshake — about three ECDSA verifies at 76 ms saved each, plus two `ecp_mul` at 33 ms. But the recorded end-to-end gap in that same configuration was **2.7 s** (arduino 4.12 s against ours 6.85 s). Roughly 2.4 s is therefore *not* mbedTLS, and this spike never identified what it is. The likeliest remaining suspect is the HTTP and TLS client stack itself — `esp_http_client` against arduino-esp32's `NetworkClientSecure` — which §5.1 flagged as a confound at the very start and which was never isolated.
+
+**And the baseline can no longer be reproduced.** `smolbase-firmware-v0.3.3.bin` was fetched from the release and flashed today. It runs, but it **fails the request**: `{"error":"could not reach GitHub releases"}`. Its 3907 ms is therefore a time-to-fail, not a comparable handshake. Our build succeeds from the same device on the same network minutes either side, so this is not the network, not GitHub, and not rate limiting — that build specifically can no longer complete the fetch. Whether it fails before or after the handshake is unknown; 3907 ms is far too long for a connect failure and suspiciously close to the historical 4120 ms, which hints at a full handshake followed by a certificate-verification failure, but that is a hypothesis and not measured.
+
+**The consequence is worth stating plainly: every arduino-vs-ours number in this project is a cross-session comparison, and now always will be.** The baseline cannot be re-measured beside a current build.
+
+### Would this patch alone have fixed the original migration problem? No — but the earlier reasoning here was unsound
 
 The migration's original symptom was an 8.49 s handshake where arduino-esp32 did 4.12 s. It is tempting to read this patch as *the* fix for that. It is not. Measured directly, by putting the patched mbedTLS under the **original** pre-fix config (accelerator on, fixed-point off):
 
@@ -229,7 +249,7 @@ The migration's original symptom was an 8.49 s handshake where arduino-esp32 did
 | shipped — accelerator OFF, fixed-point ON | **patched** | **3391 ms** |
 | *arduino-esp32 v0.3.3 reference* | *3.6.6* | *4120 ms* |
 
-**With the original config the patch changes nothing** — 7003 ms against 6850 ms, the same within cross-session variance. The reason is mechanical: with `HARDWARE_MPI=y` the ESP port replaces `mbedtls_mpi_mul_mpi`, and the peripheral's per-call ceremony dominates so completely that the constant-time helpers' cost is lost in it. The patch only becomes visible once the accelerator is out of the way.
+**With the original config the patch shows no end-to-end improvement** — 7003 ms against 6947 ms unpatched, both measured in the same session. But the reason is not that the patch does nothing there: at the primitive level it recovers 111% of the gap with the accelerator on. The predicted end-to-end saving is ~300 ms, and the run-to-run spread in that configuration is ±400 ms, so **the effect is simply below the noise floor of this measurement** rather than absent. The first version of this section compared today's patched figure against a 6850 ms number recorded in an earlier session and concluded the patch "changes nothing"; that was a cross-session comparison of exactly the kind this document keeps warning about, and it was wrong. The reason is mechanical: with `HARDWARE_MPI=y` the ESP port replaces `mbedtls_mpi_mul_mpi`, and the peripheral's per-call ceremony dominates so completely that the constant-time helpers' cost is lost in it. The patch only becomes visible once the accelerator is out of the way.
 
 So the original 8.49 s had **three independent causes**, and this patch addresses exactly one:
 
