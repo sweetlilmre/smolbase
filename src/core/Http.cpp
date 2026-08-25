@@ -6,6 +6,8 @@
 #include <cstring>
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
+#include <esp_log.h>    // SPIKE: temporary phase-split instrumentation
+#include <esp_timer.h>  // SPIKE: temporary phase-split instrumentation
 
 namespace Http {
 
@@ -128,7 +130,9 @@ Result json(const Request& req, JsonDocument& out) {
     esp_http_client_set_post_field(c, req.body, (int)bodyLen);
   }
 
+  const int64_t t_spike0 = esp_timer_get_time(); // SPIKE
   esp_err_t err = esp_http_client_open(c, (int)bodyLen);
+  const int64_t t_spike1 = esp_timer_get_time(); // SPIKE: connect + TLS handshake
   if (err != ESP_OK) {
     res.status = ERR_INIT;
     setErr(res, "open: %s (errno %d)", esp_err_to_name(err), esp_http_client_get_errno(c));
@@ -144,6 +148,7 @@ Result json(const Request& req, JsonDocument& out) {
   }
 
   esp_http_client_fetch_headers(c);
+  const int64_t t_spike2 = esp_timer_get_time(); // SPIKE: headers
   res.status = esp_http_client_get_status_code(c);
 
   if (res.status == 200) {
@@ -160,6 +165,14 @@ Result json(const Request& req, JsonDocument& out) {
       setErr(res, "json: %s", de.c_str());
     }
   }
+
+  // SPIKE: temporary phase split. Which phase of the request the time is in --
+  // connect+TLS, headers, or the JSON body -- so the handshake cost can be
+  // compared against what the offline primitive measurements predict.
+  const int64_t t_spike3 = esp_timer_get_time();
+  ESP_LOGW("spike", "open(connect+tls)=%lld headers=%lld body=%lld total=%lld ms status=%d",
+           (t_spike1 - t_spike0) / 1000, (t_spike2 - t_spike1) / 1000,
+           (t_spike3 - t_spike2) / 1000, (t_spike3 - t_spike0) / 1000, res.status);
 
   esp_http_client_close(c);
   esp_http_client_cleanup(c);
