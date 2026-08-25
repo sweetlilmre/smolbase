@@ -72,18 +72,38 @@ extern "C" {
 int __real_mbedtls_mpi_mul_mpi(mbedtls_mpi *X, const mbedtls_mpi *A,
                                const mbedtls_mpi *B);
 unsigned spike_mul_calls;
+unsigned long long spike_mul_cyc;
+
+static inline unsigned spike_wcc(void)
+{
+    unsigned r;
+    __asm__ __volatile__ ("rsr %0, ccount" : "=a" (r));
+    return r;
+}
+
+/* Cycles are accumulated INSIDE the hook, so the figure is the real call and
+ * not the hook. The tight-loop benchmark and the real verify both go through
+ * this same hook in this same binary, so the two per-call figures are directly
+ * comparable -- which is the whole point of the measurement. */
 int __wrap_mbedtls_mpi_mul_mpi(mbedtls_mpi *X, const mbedtls_mpi *A,
                                const mbedtls_mpi *B)
 {
+    const unsigned t = spike_wcc();
+    const int rc = __real_mbedtls_mpi_mul_mpi(X, A, B);
+    spike_mul_cyc += (unsigned long long) (unsigned) (spike_wcc() - t);
     spike_mul_calls++;
-    return __real_mbedtls_mpi_mul_mpi(X, A, B);
+    return rc;
 }
 }
-#define SPIKE_MUL_RESET() (spike_mul_calls = 0)
+#define SPIKE_MUL_RESET() (spike_mul_calls = 0, spike_mul_cyc = 0)
 #define SPIKE_MUL_COUNT() (spike_mul_calls)
+#define SPIKE_MUL_NS()    ((unsigned long) (spike_mul_calls                               ? (spike_mul_cyc * 1000ULL / 240ULL) / spike_mul_calls                               : 0ULL))
+#define SPIKE_MUL_TOTAL_US() ((unsigned long) (spike_mul_cyc / 240ULL))
 #else
 #define SPIKE_MUL_RESET() ((void) 0)
 #define SPIKE_MUL_COUNT() (0u)
+#define SPIKE_MUL_NS()    (0UL)
+#define SPIKE_MUL_TOTAL_US() (0UL)
 #endif
 
 /* SPIKE: how much of a verify is heap traffic?
@@ -223,6 +243,8 @@ void benchCurve(const char *label, mbedtls_ecp_group_id gid,
         int64_t t1 = nowUs();
         mbedtls_platform_set_calloc_free(calloc, free);
         const unsigned legacy_muls = SPIKE_MUL_COUNT() / (unsigned) ITERS;
+        const unsigned long inverify_ns = SPIKE_MUL_NS();
+        const unsigned long mul_total_us = SPIKE_MUL_TOTAL_US() / (unsigned) ITERS;
         const unsigned a_calls = spike_alloc_calls / (unsigned) ITERS;
         const unsigned f_calls = spike_free_calls / (unsigned) ITERS;
         const unsigned long a_us =
@@ -276,6 +298,12 @@ void benchCurve(const char *label, mbedtls_ecp_group_id gid,
                       legacy_us ? psa_us / legacy_us : 0UL,
                       legacy_us ? (psa_us * 100UL / legacy_us) % 100UL : 0UL,
                       legacy_muls, psa_muls, vrc, (int)st);
+        SPIKE_PSA_LOG("[spike-split] %s verify=%lu us | in-mul=%lu us (%lu%%) "
+                      "| non-mul=%lu us | %u calls at %lu.%03lu us/call inside",
+                      label, legacy_us, mul_total_us,
+                      legacy_us ? (mul_total_us * 100UL / legacy_us) : 0UL,
+                      legacy_us > mul_total_us ? legacy_us - mul_total_us : 0UL,
+                      legacy_muls, inverify_ns / 1000, inverify_ns % 1000);
         SPIKE_PSA_LOG("[spike-heap] %s allocs=%u frees=%u heap_time=%lu us "
                       "(%lu%% of verify) bytes=%luKB",
                       label, a_calls, f_calls, a_us,
@@ -315,14 +343,18 @@ void benchMulSize(const char *label, size_t bits, int iters)
     if (rc != 0) {
         SPIKE_PSA_LOG("[spike-mul] %s setup failed rc=%d", label, rc);
     } else {
+        SPIKE_MUL_RESET();
         int64_t t0 = nowUs();
         for (int i = 0; i < iters; i++) {
             rc |= mbedtls_mpi_mul_mpi(&x, &a, &b);
         }
         int64_t t1 = nowUs();
         const unsigned long ns = (unsigned long)(((t1 - t0) * 1000) / iters);
-        SPIKE_PSA_LOG("[spike-mul] %s %u bits: %lu.%03lu us/call over %d calls rc=%d",
-                      label, (unsigned) bits, ns / 1000, ns % 1000, iters, rc);
+        const unsigned long inner = SPIKE_MUL_NS();
+        SPIKE_PSA_LOG("[spike-mul] %s %u bits: outer=%lu.%03lu us/call "
+                      "inner=%lu.%03lu us/call over %d calls rc=%d",
+                      label, (unsigned) bits, ns / 1000, ns % 1000,
+                      inner / 1000, inner % 1000, iters, rc);
     }
 
     mbedtls_mpi_free(&x);

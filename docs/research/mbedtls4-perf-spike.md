@@ -21,7 +21,7 @@ The practical consequence is larger than the bookkeeping one: **the same handsha
 
 The original question — why the arduino-esp32 build was faster than the native IDF build — is **answered with measurements rather than inference**. The whole gap is TLS handshake computation: network, HTTP framing, JSON parsing and Kconfig differences are each eliminated by direct measurement. Certificate chain verification is the largest single component, and it turns out to be *nothing but* its two ECDSA signature verifies — the "chain-walk overhead" that looked like the answer never existed, and the arithmetic that produced it mixed two incompatible rulers. The real correction is [Part 1a](#part-1a--the-ruler-was-wrong-scheduling-not-crypto): elliptic-curve maths on core 0 costs 1.75× what the same call costs on core 1, because the WiFi stack deschedules it, and a whole handshake goes 3.8 s → 2.1 s when moved. A separate strand produced a three-patch series now open as a **draft PR upstream**; it fixes a bignum constant-time regression that is a minority of the problem. There is now a working, instrumented arduino baseline that can be rebuilt and flashed at will — that capability did not exist before and is what made the comparison possible.
 
-**The version regression, in the configuration we ship, is a uniform ~30% on both curves** — see [Part 1d](#part-1d--the-shipped-configuration-on-the-ruler-that-transfers-a-uniform-30). `ecdsa_verify` P-256 goes 172.7 → 230.5 ms and P-384 goes 365.3 → 475.0 ms between 3.6.6 and 4.1.0, and the firmware reads 237 and 505 for the same calls, so these numbers describe what ships. The shipped configuration also beats the arduino baseline at every level — primitive, chain, and whole handshake — because turning the accelerator off is worth more than the regression costs. [Part 1b](#part-1b--both-builds-on-one-ruler-at-last)'s "1.83× on P-384" was measured in the accelerator-on configuration and is retracted; see Part 1d.
+**The accelerator-on anomaly is solved: it is instruction-cache misses** — see [Part 1e](#part-1e--the-accelerator-on-anomaly-it-is-instruction-fetch). The identical multiply call costs 22.9 µs in a tight loop and 49.0 µs inside a real verify, in one binary on one core, and doubling the flash clock removes a quarter of the verify while leaving the tight loop untouched. About 43% of an accelerator-on verify is waiting for flash. **The version regression, in the configuration we ship, is a uniform ~30% on both curves** — see [Part 1d](#part-1d--the-shipped-configuration-on-the-ruler-that-transfers-a-uniform-30). `ecdsa_verify` P-256 goes 172.7 → 230.5 ms and P-384 goes 365.3 → 475.0 ms between 3.6.6 and 4.1.0, and the firmware reads 237 and 505 for the same calls, so these numbers describe what ships. The shipped configuration also beats the arduino baseline at every level — primitive, chain, and whole handshake — because turning the accelerator off is worth more than the regression costs. [Part 1b](#part-1b--both-builds-on-one-ruler-at-last)'s "1.83× on P-384" was measured in the accelerator-on configuration and is retracted; see Part 1d.
 
 ## Environment
 
@@ -297,11 +297,91 @@ What survives from Parts 1b and 1c, because it was measured in more than one con
 
 ## What is left of the accelerator-on anomaly
 
+> **Answered in [Part 1e](#part-1e--the-accelerator-on-anomaly-it-is-instruction-fetch).** It is instruction-cache misses. The paragraph below stands as the statement of the question.
+
 It is now a historical curiosity rather than a live question. With the accelerator on, the firmware costs roughly twice what the harness says, by an amount that varies with the build and the curve; with it off, they agree. Nothing ships with it on — it was measured off on other grounds long before this. The only thing it still contaminates is the arduino-vs-ours comparison, because the arduino build's mbedTLS is precompiled with `MBEDTLS_MPI_MUL_MPI_ALT` baked in and **cannot** be run with the accelerator off. That comparison therefore has no clean form, and Part 1d's version numbers — 3.6.6 against 4.1.0 in the shipped configuration, both from source — are the closest thing to one.
 
 ## The rule this earns, which is the same rule as before
 
 Part 1a's lesson was that a primitive benchmark measures a primitive, not a program. This is its second half: **a benchmark matrix with holes in it will let you compare two cells that share no configuration.** Every P-384 figure sat in one column of that matrix, and nothing in the numbers said so — the tables printed them beside P-256 figures drawn from cells with different levers. Filling the hole took two builds and twenty minutes, and it reversed a conclusion.
+
+---
+
+# Part 1e — The accelerator-on anomaly: it is instruction fetch
+
+The one thing left unexplained was this. Turning the RSA/MPI accelerator on costs about **25% in the harness** and about **210% in the firmware** — the shipped build does a handshake in 3.79 s and the same build with the accelerator on takes 7.36 s. The library explains a third of that at most. This part finds the rest.
+
+## The measurement that splits it
+
+The `--wrap` hook on `mbedtls_mpi_mul_mpi` was given a cycle counter, accumulated **inside** the hook so the figure is the real call and not the hook. The tight-loop multiply benchmark and the real ECDSA verify then both go through that same hook, in the same binary, on the same core, so their per-call figures are directly comparable. That is the whole design: one number that cannot be explained away by binary layout, hook cost, or which build it came from.
+
+Core 1, priority 5, P-256, accelerator on, one binary:
+
+| | µs per `mbedtls_mpi_mul_mpi` call |
+|---|---|
+| in a tight loop, 4000 calls back to back | **22.9** |
+| inside a real ECDSA verify, 5817 calls | **49.0** |
+
+**The identical call costs 2.14× more inside a verify.** Nothing about the call changed. Only what ran between the calls.
+
+The accelerator-off control says the same: 11.0 µs in a loop, 24.0 µs in a verify, **2.18×**. So interleaving is general — it is not something the accelerator does.
+
+## What it is
+
+Doubling the flash clock, 40 MHz to 80 MHz, everything else identical:
+
+| core 1, P-256, accelerator on | 40 MHz | 80 MHz | change |
+|---|---|---|---|
+| tight-loop multiply | 22.9 µs | 24.1 µs | **none** |
+| multiply inside a verify | 49.0 µs | 36.5 µs | **−25%** |
+| verify total | 703.7 ms | 551.3 ms | −22% |
+| non-multiply part of the verify | 418.6 ms | 338.8 ms | −19% |
+| handshake, core 0 | 7358 ms | 6296 ms | −14% |
+
+**A tight loop does not care how fast the flash is. A real verify cares a great deal.** That is the signature of instruction-cache misses: a resident working set is unaffected by fetch latency, a thrashing one is proportional to it.
+
+Halving the fetch latency removes half the miss cost, so the total is about twice the saving:
+
+| | miss cost | as a share of the operation |
+|---|---|---|
+| P-256 verify, accelerator **on** | ~305 ms of 704 ms | **43%** |
+| P-256 verify, accelerator **off** | ~101 ms of 423 ms | **24%** |
+| handshake on core 0, accelerator **on** | ~2124 ms of 7358 ms | **29%** |
+
+## Why the accelerator makes it so much worse
+
+With the accelerator off, `mbedtls_mpi_mul_mpi` is plain C in `bignum.c`, sitting beside the code that calls it. The working set is the ECP code plus a small multiply.
+
+With it on, the ESP port replaces that function, and each call reaches into a second body of code: `esp_bignum.c`, the peripheral clock control, the crypto mutex, and the ESP32 DPORT access path with its other-CPU stall. That code and the elliptic-curve code evict each other, **5817 times per P-256 signature check**. Every eviction is a fetch from flash.
+
+The harness never sees it because its binary is roughly a fifth the size of the firmware and it does nothing else. Its working set fits, so it measures the honest cost of the peripheral — a multiply that is genuinely about twice as slow at 256 bits — and none of the cache cost.
+
+## What is ruled out, all by measurement
+
+- **Not preemption.** At priority 24, above the WiFi task, the penalty is unchanged (accelerator on 681 ms against 704 ms).
+- **Not heap traffic.** Counting allocations through `mbedtls_platform_set_calloc_free`: 1455 allocations per P-256 verify, 1–8% of the time.
+- **Not the ECP layer.** Identical multiply counts between versions and configurations.
+- **Not the multiply's own price.** The tight-loop figure matches the harness to within 15%.
+- **Not a missing fast reduction.** `grp.modp` is non-NULL for both curves in every build.
+
+## And it buys nothing where we ship
+
+The obvious follow-up is to ship the 80 MHz flash clock. Measured, it is not worth it:
+
+| handshake, shipped levers | 40 MHz | 80 MHz |
+|---|---|---|
+| core 1 | 2132–2147 ms | 2137 ms |
+| core 0 | 3710–3869 ms | 3475–3705 ms |
+
+Core 1 is identical. Core 0 is perhaps 5% better, and the two builds differ by the instrumentation hooks, so even that is not solid. This is the mechanism confirming itself from the other side: with the accelerator off there are few misses to accelerate, so a faster flash has nothing to do. **The 80 MHz clock is not recommended** on this evidence — it would be a real change to the flash timing for no measured gain.
+
+## What this closes
+
+The accelerator-on anomaly is explained. It was never a mbedTLS property, a version difference, or an ESP-IDF regression. It is what happens when a peripheral driver is called thousands of times in a loop that also runs a large body of other code, on a chip that executes from flash through a small cache.
+
+It also means the accelerator is worse in a real firmware than any benchmark will tell you: the harness says the peripheral costs 25% on an ECDSA verify, and in the shipping firmware it costs 210%. The decision to turn it off was right for the reason already recorded, and it is right by a much larger margin than that reason implied.
+
+**The rule:** a peripheral driver's cost is not the time inside the driver. On a flash-executing chip, calling it thousands of times in a tight interleave with other code costs more outside the call than inside it, and no benchmark that calls it back to back will show you that.
 
 ---
 
@@ -485,12 +565,17 @@ The same failure mode is the live risk for both open questions: **size a compone
 
 ## What is left, in the order it is worth doing
 
-1. **Decide what to do about core 0** (see *What to do about core 0* in Part 1a). This is the only item with a shipping consequence: 3.8 s against 2.1 s for a handshake. Every build pays the penalty and priority removes it in every build, so both fixes are live. Measure whichever is chosen against the App loop's frame budget, not just against the handshake.
-2. **Re-derive the attribution table** in Part 1 from Part 1a and Part 1d, which supply the right rulers.
-3. **The accelerator-on anomaly** (Part 1b, last section; Part 1d, *What is left of the accelerator-on anomaly*). Historical only — nothing ships with the accelerator on. Worth an hour if the arduino-vs-ours comparison ever needs to be exact.
+1. **Decide what to do about core 0** (see *What to do about core 0* in Part 1a). The only item with a shipping consequence: 3.8 s against 2.1 s for a handshake. Every build pays the penalty and priority removes it in every build. Measure whichever option is chosen against the App loop's frame budget, not just against the handshake.
+2. **Re-derive the attribution table** in Part 1 from Parts 1a, 1d and 1e, which supply the right rulers.
+3. **Revert the instrumentation** — the IDF 6 SDK tree, `Http.cpp` and the probe files, and the v0.3.3 worktree. All listed under *Dirty state*.
 4. **Fix the benchmark ordering defect** in `mpi_mul_hooked` (Part 2). Affects nothing above.
 
-The version question is closed: a uniform ~30% on both curves in the shipped configuration, which is the shape a per-limb constant-time penalty should have, and which supports the upstream series being both correctly aimed and correctly sized.
+Everything the spike set out to explain is now explained:
+
+- The +1163 ms "residual" — scheduling on core 0 (Part 1a).
+- The doubled `x509_crt_verify` — arithmetic across two rulers; the call is 99.8% its two signature verifies (Part 1a).
+- The version regression — a uniform ~30% on both curves in the shipped configuration, in the non-multiply arithmetic, which is where the upstream patch points (Parts 1c, 1d).
+- The accelerator-on anomaly — instruction-cache misses from interleaving the ESP peripheral driver with the ECP code 5817 times per verify (Part 1e).
 
 The `MBEDTLS_DEBUG` handshake timeline is still the right tool for sizing anything inside the handshake that is not certificate work.
 
