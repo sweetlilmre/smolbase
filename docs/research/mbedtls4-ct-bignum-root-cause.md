@@ -199,6 +199,24 @@ Both of the above were subsequently **refuted** — see the next section. The sh
 - **Not in the 3.6 LTS.** `Mbed-TLS/mbedtls:mbedtls-3.6` still has the plain-C version, so the LTS is unaffected and this was never backported — consistent with hardening rather than a fix for an exploitable bug.
 - **No matching report found.** Searched issues and PRs in `Mbed-TLS/mbedtls`, `Mbed-TLS/TF-PSA-Crypto` and `espressif/esp-idf` for constant-time/bignum/performance combinations. `Mbed-TLS/mbedtls#10671` ("RSA Performance regression in v4.1.0") is a **different** cause — `mbedtls_rsa_check_privkey()` added to `mbedtls_rsa_parse_key()`, which this benchmark never calls. This was a keyword search, so treat "not reported" as weak evidence and search again before asserting it in an issue.
 
+## End to end, on the real firmware
+
+Everything above measures primitives in an offline harness. This measures the shipping smolbase firmware doing a real TLS 1.2 ECDHE-ECDSA handshake to `api.github.com`, via `GET /api/update/check`, timed from the host with `Measure-Command`. Six reps each, two seconds apart, RSA/MPI accelerator off and fixed-point ECP on — the config that actually ships.
+
+| | min | mean |
+|---|---|---|
+| **A** — unpatched 4.1.0 | 4089 ms | 4198 ms |
+| **B** — with the three-patch series | **3286 ms** | **3391 ms** |
+| **A'** — reverted to unpatched again | 4045 ms | 4253 ms |
+
+**About 830 ms off a real handshake, 19.8%.** It was run as an A-B-A precisely because a single before/after against a live third-party host proves nothing: the two unpatched runs bracket the patched one and agree with each other to within 55 ms of mean, so the gain is the patch and not network drift or GitHub having a good afternoon.
+
+The patched firmware is also **144 bytes smaller** (1,473,936 against 1,474,080).
+
+That 19.8% is larger than the primitive numbers alone would suggest, and the reason is that a handshake does many EC operations: the chain has three ECDSA verifies, plus the ECDHE key exchange, plus signature verification of the ServerKeyExchange. The remaining ~3.4 s is TCP connect, HTTP, and ~30 KB of JSON, none of which this touches.
+
+Two notes on method, both learned the hard way earlier in this work. The patched image was disassembled *before* flashing to confirm `mbedtls_mpi_core_sub()` had no calls, because `idf.py flash` rebuilds and a stale tree silently produces the wrong binary. And the reverted image was identified by size rather than disassembly, because `xtensa-esp-elf-objdump` decoded that particular ELF as raw words — a reminder that a tool returning zero matches is not the same as a tool returning a zero answer.
+
 ## Constant-flow testing, and what it refuted
 
 Run afterwards, and it changed the answer. Setup: TF-PSA-Crypto `main` (`c5467adc`), `MBEDTLS_TEST_CONSTANT_FLOW_MEMSAN`, clang 22, `CMAKE_BUILD_TYPE=MemSanDbg`, `MBEDTLS_HAVE_ASM` **unset** so the generic C path is the code actually under test. Harness and driver: [`spike/mbedtls-perf/upstream/constant-flow/`](../../spike/mbedtls-perf/upstream/constant-flow/).
