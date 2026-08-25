@@ -1,6 +1,8 @@
-From: <your name and email>
-Date: 2026-08-24
-Subject: [PATCH 1/3] constant_time: force inlining where an assembly path is in use
+From 0daa3ab4c23ad2e6e12adac8f250b276577a46dc Mon Sep 17 00:00:00 2001
+From: sweetlilmre <sweetlilmre@gmail.com>
+Date: Tue, 25 Aug 2026 13:31:52 +0200
+Subject: [PATCH] constant_time: force inlining where an assembly path is in
+ use
 
 At -Os the compiler leaves mbedtls_ct_bool(), mbedtls_ct_if() and mbedtls_ct_uint_lt() out of line, even though their assembly bodies are a handful of instructions. Every use then pays a call.
 
@@ -24,9 +26,13 @@ I have no Arm timing measurement to offer, only the codegen and size figures abo
 
 The macro is used rather than a bare __attribute__((always_inline)) because mbedTLS supports MSVC, MSVC compiles the generic C branch, and __attribute__ is GNU-only.
 
+Signed-off-by: sweetlilmre <sweetlilmre@gmail.com>
 ---
+ utilities/constant_time_impl.h | 39 +++++++++++++++++++++++++++++-----
+ 1 file changed, 34 insertions(+), 5 deletions(-)
+
 diff --git a/utilities/constant_time_impl.h b/utilities/constant_time_impl.h
-index 334764e..b729cd7 100644
+index 334764ebc..90fc41015 100644
 --- a/utilities/constant_time_impl.h
 +++ b/utilities/constant_time_impl.h
 @@ -47,6 +47,34 @@
@@ -73,21 +79,29 @@ index 334764e..b729cd7 100644
  {
      /*
       * Define mask-generation code that, as far as possible, will not use branches or conditional instructions.
-@@ -198,7 +226,7 @@ static inline mbedtls_ct_condition_t mbedtls_ct_bool(mbedtls_ct_uint_t x)
+@@ -198,9 +226,9 @@ static inline mbedtls_ct_condition_t mbedtls_ct_bool(mbedtls_ct_uint_t x)
  #endif
  }
  
 -static inline mbedtls_ct_uint_t mbedtls_ct_if(mbedtls_ct_condition_t condition,
+-                                              mbedtls_ct_uint_t if1,
+-                                              mbedtls_ct_uint_t if0)
 +MBEDTLS_CT_INLINE mbedtls_ct_uint_t mbedtls_ct_if(mbedtls_ct_condition_t condition,
-                                               mbedtls_ct_uint_t if1,
-                                               mbedtls_ct_uint_t if0)
++                                                  mbedtls_ct_uint_t if1,
++                                                  mbedtls_ct_uint_t if0)
  {
-@@ -264,7 +292,7 @@ static inline mbedtls_ct_uint_t mbedtls_ct_if(mbedtls_ct_condition_t condition,
+ #if defined(MBEDTLS_CT_AARCH64_ASM) && (defined(MBEDTLS_CT_SIZE_32) || defined(MBEDTLS_CT_SIZE_64))
+     asm volatile ("and %x[if1], %x[if1], %x[condition]            \n\t"
+@@ -264,7 +292,8 @@ static inline mbedtls_ct_uint_t mbedtls_ct_if(mbedtls_ct_condition_t condition,
  #endif
  }
  
 -static inline mbedtls_ct_condition_t mbedtls_ct_uint_lt(mbedtls_ct_uint_t x, mbedtls_ct_uint_t y)
-+MBEDTLS_CT_INLINE mbedtls_ct_condition_t mbedtls_ct_uint_lt(mbedtls_ct_uint_t x, mbedtls_ct_uint_t y)
++MBEDTLS_CT_INLINE mbedtls_ct_condition_t mbedtls_ct_uint_lt(mbedtls_ct_uint_t x,
++                                                            mbedtls_ct_uint_t y)
  {
  #if defined(MBEDTLS_CT_AARCH64_ASM) && (defined(MBEDTLS_CT_SIZE_32) || defined(MBEDTLS_CT_SIZE_64))
      uint64_t s1;
+-- 
+2.55.0.windows.3
+

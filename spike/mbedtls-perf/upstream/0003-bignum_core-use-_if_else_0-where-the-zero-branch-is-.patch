@@ -1,6 +1,7 @@
-From: <your name and email>
-Date: 2026-08-24
-Subject: [PATCH 3/3] bignum_core: use _if_else_0 where the zero branch is unused
+From c64192a8f7e6aaa2bc19a09889afb86dadd7a7e7 Mon Sep 17 00:00:00 2001
+From: sweetlilmre <sweetlilmre@gmail.com>
+Date: Tue, 25 Aug 2026 13:34:42 +0200
+Subject: [PATCH] bignum_core: use _if_else_0 where the zero branch is unused
 
 mbedtls_mpi_core_sub() and mbedtls_mpi_core_mla() call mbedtls_ct_mpi_uint_if(cond, 1, 0) to turn a condition into a 0/1 borrow or carry bit. With if0 == 0 the general form reduces to (cond & if1): the (~cond & if0) half is always zero. mbedtls_ct_mpi_uint_if_else_0() is exactly that, and needs no mbedtls_ct_compiler_opaque() barrier to build ~cond.
 
@@ -10,9 +11,13 @@ Measured contribution, on an ESP32-D0WD-V3 in the one configuration where I isol
 
 Verified constant-flow clean on its own with MBEDTLS_TEST_CONSTANT_FLOW_MEMSAN, in the same run where a plain-C carry fails - so the harness demonstrably detects the property being claimed.
 
+Signed-off-by: sweetlilmre <sweetlilmre@gmail.com>
 ---
+ drivers/builtin/src/bignum_core.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
 diff --git a/drivers/builtin/src/bignum_core.c b/drivers/builtin/src/bignum_core.c
-index fc1b537..43b29e0 100644
+index fc1b537c7..43b29e0af 100644
 --- a/drivers/builtin/src/bignum_core.c
 +++ b/drivers/builtin/src/bignum_core.c
 @@ -452,10 +452,10 @@ mbedtls_mpi_uint mbedtls_mpi_core_sub(mbedtls_mpi_uint *X,
@@ -38,3 +43,6 @@ index fc1b537..43b29e0 100644
          d++;
      }
  
+-- 
+2.55.0.windows.3
+
