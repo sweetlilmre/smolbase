@@ -4,7 +4,7 @@ The harness for [docs/research/mbedtls4-perf-spike.md](../../docs/research/mbedt
 
 It exists because the migration produced a working TLS fix whose *reason* is not established. The end-to-end numbers are solid; the mechanism is inference, one part of it already falsified. This measures the mechanism directly.
 
-**It has been run.** All twelve cells are captured in `results/`. **C2 refuted** — both versions make exactly 5817 `mul_mpi` calls per P-256 verify. **C3 confirmed** — 19.49 µs hardware against 9.78 µs software at 256 bits, with the crossover between 256 and 512 bits. **The missing cell says the accelerator was always wrong**: mbedTLS 3.6.6 is 17.8% faster without it too. Full write-up in §8 of the [research doc](../../docs/research/mbedtls4-perf-spike.md).
+**It has been run.** All twelve cells are captured in `results/`. **C2 refuted** — both versions make exactly 5817 `mul_mpi` calls per P-256 verify. **C3 confirmed** — 19.49 µs hardware against 9.78 µs software at 256 bits, with the crossover between 256 and 512 bits. **The missing cell says the accelerator was always wrong**: mbedTLS 3.6.6 is 17.8% faster without it too. Full write-up in the [research doc](../../docs/research/mbedtls4-perf-spike.md), which is now the single record and handover for this work.
 
 ## What it answers
 

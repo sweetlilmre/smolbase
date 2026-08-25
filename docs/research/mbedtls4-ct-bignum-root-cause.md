@@ -1,8 +1,8 @@
 # mbedTLS 4 is slower than 3.6 on ESP32 — the root cause, with a fix
 
 **Written:** 2026-08-24, after running the experiment described below on hardware. **Status: root cause identified, proven by patch-and-measure, fixed, and the fix proven constant-time-preserving by MemSan constant-flow testing with a working negative control.** The first fix I proposed was refuted by that testing; the corrected one is Xtensa assembly.
-**Start here if you have no context:** [mbedtls4-handover.md](mbedtls4-handover.md) — state, environment, open questions, traps.
-**Companions:** [mbedtls4-perf-spike.md](mbedtls4-perf-spike.md) (the spike that measured the gap and established it was real) · [idf6-migration-continuation.md](idf6-migration-continuation.md)
+**Start here if you have no context:** [mbedtls4-perf-spike.md](mbedtls4-perf-spike.md) — the single record and handover: state, environment, open questions, traps.
+**Companion:** [idf6-migration-continuation.md](idf6-migration-continuation.md) — the wider migration state.
 **Harness:** `spike/mbedtls-perf/` · **Captures:** `spike/mbedtls-perf/results/*.log` · **Patches:** [`spike/mbedtls-perf/upstream/`](../../spike/mbedtls-perf/upstream/) (a three-patch series) · **Report to file:** [`upstream/README.md`](../../spike/mbedtls-perf/upstream/README.md)
 
 ## The finding in one paragraph
@@ -487,7 +487,7 @@ One methodological note, because it produced a silently wrong result before bein
 - **The Xtensa assembly is not MemSan-tested** — there is no MemSan for Xtensa. It rests on the same argument as the existing Arm and x86 paths (assembly is opaque to the optimiser) plus the disassembly check above. Upstream should still run its own constant-flow suite before accepting.
 - **One chip, one compiler.** Everything here is ESP32 / Xtensa LX6 / GCC 14.2 / `-Os`. The mechanism predicts RISC-V, MIPS and PowerPC are affected too, but that is reasoning from the preprocessor conditions, not measurement.
 - **`mpi_inv_mod` being 15.4% *faster* than 3.6.6 after the fix is unexplained.** 4.x's inversion is a different algorithm (`mbedtls_mpi_core_gcd_modinv_odd`, added July 2025); the fix apparently uncovers a genuine improvement that the constant-time cost was masking. Not investigated.
-- **Nothing here is a TLS-handshake measurement.** These are primitives. The handshake-level story is in [mbedtls4-perf-spike.md](mbedtls4-perf-spike.md).
+- **Much here is not a TLS-handshake measurement.** The primitive sections measure primitives; the handshake-level story and the arduino comparison are in [mbedtls4-perf-spike.md](mbedtls4-perf-spike.md).
 
 ## Reproducing
 
