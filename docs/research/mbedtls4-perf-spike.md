@@ -211,6 +211,53 @@ With the accelerator **off**, the harness (234 ms) and the firmware on core 1 (2
 
 ---
 
+# Part 1c — Counting the multiplies: it is not the ECP layer, and it is not the accelerator
+
+Part 1b left one question: **why is mbedTLS 4 1.83× slower on P-384 when the two libraries are level on P-256?** The harness says both curves are about 40% slower, so the firmware and the harness disagree about the *shape* of the regression, not only its size.
+
+The cleanest available test is a call count. The harness proved that timing noise cannot corrupt a count, and it counted `mbedtls_mpi_mul_mpi` per P-256 verify (5817 on both versions) but never counted P-384. So this run counts both curves, in the firmware, on both builds.
+
+The mechanism is the linker's `--wrap`, exactly as `spike/mbedtls-perf/main/wrap.c` uses it. It works against the arduino build's precompiled mbedTLS because it acts at link time. The hook **counts only** — no timer calls inside it — so the harness's instrumentation-overhead trap does not apply. `ecp.c` is a separate translation unit from `bignum.c` and `esp_bignum.c`, so the ECP multiply path is counted.
+
+All figures below: core 1, pinned, priority 5, accelerator **on**, fixed-point **off** in both builds, same probe source, same device, two consecutive requests, every cell stable to ±1%.
+
+| | arduino v0.3.3 — 3.6.6 | ours — 4.1.0 |
+|---|---|---|
+| `mul_mpi` calls per P-256 verify | **5817** | **5817** |
+| `mul_mpi` calls per P-384 verify | **8569** | **8569** |
+| µs per 256-bit `mul_mpi` | 21.7 | 24.4 |
+| µs per 384-bit `mul_mpi` | 23.0 | 23.1 |
+| fast reduction (`grp.modp`) present | yes, both curves | yes, both curves |
+| P-256 verify | 615 ms | 693 ms |
+| P-384 verify | 569 ms | 1045 ms |
+
+Three candidate explanations die here.
+
+- **Not the ECP layer.** The call counts are identical to the digit, on both curves. The two libraries choose the same window size and do the same number of point operations. The 5817 also matches the harness exactly, which is a useful cross-check on the whole method.
+- **Not the accelerator path.** A multiply costs the same in both builds, within 12%, at both operand sizes.
+- **Not a missing fast reduction.** `grp.modp` is non-NULL for both curves in both builds, so neither is falling back to a generic division.
+
+## What is left is the non-multiply arithmetic
+
+Subtract the multiply time from the verify time and divide by the call count. That gives the cost of everything a field operation does *except* the multiply — the modular reduction, the additions and subtractions, and the constant-time helpers:
+
+| non-multiply cost per field operation | arduino 3.6.6 | ours 4.1.0 |
+|---|---|---|
+| P-256 | 84.1 µs | 94.7 µs (**+13%**) |
+| P-384 | 43.4 µs | 98.8 µs (**+128%**) |
+
+**The whole version regression is in the non-multiply arithmetic.** That is exactly where the constant-time bignum regression already root-caused in [mbedtls4-ct-bignum-root-cause.md](mbedtls4-ct-bignum-root-cause.md) lives — `mbedtls_mpi_core_sub()` and `mbedtls_mpi_core_mla()`, reached through the reduction and the add/subtract paths, never through `mul_mpi`. So the upstream patch series is aimed at the right code. This is the first evidence for that from a running firmware rather than from the harness.
+
+## What is still not explained
+
+The **size dependence**. Our figure is flat — 95 µs at P-256, 99 µs at P-384, a slight rise with operand size, which is what any per-limb cost should do. The arduino figure **halves**, 84 µs down to 43 µs. A constant-time helper that costs per limb makes both curves dearer, not one; nothing in that mechanism makes 3.6.6's P-384 field operation cheaper than its own P-256 one.
+
+So the open question has moved and narrowed. It is no longer "why is mbedTLS 4 slow on P-384". It is: **why is mbedTLS 3.6.6's non-multiply work per field operation roughly half as expensive at P-384 as at P-256, when mbedTLS 4's is flat?** Whatever 3.6.6 does there, mbedTLS 4 lost it, and the loss shows up only on the larger curve.
+
+The next step is to instrument the reduction and the add/subtract paths in our SDK tree, per curve, and then read 3.6.6's source for the same functions to see what changed. Our side can be instrumented directly; the arduino side cannot, so the comparison has to be *our* P-256-versus-P-384 profile against what 3.6.6's source does differently. `--wrap` will not help here: `ecp.c` reaches these paths through the public MPI API, and the core helpers are called from inside `bignum.c`, where the linker cannot see them.
+
+---
+
 # Part 2 — The original spike: the accelerator and the constant-time regression
 
 This is the strand that ran first. Its conclusions stand; its scope was too narrow, which is the lesson in *What the spike got wrong*.
@@ -355,8 +402,17 @@ python3 framework/scripts/code_style.py --fix --uncrustify ~/uncrustify-build/un
 | `src/core/Http.cpp` | phase split (open/headers/body), TCP-vs-TLS connect split, the core-0/core-1/core-0 handshake matrix, and the three bench calls — `SPIKE` markers throughout |
 | `src/core/spike_x509.inc` | the X.509 benchmark, identical source in both builds, plus the library-counter dump |
 | `src/core/spike_chain.h` | GitHub's live chain as DER, captured 2026-08-25 |
-| `src/core/spike_psa_vs_legacy.cpp` | PSA-vs-legacy ECDSA verify and the core/priority matrix. Own translation unit because `MBEDTLS_ALLOW_PRIVATE_ACCESS` must precede every mbedTLS include and `Http.cpp` has already pulled in `esp_tls.h` |
+| `src/core/spike_psa_vs_legacy.cpp` | PSA-vs-legacy ECDSA verify, the core/priority matrix, the per-operand-size multiply benchmark, the `grp.modp` check, and a `--wrap` counter for `mbedtls_mpi_mul_mpi`. Own translation unit because `MBEDTLS_ALLOW_PRIVATE_ACCESS` must precede every mbedTLS include and `Http.cpp` has already pulled in `esp_tls.h`. **The counter is inert unless the build supplies the link flag** — see below |
 | `D:\source\smolbase-v033` | the same three probe files plus instrumentation in `src/core/GhUpdate.cpp`, **uncommitted**. The device no longer runs this build — it was flashed for Part 1b and the shipped firmware restored afterwards by full serial flash |
+
+To turn the multiply counter back on, add these two lines to the root `CMakeLists.txt` **after** `include(project.cmake)` and **before** `project(smolbase)` — setting them after `project()` is accepted silently and then fails at link:
+
+```
+idf_build_set_property(LINK_OPTIONS "-Wl,--wrap=mbedtls_mpi_mul_mpi" APPEND)
+idf_build_set_property(COMPILE_DEFINITIONS "SPIKE_WRAP_MUL=1" APPEND)
+```
+
+The arduino worktree already carries the equivalent in its `platformio.ini` `build_flags`. Leave the flag out of timing runs: it moves the binary layout and shifted a P-256 verify by 13% with no change to that code path.
 
 **The IDF 6 SDK tree is no longer pristine.** `library/x509_crt.c` and `tf-psa-crypto/extras/pk_wrap.c` under `~/esp/esp-idf/components/mbedtls/mbedtls` carry the cycle counters described in Part 1a; every addition is marked `SPIKE`. Revert with `git checkout` in that tree when done. The IDF 5.5 tree is untouched. Always check `git status` in both before trusting a measurement.
 
@@ -383,7 +439,7 @@ The same failure mode is the live risk for both open questions: **size a compone
 ## What is left, in the order it is worth doing
 
 1. **Decide what to do about core 0** (see *What to do about core 0* in Part 1a). Every build pays the penalty and priority 24 removes it in every build, so both fixes are live. Measure whichever is chosen against the App loop's frame budget, not just against the handshake.
-2. **Find out why P-384 is 1.83× slower on mbedTLS 4** when P-256 is level, in the firmware, in the arduino configuration (Part 1b). This is now the whole of the version regression as it is actually paid, and the constant-time bignum patch already open upstream was sized against harness numbers that say something different. Worth knowing before claiming that PR fixes the problem.
+2. **Find out why 3.6.6's non-multiply field work is half as expensive at P-384 as at P-256** (Part 1c). The multiply counts, the multiply price and the fast reduction are all identical between the two libraries, so the whole regression is in the reduction and add/subtract paths — which is where the upstream patch already points. What is unexplained is why the loss shows up almost entirely on the larger curve. Instrument those paths in our SDK tree per curve, then read 3.6.6's source for the same functions.
 3. **Re-derive the attribution table** in Part 1. Every row built by subtracting a harness figure from a firmware figure is on the wrong ruler; Part 1b supplies the right ones.
 4. **The accelerator-on harness discrepancy** (Part 1b, last section) — a loose end, and the reason the accelerator-on rows of Part 2 should not be read as firmware costs.
 5. **Fix the benchmark ordering defect** in `mpi_mul_hooked` (Part 2). Affects nothing above.

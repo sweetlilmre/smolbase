@@ -49,6 +49,41 @@
  * Both SDKs route printf to UART0. */
 #define SPIKE_PSA_LOG(fmt, ...) printf("W spike: " fmt "\n", ##__VA_ARGS__)
 
+/* SPIKE: count every cross-translation-unit call to mbedtls_mpi_mul_mpi,
+ * using the linker's --wrap exactly as spike/mbedtls-perf/main/wrap.c does.
+ * This is the one measurement timing noise cannot corrupt, and it is the only
+ * way to see inside the arduino build, whose mbedTLS is precompiled.
+ *
+ * Counting ONLY -- no esp_timer calls in the hook. The harness learnt the hard
+ * way that a hook which times as well as counts costs the same order as the
+ * effect under test. Times come from the unwrapped builds already measured.
+ *
+ * Enabled by -Wl,--wrap=mbedtls_mpi_mul_mpi at link time. Without it the file
+ * still compiles and the counters read zero, which the report makes visible.
+ *
+ * Caveat carried from the harness: --wrap redirects only references the linker
+ * resolves, so calls made inside the defining translation unit are invisible.
+ * ecp.c is a separate unit from bignum.c and esp_bignum.c, so the ECP path --
+ * the one that matters here -- is counted. */
+#ifdef SPIKE_WRAP_MUL
+extern "C" {
+int __real_mbedtls_mpi_mul_mpi(mbedtls_mpi *X, const mbedtls_mpi *A,
+                               const mbedtls_mpi *B);
+unsigned spike_mul_calls;
+int __wrap_mbedtls_mpi_mul_mpi(mbedtls_mpi *X, const mbedtls_mpi *A,
+                               const mbedtls_mpi *B)
+{
+    spike_mul_calls++;
+    return __real_mbedtls_mpi_mul_mpi(X, A, B);
+}
+}
+#define SPIKE_MUL_RESET() (spike_mul_calls = 0)
+#define SPIKE_MUL_COUNT() (spike_mul_calls)
+#else
+#define SPIKE_MUL_RESET() ((void) 0)
+#define SPIKE_MUL_COUNT() (0u)
+#endif
+
 namespace {
 
 constexpr int ITERS = 1;
@@ -112,6 +147,13 @@ void benchCurve(const char *label, mbedtls_ecp_group_id gid,
     mbedtls_mpi_init(&s);
 
     int rc = mbedtls_ecp_group_load(&grp, gid);
+    /* grp.modp is the fast pseudo-reduction for this curve. NULL means the
+     * group falls back to a generic modular reduction -- a division, and far
+     * dearer than the multiply it follows. Non-multiply ECP work came out
+     * cheaper for P-384 than for P-256 on one build, which no model allows, so
+     * check the cheapest possible explanation first. */
+    SPIKE_PSA_LOG("[spike-modp] %s modp=%s nbits=%u", label,
+                  grp.modp ? "FAST" : "NULL(generic)", (unsigned) grp.nbits);
     rc |= mbedtls_mpi_read_string(&d, 16, d_hex);
     rc |= mbedtls_ecp_mul(&grp, &Q, &d, &grp.G, prngFill, &prng);
     rc |= mbedtls_ecdsa_sign(&grp, &r, &s, &d, hash, hash_len, prngFill, &prng);
@@ -123,12 +165,14 @@ void benchCurve(const char *label, mbedtls_ecp_group_id gid,
     {
         /* ---- legacy: what mbedTLS 3.6.6 without PSA does, and what
          * spike/mbedtls-perf/ measures on both versions ---- */
+        SPIKE_MUL_RESET();
         int64_t t0 = nowUs();
         int vrc = 0;
         for (int i = 0; i < ITERS; i++) {
             vrc |= mbedtls_ecdsa_verify(&grp, hash, hash_len, &Q, &r, &s);
         }
         int64_t t1 = nowUs();
+        const unsigned legacy_muls = SPIKE_MUL_COUNT() / (unsigned) ITERS;
 
         vTaskDelay(pdMS_TO_TICKS(20));
 
@@ -154,6 +198,7 @@ void benchCurve(const char *label, mbedtls_ecp_group_id gid,
         psa_set_key_algorithm(&attr, PSA_ALG_ECDSA_ANY);
 
         psa_status_t st = PSA_SUCCESS;
+        SPIKE_MUL_RESET();
         int64_t t2 = nowUs();
         for (int i = 0; i < ITERS; i++) {
             mbedtls_svc_key_id_t kid = MBEDTLS_SVC_KEY_ID_INIT;
@@ -165,15 +210,16 @@ void benchCurve(const char *label, mbedtls_ecp_group_id gid,
             if (b != PSA_SUCCESS) { st = b; }
         }
         int64_t t3 = nowUs();
+        const unsigned psa_muls = SPIKE_MUL_COUNT() / (unsigned) ITERS;
 
         const unsigned long legacy_us = (unsigned long)((t1 - t0) / ITERS);
         const unsigned long psa_us = (unsigned long)((t3 - t2) / ITERS);
         SPIKE_PSA_LOG("[spike-psa] %s legacy=%lu us psa=%lu us ratio=%lu.%02lu "
-                      "(legacy rc=%d psa st=%d)",
+                      "muls=%u/%u (legacy rc=%d psa st=%d)",
                       label, legacy_us, psa_us,
                       legacy_us ? psa_us / legacy_us : 0UL,
                       legacy_us ? (psa_us * 100UL / legacy_us) % 100UL : 0UL,
-                      vrc, (int)st);
+                      legacy_muls, psa_muls, vrc, (int)st);
     }
 
 done:
@@ -182,6 +228,46 @@ done:
     mbedtls_mpi_free(&d);
     mbedtls_ecp_point_free(&Q);
     mbedtls_ecp_group_free(&grp);
+}
+
+/* Both libraries make exactly the same number of mbedtls_mpi_mul_mpi calls per
+ * verify -- 5817 for P-256, 8569 for P-384 -- so the version difference is
+ * price per call, not number of calls. This times the call itself at both
+ * operand sizes, in the firmware, so the two builds can be compared on the one
+ * quantity the call count leaves open. */
+void benchMulSize(const char *label, size_t bits, int iters)
+{
+    mbedtls_mpi a, b, x;
+    unsigned char buf[64];
+    const size_t len = bits / 8;
+    Prng p = {0xBEEFu};
+
+    mbedtls_mpi_init(&a);
+    mbedtls_mpi_init(&b);
+    mbedtls_mpi_init(&x);
+
+    prngFill(&p, buf, len);
+    buf[0] |= 0x80;                 /* exactly `bits` wide, so the size is honest */
+    int rc = mbedtls_mpi_read_binary(&a, buf, len);
+    prngFill(&p, buf, len);
+    buf[0] |= 0x80;
+    rc |= mbedtls_mpi_read_binary(&b, buf, len);
+    if (rc != 0) {
+        SPIKE_PSA_LOG("[spike-mul] %s setup failed rc=%d", label, rc);
+    } else {
+        int64_t t0 = nowUs();
+        for (int i = 0; i < iters; i++) {
+            rc |= mbedtls_mpi_mul_mpi(&x, &a, &b);
+        }
+        int64_t t1 = nowUs();
+        const unsigned long ns = (unsigned long)(((t1 - t0) * 1000) / iters);
+        SPIKE_PSA_LOG("[spike-mul] %s %u bits: %lu.%03lu us/call over %d calls rc=%d",
+                      label, (unsigned) bits, ns / 1000, ns % 1000, iters, rc);
+    }
+
+    mbedtls_mpi_free(&x);
+    mbedtls_mpi_free(&b);
+    mbedtls_mpi_free(&a);
 }
 
 /* The same two curves again, but on a task pinned to core 1 the way
@@ -199,6 +285,12 @@ struct PinnedArgs {
 void pinnedTask(void *arg)
 {
     PinnedArgs *a = static_cast<PinnedArgs *>(arg);
+    if (a->label384 != nullptr) {
+        /* Fresh MPIs, no ECP state, one operand size at a time. */
+        benchMulSize(a->label256, 256, 4000);
+        benchMulSize(a->label256, 384, 4000);
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
     benchCurve(a->label256, MBEDTLS_ECP_DP_SECP256R1, D256_HEX, HASH32,
                sizeof(HASH32), 32);
     if (a->label384 != nullptr) {
