@@ -2,6 +2,7 @@
 
 **Written:** 2026-08-23, at the end of the session that finished the port. Read this first if you are picking smolbase up with no context.
 **Branch:** `idf6-migration`, **55 commits ahead of `main`** — this note is the tip. Working tree clean; the port's last code commit is `3bf86f6`.
+**TLS performance work has its own handover:** [mbedtls4-handover.md](mbedtls4-handover.md).
 **Companions:** [esp-idf-6-migration.md](esp-idf-6-migration.md) (the plan, written before any of it happened) · [idf6-phase0-report.md](idf6-phase0-report.md) (Phase 0 evidence) · [idf6-ap-mode-verification.md](idf6-ap-mode-verification.md) (AP-mode procedure and results) · [idf-tuning-levers.md](idf-tuning-levers.md) (Kconfig measurements) · [littlefs-wrapper-sketch.md](littlefs-wrapper-sketch.md) (the `Fs` design) · [ADR 0006](../adr/0006-native-esp-idf-framework.md) (the framework decision)
 
 ## State in one paragraph

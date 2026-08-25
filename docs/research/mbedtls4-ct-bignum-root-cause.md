@@ -1,6 +1,7 @@
 # mbedTLS 4 is slower than 3.6 on ESP32 — the root cause, with a fix
 
 **Written:** 2026-08-24, after running the experiment described below on hardware. **Status: root cause identified, proven by patch-and-measure, fixed, and the fix proven constant-time-preserving by MemSan constant-flow testing with a working negative control.** The first fix I proposed was refuted by that testing; the corrected one is Xtensa assembly.
+**Start here if you have no context:** [mbedtls4-handover.md](mbedtls4-handover.md) — state, environment, open questions, traps.
 **Companions:** [mbedtls4-perf-spike.md](mbedtls4-perf-spike.md) (the spike that measured the gap and established it was real) · [idf6-migration-continuation.md](idf6-migration-continuation.md)
 **Harness:** `spike/mbedtls-perf/` · **Captures:** `spike/mbedtls-perf/results/*.log` · **Patches:** [`spike/mbedtls-perf/upstream/`](../../spike/mbedtls-perf/upstream/) (a three-patch series) · **Report to file:** [`upstream/README.md`](../../spike/mbedtls-perf/upstream/README.md)
 
