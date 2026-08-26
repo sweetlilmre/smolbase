@@ -1,6 +1,8 @@
-# DRAFT — espressif/esp-idf issue (NOT FILED)
+# DRAFT — espressif/esp-idf PR description (BRANCH PUSHED, PR NOT OPENED)
 
-**Proposed title:** `mbedtls: hardware MPI makes ECDSA ~2x slower on ESP32, and costs far more in a real firmware than a benchmark shows (no lower size threshold in esp_mpi_mul_mpi)`
+**Branch:** [`sweetlilmre/esp-idf:fix/mpi-hw-min-bit-len`](https://github.com/sweetlilmre/esp-idf/tree/fix/mpi-hw-min-bit-len) — one commit, `components/mbedtls/port/bignum/esp_bignum.c`, +100/−0, one ahead of `espressif:master` and zero behind. **No pull request has been opened.**
+
+**Proposed title:** `mbedtls: don't use the MPI hardware below its crossover size`
 
 ---
 
@@ -71,7 +73,47 @@ With the accelerator off, `mbedtls_mpi_mul_mpi()` is plain C in `bignum.c`, next
 
 With it on, every call reaches into a second body of code — `esp_bignum.c`, `periph_module_enable`/`disable`, `esp_crypto_mpi_lock`, and the ESP32 DPORT access path with its other-CPU stall. That code and the ECP code trade cache lines **5817 times per P-256 verify**. An offline benchmark never sees this because its binary is small and its working set stays resident; a real firmware with WiFi, lwIP, a filesystem and an HTTP server does not have that luxury.
 
-## Suggested fix
+## The fix, and what it measures
+
+`mbedtls_mpi_mul_mpi()` at `components/mbedtls/port/bignum/esp_bignum.c` already tests an upper bound:
+
+```c
+if (hw_words * 32 > SOC_RSA_MAX_BIT_LEN/2) {
+    ...fall back...
+}
+```
+
+The branch adds the matching lower one. Operands below `SOC_MPI_HW_MIN_BIT_LEN` (512) go to a software multiply over `mbedtls_mpi_core_mul()` — the same function the library implementation uses. `MBEDTLS_MPI_MUL_MPI_ALT` compiles that implementation out, and unlike `exp_mod`, which has `MBEDTLS_MPI_EXP_MOD_ALT_FALLBACK` and `mbedtls_mpi_exp_mod_soft()` for exactly this purpose, there is no upstream `mul_mpi` equivalent to call, so the fallback is mirrored in the port. No build-system change is needed: `drivers/builtin/src` is already on the component's include path.
+
+The test is on the real operand size, not on `hw_words`. `mpi_ll_calculate_hardware_words()` rounds up to a multiple of 16 words, so a 256-bit operand is already handed to the peripheral as 512 bits and `hw_words` would never fall below the threshold. That rounding is also why the hardware cost is flat from 256 to 512 bits while the software cost is not.
+
+**Measured, `CONFIG_MBEDTLS_HARDWARE_MPI=y` throughout, same device, all benches `rc=0`:**
+
+| bench | before | after | for reference: hw off |
+|---|---|---|---|
+| `mpi_mul` 256-bit | 19.69 µs | **11.78 µs** | 11.28 µs |
+| `ecdsa_verify` P-256 | 416.99 ms | **334.48 ms** (−19.8%) | 327.75 ms |
+| `ecp_mul` P-256 | 195.22 ms | **154.92 ms** (−20.6%) | 151.56 ms |
+| `ecdsa_verify` P-384 | 738.47 ms | **704.31 ms** (−4.6%) | — |
+| `mpi_mul` 4096-bit | 460.29 µs | 462.31 µs | 1496.12 µs |
+| `mpi_exp_mod` 2048-bit | 19.98 ms | **19.45 ms** | 74.50 ms |
+| `mpi_exp_mod` 4096-bit | 65.64 ms | 65.39 ms | 262.85 ms |
+
+**ECC runs at software speed and RSA keeps the hardware, in one build.** The ECC columns land within 2% of the accelerator-off build; the RSA rows are unchanged within noise and stay 3–4× faster than software.
+
+End to end, the same firmware doing a TLS 1.2 ECDHE-ECDSA handshake to `api.github.com`:
+
+| | accelerator on | on, with this patch | accelerator off |
+|---|---|---|---|
+| handshake, core 0 | 7358 ms | **4929 / 5005 ms** | 4599 ms |
+| handshake, core 1 | 4063 ms | **2759 ms** | 2735 ms |
+| certificate chain verify | 3097 ms | **2087 ms** | — |
+
+P-384 gains least (−4.6%) because 384-bit operands sit close to the crossover — software 21.8 µs against hardware 23.4 µs — so there is little to win there. That is expected and is why the threshold is 512 and not higher.
+
+## Notes on the threshold
+
+
 
 `mbedtls_mpi_mul_mpi()` at `components/mbedtls/port/bignum/esp_bignum.c:488` already tests an upper bound:
 
@@ -81,9 +123,9 @@ if (hw_words * 32 > SOC_RSA_MAX_BIT_LEN/2) {
 }
 ```
 
-There is no matching lower bound. Adding one — falling through to the software implementation below roughly 512 bits — would make the peripheral a win in every case instead of a loss on the one that matters most for TLS today. The crossover measured here is between 256 and 512 bits; the right constant may be chip-dependent and is worth measuring on the S3 and the RISC-V parts too.
+`SOC_MPI_HW_MIN_BIT_LEN` is defined in the port with an `#ifndef` guard so a target can override it. 512 is measured on the ESP32 (LX6); the right constant may differ on the S3 and the RISC-V parts, and naming it `SOC_` is a hint that it probably belongs in `soc_caps.h` once someone measures those. I am happy to move it.
 
-That is a smaller and safer change than revisiting the `default y`, and it does not cost RSA anything.
+This is a smaller and safer change than revisiting the `default y`, and it costs RSA nothing.
 
 ## Prior art
 
