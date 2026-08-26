@@ -453,13 +453,21 @@ Leave the flag out of timing runs: it moves the binary layout and shifted a P-25
 
 **1. Core 0 or core 1 for the handshake.** The only item with a shipping consequence: 3.8 s against 2.1 s. Options and trade-off in [§2.3](#23--elliptic-curve-maths-costs-175-on-core-0). Measure whichever is chosen against the App loop's frame budget, not just against the handshake.
 
-**2. Revisit the upstream PR — [Mbed-TLS/TF-PSA-Crypto#873](https://github.com/Mbed-TLS/TF-PSA-Crypto/pull/873), draft.** Three commits: forced inlining where an asm path exists, a new Xtensa asm path, and `_if_else_0` at two call sites. CI code style passes. It was written before §2.5 to §2.7 existed and needs revisiting on five points:
+**2. The upstream PR — [Mbed-TLS/TF-PSA-Crypto#873](https://github.com/Mbed-TLS/TF-PSA-Crypto/pull/873), draft. Body updated 2026-08-26** with the findings from §2.5 to §2.7. What went in:
 
-- **Check the "~875 ms regression the series causes with the accelerator enabled" line.** It contradicts every measurement here and appears nowhere in `spike/mbedtls-perf/upstream/README.md`. It is most likely a transcription error for the ~830 ms the series *saves* with the accelerator disabled. Read the live PR body and correct it if so.
-- **The submitted series has never been measured with the accelerator on.** The earlier C variant was, and reached parity (290.57 ms against 3.6.6's 298.22 ms). The shipped assembly variant has accelerator-off numbers only. One harness cell closes it.
-- **Add P-384.** The series was justified on P-256 plus 2048/4096-bit `exp_mod`. P-384 is the curve a real GitHub chain uses, and [§2.5](#25--the-version-regression-is-a-uniform-30-on-both-curves) now has it on both libraries: 365.3 ms against 475.0 ms, a 1.30× regression matching P-256's 1.34×.
-- **Re-frame the size claim.** The body reports the regression from accelerator-off primitive numbers alone. The stronger statement is now available: a uniform ~30% across both curves, measured from source on both libraries in the configuration a real device ships, with the firmware agreeing to within 6%.
-- **Consider reporting the instruction-fetch finding separately.** [§2.6](#26--about-half-of-a-verify-is-instruction-fetch) — that the ESP RSA/MPI accelerator costs 210% in a real firmware where a benchmark says 25%, because of cache pressure from the driver path — is an Espressif matter, not an mbedTLS one. It is arguably more valuable than the patch and does not belong in that PR.
+- **P-384**, placed after the O(n)-per-limb paragraph it confirms: 365.26 → 475.03 ms, +30.1%, beside P-256's +33.5% in the same cell. The series had been justified on P-256 alone, and the obvious reviewer question was whether bigger curves fare worse. They do not — the cost is per-limb.
+- **Call counts confirmed in firmware**, not just in the harness, via `--wrap` against a precompiled 3.6.6: 5817 and 8569.
+- **The flash-cache hypothesis the body flagged as untested is now measured**, and the body says so — the tight-loop-versus-in-verify split, the flash-clock test, and the ~43% against ~24% miss share ([§2.6](#26--about-half-of-a-verify-is-instruction-fetch)).
+- **The 875 ms accelerator-on regression is now qualified.** Placement alone moves an ECDSA verify 20–23% on this part ([§2.7](#27--the-arduino-builds-advantage-is-code-placement)) and the series changes code size, so patch effect and placement effect have not been separated. The body now warns reproducers not to expect the same magnitude or sign.
+- **Corrected** "the bignum hot path is largely off the code this series touches" — measured, the multiply is 37–41% of a verify, so ~60% is still this series' code.
+
+> **Correction to an earlier note in this document.** That "~875 ms regression the series causes with the accelerator enabled" line was flagged here as a probable transcription error. **It is not.** It is a real A-B-A measurement, four reps each, with the two unpatched runs bracketing the patched one and agreeing to 13 ms, and the PR reported it honestly against its own case. The error was in this document. Read the source before calling something a mistake.
+
+Still open on the PR:
+
+- **The submitted assembly series has never been measured with the accelerator on** at the primitive level. The earlier C variant was, and reached parity (290.57 ms against 3.6.6's 298.22 ms); the shipped variant has accelerator-off numbers only. One harness cell closes it.
+- **Separating patch effect from placement effect on the 875 ms** would need several builds with deliberate padding. Worth doing before anyone drops commit 1/3 on the strength of that number.
+- **Consider reporting the instruction-fetch finding to Espressif separately.** [§2.6](#26--about-half-of-a-verify-is-instruction-fetch) — that the RSA/MPI accelerator costs 210% in a real firmware where a benchmark says 25%, because of cache pressure from the driver path — is not an mbedTLS matter. It is arguably more valuable than the patch and does not belong in that PR.
 
 **3. Revert the instrumentation.** The IDF 6 SDK tree, `Http.cpp` and the probe files, and the v0.3.3 worktree. All listed under [*Dirty state*](#dirty-state--revert-before-the-branch-ships).
 
