@@ -480,7 +480,21 @@ Still open on the PR:
 - **Separating patch effect from placement effect on the 875 ms** would need several builds with deliberate padding. Worth doing before anyone drops commit 1/3 on the strength of that number.
 - **No `.text` figure for the series on Xtensa** — the Arm size cost is measured, the ESP32 one is not, and it is the number the code-growth hypothesis turns on.
 
-**3. Report the instruction-fetch finding to Espressif.** [§2.6](#26--about-half-of-a-verify-is-instruction-fetch) is not an mbedTLS matter and does not belong in PR 873: `CONFIG_MBEDTLS_HARDWARE_MPI` is `default y`, and on an ECDSA workload it makes an ESP32 slower — 7.36 s against 3.79 s for our handshake. `mbedtls_mpi_mul_mpi()` at `components/mbedtls/port/bignum/esp_bignum.c:488` tests an upper size bound and has no lower one, so a 256-bit multiply pays the full peripheral ceremony for a result that is 2× slower than software. **A draft report is written and not filed:** [espressif-hardware-mpi-report-draft.md](espressif-hardware-mpi-report-draft.md). Prior art searched: [espressif/esp-idf#8710](https://github.com/espressif/esp-idf/issues/8710) is the same symptom (TLS watchdog, fixed by disabling hardware MPI) with no measurement or mechanism, and is closed; nothing found that quantifies it. That was a keyword search, so search again before asserting novelty.
+**3. The Espressif fix — branch pushed, PR not opened, awaiting review.** [`sweetlilmre/esp-idf:fix/mpi-hw-min-bit-len`](https://github.com/sweetlilmre/esp-idf/tree/fix/mpi-hw-min-bit-len), one commit, one file, +100/−0, one ahead of `espressif:master` and zero behind. Description ready in [espressif-hardware-mpi-report-draft.md](espressif-hardware-mpi-report-draft.md); the patch itself is also saved at `spike/mbedtls-perf/upstream/esp-idf-mpi-min-bitlen.patch`.
+
+The fix: `mbedtls_mpi_mul_mpi()` in the port tests an upper size bound and has no lower one, so a 256-bit multiply pays the full peripheral ceremony for a result software produces faster. The branch routes operands below 512 bits to `mbedtls_mpi_core_mul()`. It must test the **real** operand size, not `hw_words` — `mpi_ll_calculate_hardware_words()` rounds up to 16 words, so a 256-bit operand is already presented as 512 bits and the first version of the gate never fired.
+
+Proven, `CONFIG_MBEDTLS_HARDWARE_MPI=y` throughout, all benches `rc=0`:
+
+| | before | after | hw off |
+|---|---|---|---|
+| `mpi_mul` 256-bit | 19.69 µs | **11.78 µs** | 11.28 µs |
+| `ecdsa_verify` P-256 | 416.99 ms | **334.48 ms** | 327.75 ms |
+| `mpi_exp_mod` 2048-bit | 19.98 ms | **19.45 ms** | 74.50 ms |
+| `mpi_mul` 4096-bit | 460.29 µs | 462.31 µs | 1496.12 µs |
+| handshake, core 1 | 4063 ms | **2759 ms** | 2735 ms |
+
+ECC at software speed and RSA still on the hardware, in one build. Captures: `spike/mbedtls-perf/results/THRESHOLD-idf6-mpi-on-nowrap.log`. Prior art searched: [espressif/esp-idf#8710](https://github.com/espressif/esp-idf/issues/8710) is the same symptom with no measurement or mechanism, and is closed.
 
 **4. Revert the instrumentation.** The IDF 6 SDK tree, `Http.cpp` and the probe files, and the v0.3.3 worktree. All listed under [*Dirty state*](#dirty-state--revert-before-the-branch-ships).
 
