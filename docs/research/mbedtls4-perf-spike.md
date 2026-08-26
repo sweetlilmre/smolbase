@@ -463,12 +463,25 @@ Leave the flag out of timing runs: it moves the binary layout and shifted a P-25
 
 > **Correction to an earlier note in this document.** That "~875 ms regression the series causes with the accelerator enabled" line was flagged here as a probable transcription error. **It is not.** It is a real A-B-A measurement, four reps each, with the two unpatched runs bracketing the patched one and agreeing to 13 ms, and the PR reported it honestly against its own case. The error was in this document. Read the source before calling something a mistake.
 
+**Second update, same day: the accelerator-on measurement was taken.** The submitted assembly series (not the earlier C variant) was applied to the IDF 6 tree, built into the `idf6-mpi-on-nowrap` harness cell, and run A-B-A — patched, unpatched, patched again — in one session. Every patched image was disassembled before flashing: `mbedtls_mpi_core_sub()` with zero calls and one branch, two calls unpatched.
+
+| accelerator on, core 1 | 3.6.6 | 4.1.0 | with the series | vs 3.6.6 |
+|---|---|---|---|---|
+| `ecdsa_verify` P-256 | 297.88 ms | 416.99 ms | **296.59 ms** | **−0.4%** |
+| `ecdsa_verify` P-384 | 519.25 ms | 738.47 ms | **516.34 ms** | **−0.6%** |
+| `ecp_mul` P-256 | 139.55 ms | 195.22 ms | 139.94 ms | +0.3% |
+| `ecp_mul` P-384 | 240.20 ms | 341.77 ms | 241.08 ms | +0.4% |
+| `mpi_inv_mod` P-256 | 8.67 ms | 12.26 ms | 7.60 ms | −12.4% |
+
+The two patched legs agree to 0.8 µs (296.5844 and 296.5850 ms), and the in-session unpatched figure matches the earlier session's to 0.02%. **So the series reaches parity with 3.6.6 in both accelerator configurations and on both curves** — which also settles what the 875 ms is not. It is not the series computing more slowly; the arithmetic is at parity in exactly that configuration. What is left is code growth or code placement, and those two remain unseparated. Captures: `spike/mbedtls-perf/results/SERIES-{A1,B-unpatched,A2}-idf6-mpi-on-nowrap.log`.
+
 Still open on the PR:
 
-- **The submitted assembly series has never been measured with the accelerator on** at the primitive level. The earlier C variant was, and reached parity (290.57 ms against 3.6.6's 298.22 ms); the shipped variant has accelerator-off numbers only. One harness cell closes it.
 - **Separating patch effect from placement effect on the 875 ms** would need several builds with deliberate padding. Worth doing before anyone drops commit 1/3 on the strength of that number.
-- **Consider reporting the instruction-fetch finding to Espressif separately.** [§2.6](#26--about-half-of-a-verify-is-instruction-fetch) — that the RSA/MPI accelerator costs 210% in a real firmware where a benchmark says 25%, because of cache pressure from the driver path — is not an mbedTLS matter. It is arguably more valuable than the patch and does not belong in that PR.
+- **No `.text` figure for the series on Xtensa** — the Arm size cost is measured, the ESP32 one is not, and it is the number the code-growth hypothesis turns on.
 
-**3. Revert the instrumentation.** The IDF 6 SDK tree, `Http.cpp` and the probe files, and the v0.3.3 worktree. All listed under [*Dirty state*](#dirty-state--revert-before-the-branch-ships).
+**3. Report the instruction-fetch finding to Espressif.** [§2.6](#26--about-half-of-a-verify-is-instruction-fetch) is not an mbedTLS matter and does not belong in PR 873: `CONFIG_MBEDTLS_HARDWARE_MPI` is `default y`, and on an ECDSA workload it makes an ESP32 slower — 7.36 s against 3.79 s for our handshake. `mbedtls_mpi_mul_mpi()` at `components/mbedtls/port/bignum/esp_bignum.c:488` tests an upper size bound and has no lower one, so a 256-bit multiply pays the full peripheral ceremony for a result that is 2× slower than software. **A draft report is written and not filed:** [espressif-hardware-mpi-report-draft.md](espressif-hardware-mpi-report-draft.md). Prior art searched: [espressif/esp-idf#8710](https://github.com/espressif/esp-idf/issues/8710) is the same symptom (TLS watchdog, fixed by disabling hardware MPI) with no measurement or mechanism, and is closed; nothing found that quantifies it. That was a keyword search, so search again before asserting novelty.
 
-**4. Fix the benchmark ordering defect** in `mpi_mul_hooked` ([Part 3](#a-harness-defect-the-spike-found-in-itself)). Affects nothing above.
+**4. Revert the instrumentation.** The IDF 6 SDK tree, `Http.cpp` and the probe files, and the v0.3.3 worktree. All listed under [*Dirty state*](#dirty-state--revert-before-the-branch-ships).
+
+**5. Fix the benchmark ordering defect** in `mpi_mul_hooked` ([Part 3](#a-harness-defect-the-spike-found-in-itself)). Affects nothing above.
