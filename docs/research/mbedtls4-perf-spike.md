@@ -494,7 +494,9 @@ Proven, `CONFIG_MBEDTLS_HARDWARE_MPI=y` throughout, all benches `rc=0`:
 | `mpi_mul` 4096-bit | 460.29 µs | 462.31 µs | 1496.12 µs |
 | handshake, core 1 | 4063 ms | **2759 ms** | 2735 ms |
 
-ECC at software speed and RSA still on the hardware, in one build. Captures: `spike/mbedtls-perf/results/THRESHOLD-idf6-mpi-on-nowrap.log`. Prior art searched: [espressif/esp-idf#8710](https://github.com/espressif/esp-idf/issues/8710) is the same symptom with no measurement or mechanism, and is closed.
+ECC at software speed and RSA still on the hardware, in one build. Captures: `spike/mbedtls-perf/results/THRESHOLD-idf6-mpi-on-nowrap.log`.
+
+**One decision is parked before the PR can be opened:** where the threshold constant should live and whether 512 is safe on parts that were never measured — it could make a chip with a lower crossover slower. Options, recommendation and the measurement that would settle it: [espressif-mpi-threshold-open-question.md](espressif-mpi-threshold-open-question.md). Prior art searched: [espressif/esp-idf#8710](https://github.com/espressif/esp-idf/issues/8710) is the same symptom with no measurement or mechanism, and is closed.
 
 **4. Revert the instrumentation.** The IDF 6 SDK tree, `Http.cpp` and the probe files, and the v0.3.3 worktree. All listed under [*Dirty state*](#dirty-state--revert-before-the-branch-ships).
 
