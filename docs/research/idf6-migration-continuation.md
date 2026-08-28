@@ -1,13 +1,17 @@
 # IDF 6 migration — continuation note
 
-**Written:** 2026-08-23, at the end of the session that finished the port. Read this first if you are picking smolbase up with no context.
-**Branch:** `idf6-migration`, **55 commits ahead of `main`** — this note is the tip. Working tree clean; the port's last code commit is `3bf86f6`.
-**TLS performance work has its own record and handover:** [mbedtls4-perf-spike.md](mbedtls4-perf-spike.md).
+**Written:** 2026-08-23 at the end of the port. **Updated 2026-08-28**, after the TLS performance investigation finished. Read this first if you are picking smolbase up with no context.
+**Branch:** `idf6-migration`, **88 commits ahead of `main`** — this note is the tip. Working tree clean; tip is `7e62319`. The port's last *code* commit is still `3bf86f6`; everything since is research, documentation, and temporary instrumentation.
+**TLS performance work has its own record, and it is finished:** [mbedtls4-perf-spike.md](mbedtls4-perf-spike.md) — read that before touching anything TLS-shaped. Two upstream strands came out of it: [espressif-hardware-mpi-report-draft.md](espressif-hardware-mpi-report-draft.md) and [espressif-mpi-threshold-open-question.md](espressif-mpi-threshold-open-question.md).
 **Companions:** [esp-idf-6-migration.md](esp-idf-6-migration.md) (the plan, written before any of it happened) · [idf6-phase0-report.md](idf6-phase0-report.md) (Phase 0 evidence) · [idf6-ap-mode-verification.md](idf6-ap-mode-verification.md) (AP-mode procedure and results) · [idf-tuning-levers.md](idf-tuning-levers.md) (Kconfig measurements) · [littlefs-wrapper-sketch.md](littlefs-wrapper-sketch.md) (the `Fs` design) · [ADR 0006](../adr/0006-native-esp-idf-framework.md) (the framework decision)
 
 ## State in one paragraph
 
-**The port is done and verified on hardware.** `platformio.ini` is gone; this is a native ESP-IDF v6.0.2 CMake project. All three Apps build warning-clean. The device has been flashed, provisioned through the captive portal, AP-mode tested, self-updated from GitHub end to end, and is running the branch build now. Phases 1–9 are complete and `spike/idf6/` has been absorbed and deleted. What remains is **CI** (rewritten, never executed) plus two small documentation items. Nothing is half-converted; this is a safe resting point.
+**The port is done and verified on hardware, and the TLS question that hung over it is answered.** `platformio.ini` is gone; this is a native ESP-IDF v6.0.2 CMake project. All three Apps build warning-clean. The device has been flashed, provisioned through the captive portal, AP-mode tested, self-updated from GitHub end to end. Phases 1–9 are complete and `spike/idf6/` has been absorbed and deleted.
+
+**Smolbase is now faster than the arduino-esp32 firmware it replaced**, at every level — primitive, certificate chain and whole handshake. The original "twice as slow" alarm had three causes, all measured: our own unbuffered `ClientReader` (~2.07 s, fixed), the RSA/MPI accelerator being wrong for ECC-sized operands (fixed by config), and a genuine ~30% mbedTLS 4 regression (patch open upstream). Full record in [mbedtls4-perf-spike.md](mbedtls4-perf-spike.md).
+
+**Two cautions before you build anything.** The IDF 6 SDK tree and `src/core/` both carry deliberate temporary instrumentation — see *Still open* item 4; it must come out before the branch ships. And **the bench is not currently usable**: see *Bench state* below.
 
 ## Environment
 
@@ -15,10 +19,10 @@
 |---|---|
 | Repo | `D:\source\smolbase`, branch `idf6-migration` |
 | ESP-IDF | `~/esp/esp-idf`, tag **v6.0.2**. Activate with `& $HOME\esp\esp-idf\export.ps1`. |
-| Device | `10.0.0.32`, MAC `b4-bf-e9-c8-2e-00`, hostname `smolbase-2e00`. **IP roams** — find it by MAC via `arp -a`, or `uv run scripts/mdns_probe.py smolbase-2e00`. |
-| Serial | **A UART adapter is on COM5**, with RTS auto-reset wiring, so no manual GPIO0 boot-mode dance. This is new and it changes how the project can be worked on — see *Serial is attached* below. |
+| Device | `10.0.0.32`, MAC `b4-bf-e9-c8-2e-00`, hostname `smolbase-2e00`. **IP roams** — find it by MAC via `arp -a`, or `uv run scripts/mdns_probe.py smolbase-2e00`. **Unreachable as of 2026-08-28 — see *Bench state*.** |
+| Serial | A UART adapter with RTS auto-reset wiring, so no manual GPIO0 boot-mode dance — see *Serial is attached* below. **It was on COM5 and as of 2026-08-28 it is not: see *Bench state*. Confirm the port before using any COM5 command in this repo.** |
 | Build | `idf.py '@smolbase.args' build`. **Quote the `@` in PowerShell** — bare `@` is the splatting operator. Also `@weatherclock.args`, `@gcm.args`. `idf.py` resolves `@name` to a file called exactly `name`, so `.args` is part of the argument. |
-| Flash | OTA (preferred): `curl.exe -X POST http://10.0.0.32/api/update -F "file=@build\smolbase\smolbase.bin"`. Serial: `idf.py '@smolbase.args' -p COM5 -b 460800 app-flash`. |
+| Flash | OTA (preferred): `curl.exe -X POST http://10.0.0.32/api/update -F "file=@build\smolbase\smolbase.bin"`. Serial: `idf.py '@smolbase.args' -p COM5 -b 460800 app-flash` — **check the port first, see *Bench state***. Use `flash` rather than `app-flash` after anything that rewrote the bootloader or partition table (the perf harness and the arduino build both do). |
 
 Artifact sizes now: smolbase 1,474,080 · weatherclock 1,240,560 · gcm 1,219,584. Filesystem image 3,866,624 for all three.
 
@@ -29,6 +33,16 @@ Artifact sizes now: smolbase 1,474,080 · weatherclock 1,240,560 · gcm 1,219,58
 A warm no-op build is **~4 s**; a source change is seconds. But **any change to `sdkconfig.defaults` costs a full ~280 s rebuild**, because `sdkconfig.defaults` only supplies values *absent* from the generated `sdkconfig` — an existing `sdkconfig` wins. To apply a defaults change you must delete `build/<app>/sdkconfig` and let it regenerate, which changes compile flags for every IDF component. That is the mechanism, not gratuitous slowness. Build only the App you are iterating on; build all three before committing.
 
 Tee build output to `build\smolbase.log` whichever App you are building — a human may be tailing that exact path.
+
+## Bench state — read before you plan any measurement
+
+**As of 2026-08-28 the device is not reachable.** It is off USB and off the network:
+
+- **COM5 is gone.** The adapter re-enumerated mid-session. Every doc in this repo says COM5; that is now wrong until someone checks the cable.
+- **COM10 is enumerated and it is the ESP32-S3 Waveshare board, which is NOT ours.** Identified read-only with `python -m esptool --port COM10 --no-stub chip-id` (MAC `e0:72:a1:f8:99:00`). **Do not flash it** without the owner's say-so.
+- Our ESP32-D0WD-V3 (`b4-bf-e9-c8-2e-00`, `10.0.0.32`) answers neither `arp -a` nor HTTP.
+
+Most likely a cable or a power drop. Identify any unfamiliar port read-only *before* writing to it — `chip-id` is safe and takes seconds.
 
 ## Where things live
 
@@ -66,11 +80,16 @@ All observed on the device, not inferred.
 |---|---|---|---|
 | Free heap (`MALLOC_CAP_INTERNAL`) | 129.5 KB | **166.5 KB** | +37 KB |
 | Free 8-bit heap (what TLS draws on) | 77.6 KB | **124.3 KB** | +46.7 KB |
-| TLS handshake to GitHub | 4.12 s | **4.21 s** | parity |
+| TLS handshake to GitHub, core 0 | 4.12 s | **~3.8 s** | faster |
+| TLS handshake to GitHub, core 1 | — | **~2.1 s** | not shipped — see *Still open* 5 |
+| P-256 ECDSA verify, core 1 | 601 ms | **237 ms** | 2.5× |
+| Certificate chain verify | ~1600 ms | **~1440 ms** | 1.12× |
 | Self-update, end to end | — | **41.8 s**, 0 watchdog trips | |
 | `String` (the type) | 138 | **0** | |
 | `LittleFS.` calls | 43 | **0** | |
 | Duplicated TLS transports | 4 | **1** | |
+
+The 4.21 s handshake this table used to report was measured before the accelerator and buffered-reader fixes had both landed; the arduino column is that build's own shipped configuration, which is the only one reachable for it. All TLS rows are core-0 unless stated, because that is where the httpd task runs today.
 
 Both heap figures come from the same `/api/status` fields computed by the same `Platform::` functions on both sides. The static-RAM row from earlier drafts is deliberately gone: PlatformIO's "RAM:" and `idf.py size`'s "DRAM" are not the same ruler, and comparing across a change in how a metric is computed is how an afternoon once went missing.
 
@@ -78,9 +97,13 @@ Both heap figures come from the same `/api/status` fields computed by the same `
 
 1. **CI has never run.** `.github/workflows/build.yml` is rewritten — one `esp-idf-ci-action` matrix leg per App, with caches for managed components, the LovyanGFX clone, and per-App ccache — but has not executed once. Watch the LovyanGFX configure-time clone and the `littlefs-python` venv; both need network inside the container. Also confirm the `actions/*@v7` pins resolve: that is this repo's existing convention, not a normal one.
 2. **`CONFIG_ESP_TASK_WDT_PANIC` asymmetry is undocumented.** arduino-esp32 shipped it `y`; we are on IDF's default `n`. Since the TLS fix the watchdog no longer trips, so this is far less dangerous than it was, but anyone "restoring parity" with the old build would reboot the device mid-OTA if a handshake ever outran the timeout. One comment in `sdkconfig.defaults` closes it.
-3. **Ready to report upstream, with a root cause and a patch.** mbedTLS 4.1.0 is 15–41% slower than 3.6.6 per bignum primitive at identical call counts — not the "roughly 2×" this note used to claim (that was the contaminated end-to-end figure, ~2.07 s of which was our own unbuffered reader). **The cause is found:** three lines in `mbedtls_mpi_core_sub()` and `mbedtls_mpi_core_mla()`, changed in 2024 to be constant-time via `mbedtls_ct_uint_lt()`, which has hand-written assembly only for Arm/AArch64/x86/x86-64 and on every other architecture falls back to generic C built on six `asm volatile` barriers that GCC then declines to inline at `-Os`. Proven by patch-and-measure: reverting the three lines recovers 100% of the gap, and a constant-time-preserving fix recovers 111%. Full write-up, disassembly and patch: **[mbedtls4-ct-bignum-root-cause.md](mbedtls4-ct-bignum-root-cause.md)**. Affects RISC-V, MIPS and PowerPC too, by the same preprocessor logic. Still in `main`; absent from the 3.6 LTS; no matching report found — but that was a keyword search, so do not assert it is undiscovered.
-4. **The CGM app has never been flashed**, so `Secrets` set/get, `jwtPayload`'s base64 and `CgmFetch`'s PSA hashing have never run. The weather App runs, but the device has no OWM key, so only the keyless open-meteo path has executed.
-5. **The once-per-boot STA re-association.** Observed, not explained: 5–15 s after connecting, back with the same IP in ~200 ms, once then stable. Ruled out: power save (`WIFI_PS_NONE`, pm type 0, zero sleep time, drop unchanged) and every WiFi call of ours. The link is WPA3-SAE with PMF. mDNS now rides through it. Low priority, but do not rediscover it from scratch.
+3. **The TLS work is finished; two upstream strands are live.** Nothing about smolbase is blocked on either. Full record: [mbedtls4-perf-spike.md](mbedtls4-perf-spike.md).
+   - **[Mbed-TLS/TF-PSA-Crypto#873](https://github.com/Mbed-TLS/TF-PSA-Crypto/pull/873)** — open, out of draft, 6 commits, DCO green. All three of the reviewer's threads are answered and resolved, and the changes are pushed. It is **waiting on a re-review from `gilles-peskine-arm`**: resolving threads does not clear his standing `CHANGES_REQUESTED`, and there are zero issue comments on the PR, so nothing has actually told him it is ready. A one-line "changes are in, please re-review" plus a re-request is the next action, and it is a human one.
+   - **An esp-idf fix, proven but not submitted.** `mbedtls_mpi_mul_mpi()` in the ESP port has an upper operand-size bound and no lower one, so every 256-bit multiply pays the peripheral's full per-call cost for a result software produces faster — and `CONFIG_MBEDTLS_HARDWARE_MPI` is `default y`. Adding a 512-bit lower threshold takes a P-256 ECDSA verify from 416.99 ms to 334.48 ms and a handshake from 7358 ms to 4929 ms, while leaving RSA on the hardware. Branch pushed, **no PR opened**: [`sweetlilmre/esp-idf:fix/mpi-hw-min-bit-len`](https://github.com/sweetlilmre/esp-idf/tree/fix/mpi-hw-min-bit-len). One decision is parked first — [espressif-mpi-threshold-open-question.md](espressif-mpi-threshold-open-question.md).
+4. **Instrumentation is still in place and must come out.** Listed in full under *Dirty state* in [mbedtls4-perf-spike.md](mbedtls4-perf-spike.md). In short: `src/core/Http.cpp`, `src/core/spike_x509.inc`, `src/core/spike_chain.h` and `src/core/spike_psa_vs_legacy.cpp` in this repo; cycle counters in `library/x509_crt.c` and `tf-psa-crypto/extras/pk_wrap.c` inside `~/esp/esp-idf/components/mbedtls/mbedtls`; and the uncommitted probes in the `D:\source\smolbase-v033` worktree. **Check `git status` in the SDK tree before trusting any measurement.**
+5. **One decision with a shipping consequence: core 0 or core 1 for the TLS handshake.** Elliptic-curve maths costs 1.75× on core 0 because the WiFi and lwIP tasks deschedule it — the same handshake is 3.8 s on core 0 and 2.1 s on core 1. `httpServer.config.core_id = 0` is deliberate (ADR 0001 keeps core 1 for consumer code), so moving it moves a 2.1 s stall onto the task that drives the Screen. Options in [mbedtls4-perf-spike.md § 2.3](mbedtls4-perf-spike.md). Measure whichever is chosen against the App loop's frame budget.
+6. **The CGM app has never been flashed**, so `Secrets` set/get, `jwtPayload`'s base64 and `CgmFetch`'s PSA hashing have never run. The weather App runs, but the device has no OWM key, so only the keyless open-meteo path has executed.
+7. **The once-per-boot STA re-association.** Observed, not explained: 5–15 s after connecting, back with the same IP in ~200 ms, once then stable. Ruled out: power save (`WIFI_PS_NONE`, pm type 0, zero sleep time, drop unchanged) and every WiFi call of ours. The link is WPA3-SAE with PMF. mDNS now rides through it. Low priority, but do not rediscover it from scratch.
 
 ## Serial is attached — use it
 
@@ -104,7 +127,16 @@ Set `ReadBufferSize = 262144` or larger and drain with `ReadExisting()` in a tig
 
 ## Hard-won facts — do not re-derive these
 
-### TLS performance (this session's largest piece of work)
+### TLS performance — the investigation is closed
+
+**[mbedtls4-perf-spike.md](mbedtls4-perf-spike.md) is the record and it is finished.** Read it rather than re-deriving any of this. The three facts most likely to be rediscovered the hard way:
+
+- **Elliptic-curve maths costs 1.75× on core 0**, because the WiFi and lwIP tasks deschedule it — not because the crypto is slower there. At priority 24, above the WiFi task, core 0 matches core 1 exactly. The same handshake is 3.8 s on core 0 and 2.1 s on core 1.
+- **About half of an ECDSA verify on this chip is waiting for instruction fetch**, not computing — 43% with the accelerator on, 24% with it off. Doubling the flash clock cuts the in-verify multiply by 25% and leaves a tight loop of the same call untouched. This is why the accelerator costs ~25% in a benchmark and ~210% in a real firmware.
+- **Timing here is a property of the binary, not the source.** Moving mbedTLS 1424 bytes with no source change cost the arduino build 20–23%. Compare only within one build, and perturb the layout before believing any cross-build difference.
+
+The bullets below still stand, and Part 4 of the spike doc records three conclusions that did not — all three were the same mistake, comparing numbers that were not measured the same way.
+
 
 - **The negotiated suite is `TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256` over an all-ECDSA chain** (`*.github.com` EC-256, Sectigo EC-256/384). **There is no RSA operation in a GitHub handshake at all.**
 - **The ESP32 has no ECC accelerator.** `MBEDTLS_HARDWARE_ECC` and `MBEDTLS_HARDWARE_ECDSA_VERIFY` both `depend on` SOC caps this chip lacks. Elliptic-curve maths is software on every IDF version. Do not go hunting for a hardware ECC path.
