@@ -1,8 +1,10 @@
-# DRAFT — espressif/esp-idf PR description (BRANCH PUSHED, PR NOT OPENED)
+# espressif/esp-idf PR description — SUPERSEDED: PR opened as draft
 
-**Branch:** [`sweetlilmre/esp-idf:fix/mpi-hw-min-bit-len`](https://github.com/sweetlilmre/esp-idf/tree/fix/mpi-hw-min-bit-len) — one commit, `components/mbedtls/port/bignum/esp_bignum.c`, +100/−0, one ahead of `espressif:master` and zero behind. **No pull request has been opened.**
+**The PR is open: [espressif/esp-idf#19027](https://github.com/espressif/esp-idf/pull/19027) (draft, 2026-08-29)**, with a shorter body condensed from this document. The commit was amended to ESP-IDF's conventional-commit format before submission — `fix(mbedtls): don't use the MPI hardware below its crossover size`, now `26338f54` — same tree, same sign-off. The threshold-location question ([espressif-mpi-threshold-open-question.md](espressif-mpi-threshold-open-question.md)) is surfaced in the PR body's "Notes for reviewers" rather than resolved. This file remains as the long-form evidence backing the PR.
 
-**Proposed title:** `mbedtls: don't use the MPI hardware below its crossover size`
+> A first attempt, #19026, was auto-closed by GitHub mid-amend: rewriting the message inside a **depth-1 shallow clone** produced a parentless commit (the graft has no parent for `--amend` to keep), the force-push severed the branch from master, and a PR closed against a rewritten head cannot be reopened. Repaired with `git commit-tree -p <true parent>` on the same tree and superseded by #19027. Do not amend in a shallow clone.
+
+**Branch:** [`sweetlilmre/esp-idf:fix/mpi-hw-min-bit-len`](https://github.com/sweetlilmre/esp-idf/tree/fix/mpi-hw-min-bit-len) — one commit, `components/mbedtls/port/bignum/esp_bignum.c`, +100/−0.
 
 ---
 
