@@ -1,0 +1,384 @@
+W (45526) spike: [spike-x509] parse_3certs x20 = 146 ms total, 7 ms each, rc=0
+W (48200) spike: [spike-x509] crt_verify x1 = 2668 ms total, 2668 ms each, rc=0 flags=0x0
+W (48201) spike: [spike-x509] pk: import=2258 us | psa_verify=2663395 us | der2raw=104 us | destroy=269 us | n=2
+W (48207) spike: [spike-x509] lib: chain=2668010 us | verify_ext=2666243 us x2 | hash=1229 us x2 | can_do=152 us x2 | check_parent=99 us x3 (name_cmp=50 us x3)
+W spike: [spike-modp] p256-inline modp=FAST nbits=256
+E (50389) task_wdt: Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:
+E (50389) task_wdt:  - IDLE0 (CPU 0)
+E (50389) task_wdt: Tasks currently running:
+E (50389) task_wdt: CPU 0: esp_timer
+E (50389) task_wdt: CPU 1: smolbase
+E (50389) task_wdt: Print CPU 0 (current core) backtrace
+
+
+Backtrace: 0x40107070:0x3FFB23C0 0x400838D8:0x3FFB23F0 0x400EB281:0x3FFCA990 0x40107C6E:0x3FFCA9C0
+
+W spike: [spike-psa] p256-inline legacy=1684181 us psa=1578951 us ratio=0.93 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-inline verify=1684181 us | in-mul=0 us (0%) | non-mul=1684181 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p256-inline allocs=473 frees=473 heap_time=9112 us (0% of verify) bytes=22KB
+W spike: [spike-modp] p384-inline modp=FAST nbits=384
+W spike: [spike-psa] p384-inline legacy=1009765 us psa=998202 us ratio=0.98 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p384-inline verify=1009765 us | in-mul=0 us (0%) | non-mul=1009765 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p384-inline allocs=538 frees=538 heap_time=12411 us (1% of verify) bytes=36KB
+W spike: [spike-mul] p256-core1 256 bits: outer=22.029 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-mul] p256-core1 384 bits: outer=29.816 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-modp] p256-core1 modp=FAST nbits=256
+W spike: [spike-psa] p256-core1 legacy=853603 us psa=876852 us ratio=1.02 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p26-core1 verify=853603 u | inmul=0 us 0% | on-mul=8560 us| 0 alls at 0.000 us/callinid
+W spike: [spkehep] p256-core1 allocs=473 frees=473 eap_time=708us (0% overify) yt=22KBW spike: [spike-modp] p384-core1 modp=FAST nbits=384
+W spike: [spike-psa] p384-core1 legacy=584487 us psa=586368 us ratio=1.00 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p384-core1 verify=584487 us | in-mul=0 us (0%) | non-mul=584487 us | 0 calls at0.000 us/call inside
+W spike: [spike-heap] p384-core1 llocs=538 frees=538 heap_time=8310 us (1% of verify) byte=36KB
+W spike: [spike-mul] p256-core0 256 bits: outer=43.094 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-mul] p256-core0 384 bits: outer=37.652 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-modp] p256-core0 modp=FAST nbits=256
+W spike: [spike-psa] p256-core0 legacy=1582474 us psa=1702049 us ratio=1.07 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-core0 verify=1582474 us | in-mul=0 us (0%) | non-mul=1582474 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p256-core0 allocs=473 frees=473 heap_time=7167 us (0% of verify) bytes=22KB
+W spike: [spike-modp] p384-core0 modp=FAST nbits=384
+W spike: [spike-psa] p384-core0 legacy=1064884 us psa=1001949 us ratio=0.94 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p384-core0 verify=1064884 us | in-mul=0 us (0%) | non-mul=1064884 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p384-core0 allocs=538 frees=538 heap_time=14042 us (1% of verify) bytes=36KB
+W spike: [spike-modp] p256-core0-prio24 modp=FAST nbits=256
+W spike: [spike-psa] p256-core0-prio24 legacy=868655 us psa=849898 us ratio=0.97 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-core0-prio24 verify=868655 us | in-mul=0 us (0%) | non-mul=868655 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p256-core0-prio24 allocs=473 frees=473 heap_time=7068 us (0% of verify) bytes=22KB
+W (71833) spike: tcp_connect=38 ms ok=1
+I (75602) esp-x509-crt-bundle: Certificate validated
+E (76937) task_wdt: Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:
+E (76937) task_wdt:  - IDLE0 (CPU 0)
+E (76937) task_wdt: Tasks currently running:
+E (76937) task_wdt: CPU 0: httpd
+E (76937) task_wdt: CPU 1: IDLE1
+E (76937) task_wdt: Print CPU 0 (current core) backtrace
+
+
+Backtrace: 0x40107070:0x3FFB23C0 0x400838D8:0x3FFB23F0 0x401332CB:0x3FFDCBE0 0x40130FFD:0x3FFDCC20 0x40131451:0x3FFDCC40 0x40131A22:0x3FFDCC70 0x401322BF:0x3FFDCE00 0x401323FA:0x3FFDCEB0 0x40132434:0x3FFDCEE0 0x40130E23:0x3FFDCF50 0x40130E9A:0x3FFDCFD0 0x401433A2:0x3FFDD000 0x4013872C:0x3FFDD040 0x40138772:0x3FFDD070 0x40134CB9:0x3FFDD0C0 0x40134D08:0x3FFDD1A0 0x401341BB:0x3FFDD1D0 0x4012B742:0x3FFDD200 0x4012967E:0x3FFDD290 0x401296CD:0x3FFDD2B0 0x401224AA:0x3FFDD2D0 0x40121F8A:0x3FFDD2F0 0x4012207D:0x3FFDD340 0x400E22C8:0x3FFDD370 0x400E3358:0x3FFDD410 0x400E84C5:0x3FFDD590 0x400E86C2:0x3FFDD750 0x400FBB05:0x3FFDD770 0x400FC6FD:0x3FFDD7D0 0x400FBF87:0x3FFDD800 0x400F9370:0x3FFDD820 0x400F9BB0:0x3FFDD850 0x40126757:0x3FFDD930 0x40125474:0x3FFDD970 0x40125B5A:0x3FFDDA30 0x401244F0:0x3FFDDA50 0x40192B8C:0x3FFDDA70 0x401246E9:0x3FFDDA90
+
+W (77883) spike: tcp+tls_connect=6040 ms ok=1
+I (81602) esp-x509-crt-bundle: Certificate validated
+E (82959) task_wdt: Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:
+E (82959) task_wdt:  - IDLE0 (CPU 0)
+E (82959) task_wdt: Tasks currently running:
+E (82959) task_wdt: CPU 0: spiketls
+E (82959) task_wdt: CPU 1: IDLE1
+E (82959) task_wdt: Print CPU 0 (current core) backtrace
+
+
+Backtrace: 0x40107070:0x3FFB23C0 0x400838D8:0x3FFB23F0 0x4000BFED:0x3FFEB6F0 0x4008A82F:0x3FFEB700 0x40199DB5:0x3FFEB720 0x40082B1C:0x3FFEB760 0x40082BE9:0x3FFEB790 0x40178309:0x3FFEB7B0 0x4013F809:0x3FFEB7D0 0x4013F75B:0x3FFEB7F0 0x4013F7E3:0x3FFEB820 0x401313AC:0x3FFEB850 0x40131A22:0x3FFEB880 0x401322BF:0x3FFEBA10 0x401323FA:0x3FFEBAC0 0x40132434:0x3FFEBAF0 0x40130E23:0x3FFEBB60 0x40130E9A:0x3FFEBBE0 0x401433A2:0x3FFEBC10 0x4013872C:0x3FFEBC50 0x40138772:0x3FFEBC80 0x40134CB9:0x3FFEBCD0 0x40134D08:0x3FFEBDB0 0x401341BB:0x3FFEBDE0 0x4012B742:0x3FFEBE10 0x4012967E:0x3FFEBEA0 0x401296CD:0x3FFEBEC0 0x401224AA:0x3FFEBEE0 0x40121F8A:0x3FFEBF00 0x4012207D:0x3FFEBF50 0x400E22C8:0x3FFEBF80 0x400E2316:0x3FFEC020
+
+W (83868) spike: tls_core0_a=5964 ms ok=1
+I (85976) esp-x509-crt-bundle: Certificate validated
+W (87271) spike: tls_core1=3391 ms ok=1
+I (91089) esp-x509-crt-bundle: Certificate validated
+E (92409) task_wdt: Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:
+E (92409) task_wdt:  - IDLE0 (CPU 0)
+E (92409) task_wdt: Tasks currently running:
+E (92409) task_wdt: CPU 0: esp_timer
+E (92409) task_wdt: CPU 1: IDLE1
+E (92409) task_wdt: Print CPU 0 (current core) backtrace
+
+
+Backtrace: 0x40107070:0x3FFB23C0 0x400838D8:0x3FFB23F0 0x400EB281:0x3FFCA990 0x40107C6E:0x3FFCA9C0
+
+W (93323) spike: tls_core0_b=6040 ms ok=1
+I (97052) esp-x509-crt-bundle: Certificate validated
+E (98402) task_wdt: Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:
+E (98402) task_wdt:  - IDLE0 (CPU 0)
+E (98402) task_wdt: Tasks currently running:
+E (98402) task_wdt: CPU 0: httpd
+E (98402) task_wdt: CPU 1: smolbase
+E (98402) task_wdt: Print CPU 0 (current core) backtrace
+
+
+Backtrace: 0x40107070:0x3FFB23C0 0x400838D8:0x3FFB23F0 0x40178461:0x3FFDCBA0 0x401780F2:0x3FFDCBC0 0x4013F758:0x3FFDCBE0 0x40130FB3:0x3FFDCC10 0x401317E4:0x3FFDCC30 0x40131A52:0x3FFDCC60 0x401322BF:0x3FFDCDF0 0x401323FA:0x3FFDCEA0 0x40132434:0x3FFDCED0 0x40130E23:0x3FFDCF40 0x40130E9A:0x3FFDCFC0 0x401433A2:0x3FFDCFF0 0x4013872C:0x3FFDD030 0x40138772:0x3FFDD060 0x40134CB9:0x3FFDD0B0 0x40134D08:0x3FFDD190 0x401341BB:0x3FFDD1C0 0x4012B742:0x3FFDD1F0 0x4012967E:0x3FFDD280 0x401296CD:0x3FFDD2A0 0x401224AA:0x3FFDD2C0 0x40121F8A:0x3FFDD2E0 0x4012207D:0x3FFDD330 0x40187AC9:0x3FFDD360 0x401953D7:0x3FFDD390 0x40123286:0x3FFDD3B0 0x40123DFF:0x3FFDD3E0 0x400E3380:0x3FFDD410 0x400E84C5:0x3FFDD590 0x400E86C2:0x3FFDD750 0x400FBB05:0x3FFDD770 0x400FC6FD:0x3FFDD7D0 0x400FBF87:0x3FFDD800 0x400F9370:0x3FFDD820 0x400F9BB0:0x3FFDD850 0x40126757:0x3FFDD930 0x40125474:0x3FFDD970 0x40125B5A:0x3FFDDA30 0x401244F0:0x3FFDDA50 0x40192B8C:0x3FFDDA70 0x401246E9:0x3FFDDA90
+
+W (100037) spike: open(connect+tls)=6159 headers=362 body=187 total=6710 ms status=200
+W (105557) spike: [spike-x509] parse_3certs x20 = 259 ms total, 12 ms each, rc=0
+W (108099) spike: [spike-x509] crt_verify x1 = 2526 ms total, 2526 ms each, rc=0 flags=0x0
+W (108099) spike: [spike-x509] pk: import=3974 us | psa_verify=2517541 us | der2raw=100 us | destroy=252 us | n=2
+W (108106) spike: [spike-x509] lib: chain=2525482 us | verify_ext=2522079 us x2 | hash=2766 us x2 | can_do=152 us x2 | check_parent=99 us x3 (name_cmp=50 us x3)
+W spike: [spike-modp] p256-inline modp=FAST nbits=256
+E (110301) task_wdt: Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:
+E (110301) task_wdt:  - IDLE0 (CPU 0)
+E (110301) task_wdt: Tasks currently running:
+E (110301) task_wdt: CPU 0: httpd
+E (110301) task_wdt: CPU 1: smolbase
+E (110301) task_wdt: Print CPU 0 (current core) backtrace
+
+
+Backtrace: 0x40107070:0x3FFB23C0 0x400838D8:0x3FFB23F0 0x40082BE9:0x3FFDCD50 0x40178309:0x3FFDCD70 0x4013F809:0x3FFDCD90 0x4013F75B:0x3FFDCDB0 0x40130FB3:0x3FFDCDE0 0x40131757:0x3FFDCE00 0x40131A52:0x3FFDCE30 0x401322BF:0x3FFDCFC0 0x401323FA:0x3FFDD070 0x40132425:0x3FFDD0A0 0x40130E23:0x3FFDD110 0x40130E9A:0x3FFDD190 0x400E791E:0x3FFDD1C0 0x400E7B45:0x3FFDD3F0 0x400E329F:0x3FFDD410 0x400E84C5:0x3FFDD590 0x400E86C2:0x3FFDD750 0x400FBB05:0x3FFDD770 0x400FC6FD:0x3FFDD7D0 0x400FBF87:0x3FFDD800 0x400F9370:0x3FFDD820 0x400F9BB0:0x3FFDD850 0x40126757:0x3FFDD930 0x40125474:0x3FFDD970 0x40125B5A:0x3FFDDA30 0x401244F0:0x3FFDDA50 0x40192B8C:0x3FFDDA70 0x401246E9:0x3FFDDA90
+
+W spike: [spike-psa] p256-inline legacy=1665645 us psa=1677235 us ratio=1.00 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-inline verify=1665645 us | in-mul=0 us (0%) | non-mul=1665645 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p256-inline allocs=473 frees=473 heap_time=11447 us (0% of verify) bytes=22KB
+W spike: [spike-modp] p384-inline modp=FAST nbits=384
+W spike: [spike-psa] p384-inline legacy=1051143 us psa=962004 us ratio=0.91 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p384-inline verify=1051143 us | in-mul=0 us (0%) | non-mul=1051143 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p384-inline allocs=538 frees=538 heap_time=13088 us (1% of verify) bytes=36KB
+W spike: [spike-mul] p256-core1 256 bits: outer=25.971 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-mul] p256-core1 384 bits: outer=28.038 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-modp] p256-core1 modp=FAST nbits=256
+W spike: [spike-psa] p256-core1 legacy=835294 us psa=868594 us ratio=1.03 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p26-core1 veify83294 s | in-mul=0 us (0%) | non-mul=83524 us  0 cll at 0.00us/call inside
+W spike: [spie-eap p256core1 allcs473 frees47 hea_time=7146 us (0% of verify btes=22KB
+W spike: [spike-modp] p384-core1 modp=FAST nbits=384
+W spike: [spike-psa] p384-core1 legacy=589772 us psa=583638 us ratio=0.98 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p384-core1 vrify=589772 us | in-mul=0 us (0%) | non-mul=589772 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p384-core1 allocs=538 frees=538 heap_time=8348 us (1% of verify) bytes=36KB
+W spike: [spike-mul] p256-core0 256 bits: outer=52.540 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-mul] p256-core0 384 bits: outer=30.948 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-modp] p256-core0 modp=FAST nbits=256
+W spike: [spike-psa] p256-core0 legacy=1601869 us psa=1595781 us ratio=0.99 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-core0 verify=1601869 us | in-mul=0 us (0%) | non-mul=1601869 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p256-core0 allocs=473 frees=473 heap_time=12774 us (0% of verify) bytes=22KB
+W spike: [spike-modp] p384-core0 modp=FAST nbits=384
+W spike: [spike-psa] p384-core0 legacy=987110 us psa=1005505 us ratio=1.01 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p384-core0 verify=987110 us | in-mul=0 us (0%) | non-mul=987110 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p384-core0 allocs=538 frees=538 heap_time=8473 us (0% of verify) bytes=36KB
+W spike: [spike-modp] p256-core0-prio24 modp=FAST nbits=256
+W spike: [spike-psa] p256-core0-prio24 legacy=842121 us psa=849696 us ratio=1.00 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-core0-prio24 verify=842121 us | in-mul=0 us (0%) | non-mul=842121 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p256-core0-prio24 allocs=473 frees=473 heap_time=7136 us (0% of verify) bytes=22KB
+W (131610) spike: tcp_connect=54 ms ok=1
+I (135311) esp-x509-crt-bundle: Certificate validated
+E (136691) task_wdt: Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:
+E (136691) task_wdt:  - IDLE0 (CPU 0)
+E (136691) task_wdt: Tasks currently running:
+E (136691) task_wdt: CPU 0: wifi
+E (136691) task_wdt: CPU 1: smolbase
+E (136691) task_wdt: Print CPU 0 (current core) backtrace
+
+
+Backtrace: 0x40107070:0x3FFB23C0 0x400838D8:0x3FFB23F0 0x4000BFED:0x3FFD3180 0x4008A82F:0x3FFD3190 0x4008746D:0x3FFD31B0 0x4019CCCD:0x3FFD31D0 0x40178A2F:0x3FFD31F0 0x401991BA:0x3FFD3210 0x4008E659:0x3FFD3230 0x40091B49:0x3FFD3250 0x4009268E:0x3FFD3280 0x4019783E:0x3FFD32A0 0x401978A2:0x3FFD32C0 0x4008F935:0x3FFD32E0
+
+W (137631) spike: tcp+tls_connect=6010 ms ok=1
+I (141406) esp-x509-crt-bundle: Certificate validated
+E (142761) task_wdt: Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:
+E (142761) task_wdt:  - IDLE0 (CPU 0)
+E (142761) task_wdt: Tasks currently running:
+E (142761) task_wdt: CPU 0: spiketls
+E (142761) task_wdt: CPU 1: smolbase
+E (142761) task_wdt: Print CPU 0 (current core) backtrace
+
+
+Backtrace: 0x40107070:0x3FFB23C0 0x400838D8:0x3FFB23F0 0x401312B3:0x3FFEB830 0x4013179E:0x3FFEB850 0x40131A52:0x3FFEB880 0x401322BF:0x3FFEBA10 0x401323FA:0x3FFEBAC0 0x40132434:0x3FFEBAF0 0x40130E23:0x3FFEBB60 0x40130E9A:0x3FFEBBE0 0x401433A2:0x3FFEBC10 0x4013872C:0x3FFEBC50 0x40138772:0x3FFEBC80 0x40134CB9:0x3FFEBCD0 0x40134D08:0x3FFEBDB0 0x401341BB:0x3FFEBDE0 0x4012B742:0x3FFEBE10 0x4012967E:0x3FFEBEA0 0x401296CD:0x3FFEBEC0 0x401224AA:0x3FFEBEE0 0x40121F8A:0x3FFEBF00 0x4012207D:0x3FFEBF50 0x400E22C8:0x3FFEBF80 0x400E2316:0x3FFEC020
+
+W (143685) spike: tls_core0_a=6043 ms ok=1
+I (145757) esp-x509-crt-bundle: Certificate validated
+W (147183) spike: tls_core1=3494 ms ok=1
+I (150921) esp-x509-crt-bundle: Certificate validated
+E (152276) task_wdt: Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:
+E (152276) task_wdt:  - IDLE0 (CPU 0)
+E (152276) task_wdt: Tasks currently running:
+E (152276) task_wdt: CPU 0: spiketls
+E (152276) task_wdt: CPU 1: smolbase
+E (152276) task_wdt: Print CPU 0 (current core) backtrace
+
+
+Backtrace: 0x40107070:0x3FFB23C0 0x400838D8:0x3FFB23F0 0x40130FD0:0x3FFEB830 0x401317E4:0x3FFEB850 0x40131A52:0x3FFEB880 0x401322BF:0x3FFEBA10 0x401323FA:0x3FFEBAC0 0x40132434:0x3FFEBAF0 0x40130E23:0x3FFEBB60 0x40130E9A:0x3FFEBBE0 0x401433A2:0x3FFEBC10 0x4013872C:0x3FFEBC50 0x40138772:0x3FFEBC80 0x40134CB9:0x3FFEBCD0 0x40134D08:0x3FFEBDB0 0x401341BB:0x3FFEBDE0 0x4012B742:0x3FFEBE10 0x4012967E:0x3FFEBEA0 0x401296CD:0x3FFEBEC0 0x401224AA:0x3FFEBEE0 0x40121F8A:0x3FFEBF00 0x4012207D:0x3FFEBF50 0x400E22C8:0x3FFEBF80 0x400E2316:0x3FFEC020
+
+W (153325) spike: tls_core0_b=6137 ms ok=1
+I (157174) esp-x509-crt-bundle: Certificate validated
+E (158405) task_wdt: Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:
+E (158405) task_wdt:  - IDLE0 (CPU 0)
+E (158405) task_wdt: Tasks currently running:
+E (158405) task_wdt: CPU 0: httpd
+E (158405) task_wdt: CPU 1: IDLE1
+E (158405) task_wdt: Print CPU 0 (current core) backtrace
+
+
+Backtrace: 0x40107070:0x3FFB23C0 0x400838D8:0x3FFB23F0 0x401932EE:0x3FFDCD30 0x4012F0DD:0x3FFDCD50 0x4013F628:0x3FFDCD70 0x40130FB3:0x3FFDCDA0 0x401316CD:0x3FFDCDC0 0x40132332:0x3FFDCDF0 0x401323FA:0x3FFDCEA0 0x40132434:0x3FFDCED0 0x40130E23:0x3FFDCF40 0x40130E9A:0x3FFDCFC0 0x401433A2:0x3FFDCFF0 0x4013872C:0x3FFDD030 0x40138772:0x3FFDD060 0x40134CB9:0x3FFDD0B0 0x40134D08:0x3FFDD190 0x401341BB:0x3FFDD1C0 0x4012B742:0x3FFDD1F0 0x4012967E:0x3FFDD280 0x401296CD:0x3FFDD2A0 0x401224AA:0x3FFDD2C0 0x40121F8A:0x3FFDD2E0 0x4012207D:0x3FFDD330 0x40187AC9:0x3FFDD360 0x401953D7:0x3FFDD390 0x40123286:0x3FFDD3B0 0x40123DFF:0x3FFDD3E0 0x400E3380:0x3FFDD410 0x400E84C5:0x3FFDD590 0x400E86C2:0x3FFDD750 0x400FBB05:0x3FFDD770 0x400FC6FD:0x3FFDD7D0 0x400FBF87:0x3FFDD800 0x400F9370:0x3FFDD820 0x400F9BB0:0x3FFDD850 0x40126757:0x3FFDD930 0x40125474:0x3FFDD970 0x40125B5A:0x3FFDDA30 0x401244F0:0x3FFDDA50 0x40192B8C:0x3FFDDA70 0x401246E9:0x3FFDDA90
+
+W (160106) spike: open(connect+tls)=6154 headers=495 body=129 total=6780 ms status=200
+W (165554) spike: [spike-x509] parse_3certs x20 = 271 ms total, 13 ms each, rc=0
+W (168176) spike: [spike-x509] crt_verify x1 = 2615 ms total, 2615 ms each, rc=0 flags=0x0
+W (168176) spike: [spike-x509] pk: import=2388 us | psa_verify=2607575 us | der2raw=96 us | destroy=1369 us | n=2
+W (168185) spike: [spike-x509] lib: chain=2614607 us | verify_ext=2611643 us x2 | hash=2434 us x2 | can_do=152 us x2 | check_parent=99 us x3 (name_cmp=50 us x3)
+W spike: [spike-modp] p256-inline modp=FAST nbits=256
+E (170304) task_wdt: Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:
+E (170304) task_wdt:  - IDLE0 (CPU 0)
+E (170304) task_wdt: Tasks currently running:
+E (170304) task_wdt: CPU 0: httpd
+E (170304) task_wdt: CPU 1: smolbase
+E (170304) task_wdt: Print CPU 0 (current core) backtrace
+
+
+Backtrace: 0x40107070:0x3FFB23C0 0x400838D8:0x3FFB23F0 0x4000BFED:0x3FFDCCB0 0x4008A82F:0x3FFDCCC0 0x40199DB5:0x3FFDCCE0 0x40082B1C:0x3FFDCD20 0x40082BE9:0x3FFDCD50 0x40178309:0x3FFDCD70 0x4013F809:0x3FFDCD90 0x4013F75B:0x3FFDCDB0 0x40130FB3:0x3FFDCDE0 0x401316FA:0x3FFDCE00 0x40131A52:0x3FFDCE30 0x401322BF:0x3FFDCFC0 0x401323FA:0x3FFDD070 0x40132425:0x3FFDD0A0 0x40130E23:0x3FFDD110 0x40130E9A:0x3FFDD190 0x400E791E:0x3FFDD1C0 0x400E7B45:0x3FFDD3F0 0x400E329F:0x3FFDD410 0x400E84C5:0x3FFDD590 0x400E86C2:0x3FFDD750 0x400FBB05:0x3FFDD770 0x400FC6FD:0x3FFDD7D0 0x400FBF87:0x3FFDD800 0x400F9370:0x3FFDD820 0x400F9BB0:0x3FFDD850 0x40126757:0x3FFDD930 0x40125474:0x3FFDD970 0x40125B5A:0x3FFDDA30 0x401244F0:0x3FFDDA50 0x40192B8C:0x3FFDDA70 0x401246E9:0x3FFDDA90
+
+W spike: [spike-psa] p256-inline legacy=1645253 us psa=1589778 us ratio=0.96 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-inline verify=1645253 us | in-mul=0 us (0%) | non-mul=1645253 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p256-inline allocs=473 frees=473 heap_time=7263 us (0% of verify) bytes=22KB
+W spike: [spike-modp] p384-inline modp=FAST nbits=384
+W spike: [spike-psa] p384-inline legacy=950334 us psa=1094369 us ratio=1.15 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p384-inline verify=950334 us | in-mul=0 us (0%) | non-mul=950334 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p384-inline allocs=538 frees=538 heap_time=20881 us (2% of verify) bytes=36KB
+W spike: [spike-mul] p256-core1 256 bits: outer=20.940 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-mul] p256-core1 384 bits: outer=28.252 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-modp] p256-core1 modp=FAST nbits=256
+W spike: [spike-psa] p256-core1 legacy=857081 us psa=866078 us ratio=1.01 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p26-coe1 verify=857081 us | in-mul= u (0) | no-mul85081 u |  call a 0000 us/cal insideW spike [spike-happ26-ce1 allos=73 fees=473 hea_tim=7144 u (% o veify) byts=22K
+W spike: [spike-modp] p384-core1 modp=FAST nbits=384
+W spike: [spike-psa] p384-core1 legacy=574905 us psa=591739 us ratio=1.02 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p384-core1 vrify=57490 u | in-mul=0 us (0%) | non-mul=574905 us | 0 cals t 0.00 us/call inside
+W spike: [spike-heap] p384-core1 llocs=38frees=538 heap_time=8317 us (1% of verify) bytes=36KBW spike: [spike-mul] p256-core0 256 bits: outer=22.223 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-mul] p256-core0 384 bits: outer=57.778 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-modp] p256-core0 modp=FAST nbits=256
+W spike: [spike-psa] p256-core0 legacy=1580647 us psa=1584739 us ratio=1.00 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-core0 verify=1580647 us | in-mul=0 us (0%) | non-mul=1580647 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p256-core0 allocs=473 frees=473 heap_time=10818 us (0% of verify) bytes=22KB
+W spike: [spike-modp] p384-core0 modp=FAST nbits=384
+W spike: [spike-psa] p384-core0 legacy=1033521 us psa=982807 us ratio=0.95 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p384-core0 verify=1033521 us | in-mul=0 us (0%) | non-mul=1033521 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p384-core0 allocs=538 frees=538 heap_time=9410 us (0% of verify) bytes=36KB
+W spike: [spike-modp] p256-core0-prio24 modp=FAST nbits=256
+W spike: [spike-psa] p256-core0-prio24 legacy=842340 us psa=849373 us ratio=1.00 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-core0-prio24 verify=842340 us | in-mul=0 us (0%) | non-mul=842340 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p256-core0-prio24 allocs=473 frees=473 heap_time=7112 us (0% of verify) bytes=22KB
+W (191674) spike: tcp_connect=31 ms ok=1
+I (195413) esp-x509-crt-bundle: Certificate validated
+E (196745) task_wdt: Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:
+E (196745) task_wdt:  - IDLE0 (CPU 0)
+E (196745) task_wdt: Tasks currently running:
+E (196745) task_wdt: CPU 0: httpd
+E (196745) task_wdt: CPU 1: IDLE1
+E (196745) task_wdt: Print CPU 0 (current core) backtrace
+
+
+Backtrace: 0x40107070:0x3FFB23C0 0x400838D8:0x3FFB23F0 0x4012F204:0x3FFDCBF0 0x40131011:0x3FFDCC20 0x401316CD:0x3FFDCC40 0x40131A52:0x3FFDCC70 0x401322BF:0x3FFDCE00 0x401323FA:0x3FFDCEB0 0x40132434:0x3FFDCEE0 0x40130E23:0x3FFDCF50 0x40130E9A:0x3FFDCFD0 0x401433A2:0x3FFDD000 0x4013872C:0x3FFDD040 0x40138772:0x3FFDD070 0x40134CB9:0x3FFDD0C0 0x40134D08:0x3FFDD1A0 0x401341BB:0x3FFDD1D0 0x4012B742:0x3FFDD200 0x4012967E:0x3FFDD290 0x401296CD:0x3FFDD2B0 0x401224AA:0x3FFDD2D0 0x40121F8A:0x3FFDD2F0 0x4012207D:0x3FFDD340 0x400E22C8:0x3FFDD370 0x400E3358:0x3FFDD410 0x400E84C5:0x3FFDD590 0x400E86C2:0x3FFDD750 0x400FBB05:0x3FFDD770 0x400FC6FD:0x3FFDD7D0 0x400FBF87:0x3FFDD800 0x400F9370:0x3FFDD820 0x400F9BB0:0x3FFDD850 0x40126757:0x3FFDD930 0x40125474:0x3FFDD970 0x40125B5A:0x3FFDDA30 0x401244F0:0x3FFDDA50 0x40192B8C:0x3FFDDA70 0x401246E9:0x3FFDDA90
+
+W (197688) spike: tcp+tls_connect=6009 ms ok=1
+I (201435) esp-x509-crt-bundle: Certificate validated
+E (202765) task_wdt: Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:
+E (202765) task_wdt:  - IDLE0 (CPU 0)
+E (202765) task_wdt: Tasks currently running:
+E (202765) task_wdt: CPU 0: spiketls
+E (202765) task_wdt: CPU 1: IDLE1
+E (202765) task_wdt: Print CPU 0 (current core) backtrace
+
+
+Backtrace: 0x40107070:0x3FFB23C0 0x400838D8:0x3FFB23F0 0x401931A8:0x3FFEB7D0 0x4012F379:0x3FFEB7F0 0x4012F3F2:0x3FFEB810 0x40130F77:0x3FFEB830 0x4013171A:0x3FFEB850 0x40131A52:0x3FFEB880 0x401322BF:0x3FFEBA10 0x401323FA:0x3FFEBAC0 0x40132434:0x3FFEBAF0 0x40130E23:0x3FFEBB60 0x40130E9A:0x3FFEBBE0 0x401433A2:0x3FFEBC10 0x4013872C:0x3FFEBC50 0x40138772:0x3FFEBC80 0x40134CB9:0x3FFEBCD0 0x40134D08:0x3FFEBDB0 0x401341BB:0x3FFEBDE0 0x4012B742:0x3FFEBE10 0x4012967E:0x3FFEBEA0 0x401296CD:0x3FFEBEC0 0x401224AA:0x3FFEBEE0 0x40121F8A:0x3FFEBF00 0x4012207D:0x3FFEBF50 0x400E22C8:0x3FFEBF80 0x400E2316:0x3FFEC020
+
+W (203786) spike: tls_core0_a=6086 ms ok=1
+I (205883) esp-x509-crt-bundle: Certificate validated
+W (207191) spike: tls_core1=3397 ms ok=1
+I (210975) esp-x509-crt-bundle: Certificate validated
+E (212313) task_wdt: Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:
+E (212313) task_wdt:  - IDLE0 (CPU 0)
+E (212313) task_wdt: Tasks currently running:
+E (212313) task_wdt: CPU 0: spiketls
+E (212313) task_wdt: CPU 1: IDLE1
+E (212313) task_wdt: Print CPU 0 (current core) backtrace
+
+
+Backtrace: 0x40107070:0x3FFB23C0 0x400838D8:0x3FFB23F0 0x40178461:0x3FFEB7C0 0x401780F2:0x3FFEB7E0 0x4013F758:0x3FFEB800 0x40130FB3:0x3FFEB830 0x4013177C:0x3FFEB850 0x40131A52:0x3FFEB880 0x401322BF:0x3FFEBA10 0x401323FA:0x3FFEBAC0 0x40132434:0x3FFEBAF0 0x40130E23:0x3FFEBB60 0x40130E9A:0x3FFEBBE0 0x401433A2:0x3FFEBC10 0x4013872C:0x3FFEBC50 0x40138772:0x3FFEBC80 0x40134CB9:0x3FFEBCD0 0x40134D08:0x3FFEBDB0 0x401341BB:0x3FFEBDE0 0x4012B742:0x3FFEBE10 0x4012967E:0x3FFEBEA0 0x401296CD:0x3FFEBEC0 0x401224AA:0x3FFEBEE0 0x40121F8A:0x3FFEBF00 0x4012207D:0x3FFEBF50 0x400E22C8:0x3FFEBF80 0x400E2316:0x3FFEC020
+
+W (213231) spike: tls_core0_b=6035 ms ok=1
+I (217003) esp-x509-crt-bundle: Certificate validated
+E (218312) task_wdt: Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:
+E (218312) task_wdt:  - IDLE0 (CPU 0)
+E (218312) task_wdt: Tasks currently running:
+E (218312) task_wdt: CPU 0: httpd
+E (218312) task_wdt: CPU 1: IDLE1
+E (218312) task_wdt: Print CPU 0 (current core) backtrace
+
+
+Backtrace: 0x40107070:0x3FFB23C0 0x400838D8:0x3FFB23F0 0x4000BFED:0x3FFDCAE0 0x4008A82F:0x3FFDCAF0 0x40199DB5:0x3FFDCB10 0x40082B1C:0x3FFDCB50 0x40082BE9:0x3FFDCB80 0x40178309:0x3FFDCBA0 0x4013F809:0x3FFDCBC0 0x4013F75B:0x3FFDCBE0 0x40130FB3:0x3FFDCC10 0x401313E6:0x3FFDCC30 0x40131A22:0x3FFDCC60 0x401322BF:0x3FFDCDF0 0x401323FA:0x3FFDCEA0 0x40132434:0x3FFDCED0 0x40130E23:0x3FFDCF40 0x40130E9A:0x3FFDCFC0 0x401433A2:0x3FFDCFF0 0x4013872C:0x3FFDD030 0x40138772:0x3FFDD060 0x40134CB9:0x3FFDD0B0 0x40134D08:0x3FFDD190 0x401341BB:0x3FFDD1C0 0x4012B742:0x3FFDD1F0 0x4012967E:0x3FFDD280 0x401296CD:0x3FFDD2A0 0x401224AA:0x3FFDD2C0 0x40121F8A:0x3FFDD2E0 0x4012207D:0x3FFDD330 0x40187AC9:0x3FFDD360 0x401953D7:0x3FFDD390 0x40123286:0x3FFDD3B0 0x40123DFF:0x3FFDD3E0 0x400E3380:0x3FFDD410 0x400E84C5:0x3FFDD590 0x400E86C2:0x3FFDD750 0x400FBB05:0x3FFDD770 0x400FC6FD:0x3FFDD7D0 0x400FBF87:0x3FFDD800 0x400F9370:0x3FFDD820 0x400F9BB0:0x3FFDD850 0x40126757:0x3FFDD930 0x40125474:0x3FFDD970 0x40125B5A:0x3FFDDA30 0x401244F0:0x3FFDDA50 0x40192B8C:0x3FFDDA70 0x401246E9:0x3FFDDA90
+
+W (219981) spike: open(connect+tls)=6142 headers=389 body=217 total=6749 ms status=200
+W (225567) spike: [spike-x509] parse_3certs x20 = 268 ms total, 13 ms each, rc=0
+W (228208) spike: [spike-x509] crt_verify x1 = 2631 ms total, 2631 ms each, rc=0 flags=0x0
+W (228211) spike: [spike-x509] pk: import=6799 us | psa_verify=2621786 us | der2raw=100 us | destroy=265 us | n=2
+W (228218) spike: [spike-x509] lib: chain=2630670 us | verify_ext=2629162 us x2 | hash=976 us x2 | can_do=152 us x2 | check_parent=99 us x3 (name_cmp=50 us x3)
+W spike: [spike-modp] p256-inline modp=FAST nbits=256
+E (230321) task_wdt: Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:
+E (230321) task_wdt:  - IDLE0 (CPU 0)
+E (230321) task_wdt: Tasks currently running:
+E (230321) task_wdt: CPU 0: httpd
+E (230321) task_wdt: CPU 1: smolbase
+E (230321) task_wdt: Print CPU 0 (current core) backtrace
+
+
+Backtrace: 0x40107070:0x3FFB23C0 0x400838D8:0x3FFB23F0 0x4013316D:0x3FFDCDA0 0x40130FFD:0x3FFDCDE0 0x401317AC:0x3FFDCE00 0x40131A52:0x3FFDCE30 0x401322BF:0x3FFDCFC0 0x401323FA:0x3FFDD070 0x40132425:0x3FFDD0A0 0x40130E23:0x3FFDD110 0x40130E9A:0x3FFDD190 0x400E791E:0x3FFDD1C0 0x400E7B45:0x3FFDD3F0 0x400E329F:0x3FFDD410 0x400E84C5:0x3FFDD590 0x400E86C2:0x3FFDD750 0x400FBB05:0x3FFDD770 0x400FC6FD:0x3FFDD7D0 0x400FBF87:0x3FFDD800 0x400F9370:0x3FFDD820 0x400F9BB0:0x3FFDD850 0x40126757:0x3FFDD930 0x40125474:0x3FFDD970 0x40125B5A:0x3FFDDA30 0x401244F0:0x3FFDDA50 0x40192B8C:0x3FFDDA70 0x401246E9:0x3FFDDA90
+
+W spike: [spike-psa] p256-inline legacy=1579413 us psa=1644650 us ratio=1.04 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-inline verify=1579413 us | in-mul=0 us (0%) | non-mul=1579413 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p256-inline allocs=473 frees=473 heap_time=7047 us (0% of verify) bytes=22KB
+W spike: [spike-modp] p384-inline modp=FAST nbits=384
+W spike: [spike-psa] p384-inline legacy=1035692 us psa=948535 us ratio=0.91 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p384-inline verify=1035692 us | in-mul=0 us (0%) | non-mul=1035692 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p384-inline allocs=538 frees=538 heap_time=8286 us (0% of verify) bytes=36KB
+W spike: [spike-mul] p256-core1 256 bits: outer=27.339 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-mul] p256-core1 384 bits: outer=26.849 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-modp] p256-core1 modp=FAST nbits=256
+W spike: [spike-psa] p256-core1 legacy=886746 us psa=879497 us ratio=0.99 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-core1 verify=8874 us | inmul=0 us (0%) | non-mul=886746 us | 0 calls at .000 s/al iside
+W spike: [spike-heap] p256-core1 allos=473 frees=473 heap_time=7127 us (0% of verify) bytes=22KB
+W spike: [spike-modp] p384-core1 modp=FAST nbits=384
+W spike: [spike-psa] p384-core1 legacy=588149 us psa=589712 us ratio=1.00 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p34-core1 vrify=588149 us | in-mul=0 us (0%) |nonmul=58149 us | 0 calls at 0.000 us/call insideW sike: [spike-hep]p384-core1 allocs=538 frees=538 heap_im=825 u (1% of veify)bytes=6K
+W spike: [spike-mul] p256-core0 256 bits: outer=33.583 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-mul] p256-core0 384 bits: outer=24.381 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-modp] p256-core0 modp=FAST nbits=256
+W spike: [spike-psa] p256-core0 legacy=1635294 us psa=1590653 us ratio=0.97 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-core0 verify=1635294 us | in-mul=0 us (0%) | non-mul=1635294 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p256-core0 allocs=473 frees=473 heap_time=15723 us (0% of verify) bytes=22KB
+W spike: [spike-modp] p384-core0 modp=FAST nbits=384
+W spike: [spike-psa] p384-core0 legacy=970106 us psa=1068396 us ratio=1.10 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p384-core0 verify=970106 us | in-mul=0 us (0%) | non-mul=970106 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p384-core0 allocs=538 frees=538 heap_time=14820 us (1% of verify) bytes=36KB
+W spike: [spike-modp] p256-core0-prio24 modp=FAST nbits=256
+W spike: [spike-psa] p256-core0-prio24 legacy=867216 us psa=848840 us ratio=0.97 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-core0-prio24 verify=867216 us | in-mul=0 us (0%) | non-mul=867216 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p256-core0-prio24 allocs=473 frees=473 heap_time=7092 us (0% of verify) bytes=22KB
+W (251709) spike: tcp_connect=29 ms ok=1
+I (255457) esp-x509-crt-bundle: Certificate validated
+E (256829) task_wdt: Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:
+E (256829) task_wdt:  - IDLE0 (CPU 0)
+E (256829) task_wdt: Tasks currently running:
+E (256829) task_wdt: CPU 0: esp_timer
+E (256829) task_wdt: CPU 1: IDLE1
+E (256829) task_wdt: Print CPU 0 (current core) backtrace
+
+
+Backtrace: 0x40107070:0x3FFB23C0 0x400838D8:0x3FFB23F0 0x400EB281:0x3FFCA990 0x40107C6E:0x3FFCA9C0
+
+W (257784) spike: tcp+tls_connect=6063 ms ok=1
+I (261553) esp-x509-crt-bundle: Certificate validated
+E (262899) task_wdt: Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:
+E (262899) task_wdt:  - IDLE0 (CPU 0)
+E (262899) task_wdt: Tasks currently running:
+E (262899) task_wdt: CPU 0: esp_timer
+E (262899) task_wdt: CPU 1: IDLE1
+E (262899) task_wdt: Print CPU 0 (current core) backtrace
+
+
+Backtrace: 0x40107070:0x3FFB23C0 0x400838D8:0x3FFB23F0 0x400EB281:0x3FFCA990 0x40107C6E:0x3FFCA9C0
+
+W (263834) spike: tls_core0_a=6038 ms ok=1
+I (265912) esp-x509-crt-bundle: Certificate validated
+W (267398) spike: tls_core1=3557 ms ok=1
+I (271076) esp-x509-crt-bundle: Certificate validated
+E (272490) task_wdt: Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:
+E (272490) task_wdt:  - IDLE0 (CPU 0)
+E (272490) task_wdt: Tasks currently running:
+E (272490) task_wdt: CPU 0: esp_timer
+E (272490) task_wdt: CPU 1: IDLE1
+E (272490) task_wdt: Print CPU 0 (current core) backtrace
+
+
+Backtrace: 0x40107070:0x3FFB23C0 0x400838D8:0x3FFB23F0 0x400EB281:0x3FFCA990 0x40107C6E:0x3FFCA9C0
+
+W (273431) spike: tls_core0_b=6021 ms ok=1
+I (277181) esp-x509-crt-bundle: Certificate validated
+E (278554) task_wdt: Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:
+E (278554) task_wdt:  - IDLE0 (CPU 0)
+E (278554) task_wdt: Tasks currently running:
+E (278554) task_wdt: CPU 0: httpd
+E (278554) task_wdt: CPU 1: IDLE1
+E (278554) task_wdt: Print CPU 0 (current core) backtrace
+
+
+Backtrace: 0x40107070:0x3FFB23C0 0x400838D8:0x3FFB23F0 0x40133036:0x3FFDCBD0 0x40130FFD:0x3FFDCC10 0x401316DE:0x3FFDCC30 0x40131A52:0x3FFDCC60 0x401322BF:0x3FFDCDF0 0x401323FA:0x3FFDCEA0 0x40132434:0x3FFDCED0 0x40130E23:0x3FFDCF40 0x40130E9A:0x3FFDCFC0 0x401433A2:0x3FFDCFF0 0x4013872C:0x3FFDD030 0x40138772:0x3FFDD060 0x40134CB9:0x3FFDD0B0 0x40134D08:0x3FFDD190 0x401341BB:0x3FFDD1C0 0x4012B742:0x3FFDD1F0 0x4012967E:0x3FFDD280 0x401296CD:0x3FFDD2A0 0x401224AA:0x3FFDD2C0 0x40121F8A:0x3FFDD2E0 0x4012207D:0x3FFDD330 0x40187AC9:0x3FFDD360 0x401953D7:0x3FFDD390 0x40123286:0x3FFDD3B0 0x40123DFF:0x3FFDD3E0 0x400E3380:0x3FFDD410 0x400E84C5:0x3FFDD590 0x400E86C2:0x3FFDD750 0x400FBB05:0x3FFDD770 0x400FC6FD:0x3FFDD7D0 0x400FBF87:0x3FFDD800 0x400F9370:0x3FFDD820 0x400F9BB0:0x3FFDD850 0x40126757:0x3FFDD930 0x40125474:0x3FFDD970 0x40125B5A:0x3FFDDA30 0x401244F0:0x3FFDDA50 0x40192B8C:0x3FFDDA70 0x401246E9:0x3FFDDA90
+
+W (280039) spike: open(connect+tls)=6059 headers=385 body=162 total=6607 ms status=200

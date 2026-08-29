@@ -1,0 +1,18 @@
+== cell P1 ==
+
+-- placement (nm -S) --
+40132f18 00000470 t ecp_mod_p256
+40132950 000005c5 t ecp_mod_p384
+40193558 000001a4 T mbedtls_mpi_core_mla
+401934f8 0000005f T mbedtls_mpi_core_sub
+400e75cc 0000000f T spike_pad_touch
+
+-- mbedtls_mpi_core_sub call8 count (2 = stock, 0 = series applied) --
+mbedtls_mpi_core_sub: size=95 insns=37 call8=0 cond_branches~=5
+mbedtls_mpi_core_mla: size=420 insns=180 call8=0 cond_branches~=26
+
+-- summed .text of ecp/bignum/constant_time symbols --
+sum_bytes=21048
+
+-- image size --
+bin_bytes=1467280
