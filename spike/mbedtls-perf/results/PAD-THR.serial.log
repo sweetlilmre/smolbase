@@ -1,0 +1,186 @@
+W (45547) spike: [spike-x509] parse_3certs x20 = 216 ms total, 10 ms each, rc=0
+W (47557) spike: [spike-x509] crt_verify x1 = 1999 ms total, 1999 ms each, rc=0 flags=0x0
+W (47558) spike: [spike-x509] pk: import=7525 us | psa_verify=1989494 us | der2raw=108 us | destroy=237 us | n=2
+W (47565) spike: [spike-x509] lib: chain=1999255 us | verify_ext=1997588 us x2 | hash=1125 us x2 | can_do=141 us x2 | check_parent=111 us x3 (name_cmp=54 us x3)
+W spike: [spike-modp] p256-inline modp=FAST nbits=256
+W spike: [spike-psa] p256-inline legacy=784213 us psa=685910 us ratio=0.87 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-inline verify=784213 us | in-mul=0 us (0%) | non-mul=784213 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p256-inline allocs=1953 frees=1953 heap_time=47327 us (6% of verify) bytes=68KB
+W spike: [spike-modp] p384-inline modp=FAST nbits=384
+W spike: [spike-psa] p384-inline legacy=1340200 us psa=1281510 us ratio=0.95 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p384-inline verify=1340200 us | in-mul=0 us (0%) | non-mul=1340200 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p384-inline allocs=2686 frees=2686 heap_time=72798 us (5% of verify) bytes=135KB
+W spike: [spike-mul] p256-core1 256 bits: outer=11.520 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-mul] p256-core1 384 bits: outer=22.210 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-modp] p256-core1 modp=FAST nbits=256
+W spike: [spike-psa] p256-core1 legacy=389954 us psa=348582 us ratio=0.89 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p2-cre1verify=389954 us | in-mul= us (0%)| non-mul=39954 u | 0 call at0.000 us/call inside
+W sik: [spik-heap]p256-core1 alos=193 frees=1953 heap_time=2911 u (7% of veriy) bte=68K
+W spike: [spike-modp] p384-core1 modp=FAST nbits=384
+W spike: [spike-psa] p384-core1 legacy=724549 us psa=725296 us ratio=1.00 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p3-cre1 verify=724549 s  in-mul=0 s (0)  nonmul=72549us| 0 alls at 0.000 us/call inideW pike: [sik-hea] p34-core1allcs=2686 frees=2686 heap_tme=4084 u (5% of erify)byes135KBW spike: [spike-mul] p256-core0 256 bits: outer=27.618 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-mul] p256-core0 384 bits: outer=30.763 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-modp] p256-core0 modp=FAST nbits=256
+W spike: [spike-psa] p256-core0 legacy=769815 us psa=713898 us ratio=0.92 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-core0 verify=769815 us | in-mul=0 us (0%) | non-mul=769815 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p256-core0 allocs=1953 frees=1953 heap_time=72597 us (9% of verify) bytes=68KB
+W spike: [spike-modp] p384-core0 modp=FAST nbits=384
+W spike: [spike-psa] p384-core0 legacy=1376582 us psa=1300160 us ratio=0.94 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p384-core0 verify=1376582 us | in-mul=0 us (0%) | non-mul=1376582 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p384-core0 allocs=2686 frees=2686 heap_time=80222 us (5% of verify) bytes=135KB
+W spike: [spike-modp] p256-core0-prio24 modp=FAST nbits=256
+W spike: [spike-psa] p256-core0-prio24 legacy=391035 us psa=348373 us ratio=0.89 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-core0-prio24 verify=391035 us | in-mul=0 us (0%) | non-mul=391035 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p256-core0-prio24 allocs=1953 frees=1953 heap_time=28925 us (7% of verify) bytes=68KB
+W (64763) spike: tcp_connect=57 ms ok=1
+I (68285) esp-x509-crt-bundle: Certificate validated
+W (69743) spike: tcp+tls_connect=4967 ms ok=1
+I (73142) esp-x509-crt-bundle: Certificate validated
+W (74732) spike: tls_core0_a=4981 ms ok=1
+I (76619) esp-x509-crt-bundle: Certificate validated
+W (77499) spike: tls_core1=2763 ms ok=1
+I (80887) esp-x509-crt-bundle: Certificate validated
+W (82435) spike: tls_core0_b=4928 ms ok=1
+I (85938) esp-x509-crt-bundle: Certificate validated
+W (88085) spike: open(connect+tls)=5036 headers=470 body=142 total=5649 ms status=200
+W (93535) spike: [spike-x509] parse_3certs x20 = 139 ms total, 6 ms each, rc=0
+W (95547) spike: [spike-x509] crt_verify x1 = 2002 ms total, 2002 ms each, rc=0 flags=0x0
+W (95548) spike: [spike-x509] pk: import=2133 us | psa_verify=1997001 us | der2raw=113 us | destroy=240 us | n=2
+W (95555) spike: [spike-x509] lib: chain=2002509 us | verify_ext=1999711 us x2 | hash=2252 us x2 | can_do=141 us x2 | check_parent=111 us x3 (name_cmp=54 us x3)
+W spike: [spike-modp] p256-inline modp=FAST nbits=256
+W spike: [spike-psa] p256-inline legacy=778215 us psa=671298 us ratio=0.86 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-inline verify=778215 us | in-mul=0 us (0%) | non-mul=778215 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p256-inline allocs=1953 frees=1953 heap_time=51163 us (6% of verify) bytes=68KB
+W spike: [spike-modp] p384-inline modp=FAST nbits=384
+W spike: [spike-psa] p384-inline legacy=1273661 us psa=1406368 us ratio=1.10 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p384-inline verify=1273661 us | in-mul=0 us (0%) | non-mul=1273661 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p384-inline allocs=2686 frees=2686 heap_time=78336 us (6% of verify) bytes=135KB
+W spike: [spike-mul] p256-core1 256 bits: outer=11.557 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-mul] p256-core1 384 bits: outer=22.210 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-modp] p256-core1 modp=FAST nbits=256
+W spike: [spike-psa] p256-core1 legacy=390462 us psa=348698 us ratio=0.89 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-core1 verify=390462 s | in-mul=0 us (0%) | non-mul=390462 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p256-core1 alloc=1953 frees=1953 heap_time=28943 us (7% of verify) bytes=68B
+W spike: [spike-modp] p384-core1 modp=FAST nbits=384
+W spike: [spike-psa] p384-core1 legacy=724835 us psa=724989 us ratio=1.00 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p384-core1 verify=72485 us | in-mul0 us (0)  non-mul=724835 us | 0 calls at 0.00 u/cal insid
+W spke: [spike-heap] p384-core1 allocs=266 fres=686 heaptime=4099 us (5% of verify) bytes=135KB
+W spike: [spike-mul] p256-core0 256 bits: outer=16.713 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-mul] p256-core0 384 bits: outer=25.590 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-modp] p256-core0 modp=FAST nbits=256
+W spike: [spike-psa] p256-core0 legacy=774448 us psa=701635 us ratio=0.90 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-core0 verify=774448 us | in-mul=0 us (0%) | non-mul=774448 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p256-core0 allocs=1953 frees=1953 heap_time=53884 us (6% of verify) bytes=68KB
+W spike: [spike-modp] p384-core0 modp=FAST nbits=384
+W spike: [spike-psa] p384-core0 legacy=1285292 us psa=1382742 us ratio=1.07 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p384-core0 verify=1285292 us | in-mul=0 us (0%) | non-mul=1285292 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p384-core0 allocs=2686 frees=2686 heap_time=62895 us (4% of verify) bytes=135KB
+W spike: [spike-modp] p256-core0-prio24 modp=FAST nbits=256
+W spike: [spike-psa] p256-core0-prio24 legacy=390573 us psa=348446 us ratio=0.89 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-core0-prio24 verify=390573 us | in-mul=0 us (0%) | non-mul=390573 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p256-core0-prio24 allocs=1953 frees=1953 heap_time=28683 us (7% of verify) bytes=68KB
+W (112790) spike: tcp_connect=49 ms ok=1
+I (116153) esp-x509-crt-bundle: Certificate validated
+W (117746) spike: tcp+tls_connect=4946 ms ok=1
+I (121247) esp-x509-crt-bundle: Certificate validated
+W (122747) spike: tls_core0_a=4990 ms ok=1
+I (124678) esp-x509-crt-bundle: Certificate validated
+W (125521) spike: tls_core1=2767 ms ok=1
+I (128933) esp-x509-crt-bundle: Certificate validated
+W (130553) spike: tls_core0_b=5019 ms ok=1
+I (134047) esp-x509-crt-bundle: Certificate validated
+W (136197) spike: open(connect+tls)=5010 headers=400 body=231 total=5642 ms status=200
+W (141634) spike: [spike-x509] parse_3certs x20 = 143 ms total, 7 ms each, rc=0
+W (143621) spike: [spike-x509] crt_verify x1 = 1981 ms total, 1981 ms each, rc=0 flags=0x0
+W (143622) spike: [spike-x509] pk: import=1993 us | psa_verify=1976305 us | der2raw=437 us | destroy=245 us | n=2
+W (143629) spike: [spike-x509] lib: chain=1980815 us | verify_ext=1979216 us x2 | hash=1029 us x2 | can_do=153 us x2 | check_parent=111 us x3 (name_cmp=54 us x3)
+W spike: [spike-modp] p256-inline modp=FAST nbits=256
+W spike: [spike-psa] p256-inline legacy=780473 us psa=674012 us ratio=0.86 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-inline verify=780473 us | in-mul=0 us (0%) | non-mul=780473 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p256-inline allocs=1953 frees=1953 heap_time=68423 us (8% of verify) bytes=68KB
+W spike: [spike-modp] p384-inline modp=FAST nbits=384
+W spike: [spike-psa] p384-inline legacy=1265206 us psa=1382764 us ratio=1.09 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p384-inline verify=1265206 us | in-mul=0 us (0%) | non-mul=1265206 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p384-inline allocs=2686 frees=2686 heap_time=57700 us (4% of verify) bytes=135KB
+W spike: [spike-mul] p256-core1 256 bits: outer=11.520 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-mul] p256-core1 384 bits: outer=22.210 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-modp] p256-core1 modp=FAST nbits=256
+W spike: [spike-psa] p256-core1 legacy=389525 us psa=348342 us ratio=0.89 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-core1 erify38955 us | in-mul=0 us (0%) | non-mul=389525 us | 0 cals at 0.000 us/call inside
+W spike: [spike-heap] p256-coe1allos=1953 frees=1953 heap_time=28430 us (7% of verify) bytes=68KB
+W spike: [spike-modp] p384-core1 modp=FAST nbits=384
+W spike: [spike-psa] p384-core1 legacy=724124 us psa=725447 us ratio=1.00 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p3-core1 erif=7414 us| n-mul=0 us (0%) | non-mul=724124 us |0 als at0.00 us/all nside
+W spike: [spike-heap] p384-cor1 llcs2686 fees=286 hap_time=40004 us (5% of verify) bytes=13KB
+W spike: [spike-mul] p256-core0 256 bits: outer=17.721 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-mul] p256-core0 384 bits: outer=26.598 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-modp] p256-core0 modp=FAST nbits=256
+W spike: [spike-psa] p256-core0 legacy=758620 us psa=700498 us ratio=0.92 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-core0 verify=758620 us | in-mul=0 us (0%) | non-mul=758620 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p256-core0 allocs=1953 frees=1953 heap_time=54696 us (7% of verify) bytes=68KB
+W spike: [spike-modp] p384-core0 modp=FAST nbits=384
+W spike: [spike-psa] p384-core0 legacy=1265461 us psa=1382974 us ratio=1.09 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p384-core0 verify=1265461 us | in-mul=0 us (0%) | non-mul=1265461 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p384-core0 allocs=2686 frees=2686 heap_time=64688 us (5% of verify) bytes=135KB
+W spike: [spike-modp] p256-core0-prio24 modp=FAST nbits=256
+W spike: [spike-psa] p256-core0-prio24 legacy=390887 us psa=348905 us ratio=0.89 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-core0-prio24 verify=390887 us | in-mul=0 us (0%) | non-mul=390887 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p256-core0-prio24 allocs=1953 frees=1953 heap_time=28873 us (7% of verify) bytes=68KB
+W (160792) spike: tcp_connect=72 ms ok=1
+I (164171) esp-x509-crt-bundle: Certificate validated
+W (165744) spike: tcp+tls_connect=4945 ms ok=1
+I (169231) esp-x509-crt-bundle: Certificate validated
+W (170726) spike: tls_core0_a=4974 ms ok=1
+I (172601) esp-x509-crt-bundle: Certificate validated
+W (173454) spike: tls_core1=2721 ms ok=1
+I (176831) esp-x509-crt-bundle: Certificate validated
+W (178486) spike: tls_core0_b=5021 ms ok=1
+I (181872) esp-x509-crt-bundle: Certificate validated
+W (184085) spike: open(connect+tls)=5005 headers=385 body=206 total=5598 ms status=200
+W (189574) spike: [spike-x509] parse_3certs x20 = 255 ms total, 12 ms each, rc=0
+W (191554) spike: [spike-x509] crt_verify x1 = 1973 ms total, 1973 ms each, rc=0 flags=0x0
+W (191555) spike: [spike-x509] pk: import=7655 us | psa_verify=1963419 us | der2raw=96 us | destroy=247 us | n=2
+W (191562) spike: [spike-x509] lib: chain=1973171 us | verify_ext=1971646 us x2 | hash=987 us x2 | can_do=133 us x2 | check_parent=111 us x3 (name_cmp=54 us x3)
+W spike: [spike-modp] p256-inline modp=FAST nbits=256
+W spike: [spike-psa] p256-inline legacy=751525 us psa=603120 us ratio=0.80 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-inline verify=751525 us | in-mul=0 us (0%) | non-mul=751525 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p256-inline allocs=1953 frees=1953 heap_time=57233 us (7% of verify) bytes=68KB
+W spike: [spike-modp] p384-inline modp=FAST nbits=384
+W spike: [spike-psa] p384-inline legacy=1295218 us psa=1270733 us ratio=0.98 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p384-inline verify=1295218 us | in-mul=0 us (0%) | non-mul=1295218 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p384-inline allocs=2686 frees=2686 heap_time=67243 us (5% of verify) bytes=135KB
+W spike: [spike-mul] p256-core1 256 bits: outer=11.520 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-mul] p256-core1 384 bits: outer=22.405 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-modp] p256-core1 modp=FAST nbits=256
+W spike: [spike-psa] p256-core1 legacy=390873 us psa=349792 us ratio=0.89 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p26-ore1 verify=390873 us | i-mul= us (0%)| on-ul39073 us | 0calls at 0.000 us/call inid
+W spie: [spike-heap p25-coe1 allocs=1953 frees=1953 hea_time2918us(7 of veif) btes68B
+W spike: [spike-modp] p384-core1 modp=FAST nbits=384
+W spike: [spike-psa] p384-core1 legacy=725916 us psa=726764 us ratio=1.00 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p34-core1 verify=725916 us | in-mul0 s (0% | nn-mul=725916 us | 0 alls at 0.000 us/call insde
+W spie:[spike-eap p384-cor1 llcs=2686 frees=2686 hea_time=41951 us (% f veif) ytes=35KB
+W spike: [spike-mul] p256-core0 256 bits: outer=28.352 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-mul] p256-core0 384 bits: outer=30.725 us/call inner=0.000 us/call over 4000 calls rc=0
+W spike: [spike-modp] p256-core0 modp=FAST nbits=256
+W spike: [spike-psa] p256-core0 legacy=755353 us psa=677365 us ratio=0.89 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-core0 verify=755353 us | in-mul=0 us (0%) | non-mul=755353 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p256-core0 allocs=1953 frees=1953 heap_time=74173 us (9% of verify) bytes=68KB
+W spike: [spike-modp] p384-core0 modp=FAST nbits=384
+W spike: [spike-psa] p384-core0 legacy=1285643 us psa=1305799 us ratio=1.01 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p384-core0 verify=1285643 us | in-mul=0 us (0%) | non-mul=1285643 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p384-core0 allocs=2686 frees=2686 heap_time=73044 us (5% of verify) bytes=135KB
+W spike: [spike-modp] p256-core0-prio24 modp=FAST nbits=256
+W spike: [spike-psa] p256-core0-prio24 legacy=391184 us psa=348430 us ratio=0.89 muls=0/0 (legacy rc=0 psa st=0)
+W spike: [spike-split] p256-core0-prio24 verify=391184 us | in-mul=0 us (0%) | non-mul=391184 us | 0 calls at 0.000 us/call inside
+W spike: [spike-heap] p256-core0-prio24 allocs=1953 frees=1953 heap_time=29088 us (7% of verify) bytes=68KB
+W (208561) spike: tcp_connect=39 ms ok=1
+I (211971) esp-x509-crt-bundle: Certificate validated
+W (213441) spike: tcp+tls_connect=4869 ms ok=1
+I (216850) esp-x509-crt-bundle: Certificate validated
+W (218317) spike: tls_core0_a=4865 ms ok=1
+I (220207) esp-x509-crt-bundle: Certificate validated
+W (221056) spike: tls_core1=2732 ms ok=1
+I (224420) esp-x509-crt-bundle: Certificate validated
+W (226003) spike: tls_core0_b=4942 ms ok=1
+I (229466) esp-x509-crt-bundle: Certificate validated
+W (231629) spike: open(connect+tls)=5092 headers=394 body=137 total=5624 ms status=200

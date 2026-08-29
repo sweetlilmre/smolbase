@@ -522,6 +522,12 @@ Proven, `CONFIG_MBEDTLS_HARDWARE_MPI=y` throughout, all benches `rc=0`:
 
 ECC at software speed and RSA still on the hardware, in one build. Captures: `spike/mbedtls-perf/results/THRESHOLD-idf6-mpi-on-nowrap.log`.
 
+**Verified 2026-08-29, on the branch as pushed and in the real firmware, not just the harness.** Three checks:
+
+- **The pushed commit is sound and self-sufficient.** `3cbf09b`, 1 ahead of the fork's master, no conflict brewing upstream (espressif master has moved 96 commits since, touching only `esp_aes.c` in the mbedTLS component). The local patch file `esp-idf-mpi-min-bitlen.patch` carries a second hunk the branch does not — a `CMakeLists.txt` include path for `bignum_core.h` — and the branch is right: it builds without it (`esp_bignum.c` is compiled into the `tfpsacrypto` target, whose private include dirs already reach `drivers/builtin/src`). The patch file's CMake hunk is unneeded baggage, kept only as a note there.
+- **It works in the firmware.** The branch's `esp_bignum.c` hunk applied to the accelerator-on firmware (`PAD-THR` cell, same protocol as §2.8, against §2.8's U0/U0R baseline): 256-bit multiply 22–25 → **12 µs**, P-256 verify core 1 702 → **390 ms**, chain verify 3445 → **1989 ms**, core-1 handshake 4702 → **2746 ms** — within 13 ms of the harness's 2759 ms prediction. Capture: `PAD-THR.serial.log`; image fingerprint: stock `core_sub` (88 B, 2 call8), port `mbedtls_mpi_mul_mpi` grown 324 → 496 B by the gate and inlined fallback.
+- **The commit message carries the mechanism, both benchmark tables, and a DCO sign-off** under the right identity. It is PR-ready as it stands.
+
 **One decision is parked before the PR can be opened:** where the threshold constant should live and whether 512 is safe on parts that were never measured — it could make a chip with a lower crossover slower. Options, recommendation and the measurement that would settle it: [espressif-mpi-threshold-open-question.md](espressif-mpi-threshold-open-question.md). Prior art searched: [espressif/esp-idf#8710](https://github.com/espressif/esp-idf/issues/8710) is the same symptom with no measurement or mechanism, and is closed.
 
 **4. Revert the instrumentation.** The IDF 6 SDK tree, `Http.cpp` and the probe files, and the v0.3.3 worktree. All listed under [*Dirty state*](#dirty-state--revert-before-the-branch-ships).
