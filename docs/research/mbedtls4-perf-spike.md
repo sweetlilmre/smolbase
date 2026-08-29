@@ -251,6 +251,32 @@ A uniform 1.32–1.42×, matching [§2.5](#25--the-version-regression-is-a-unifo
 
 **So the old firmware was not better engineered here. It got lucky with where the linker put one function, in a configuration that is the wrong configuration for both builds, and the luck is worth ±20% and evaporates if anything shifts.**
 
+## 2.8 — The 875 ms does not survive the padding experiment
+
+**Run 2026-08-29**, closing both open items on [PR 873](https://github.com/Mbed-TLS/TF-PSA-Crypto/pull/873): does the ~875 ms accelerator-on handshake regression belong to the series (code growth) or to placement, and what does the series cost in Xtensa `.text`?
+
+Six firmware builds in the 875 ms configuration (`HARDWARE_MPI=y`, `ECP_FIXED_POINT_OPTIM` off): the series unapplied (U) and applied (P), each at three placements — no pad, ~1.5 KB, ~3.2 KB of reachable-but-never-executed code linked in the app objects (`src/core/spike_pad.cpp`), which shifts every mbedTLS symbol without changing a byte of it (verified by nm: same sizes, same call8 counts, same summed `.text` within each family). Every image fingerprinted before flashing — `mbedtls_mpi_core_sub` 88 B / 2 call8 stock, 95 B / 0 call8 with the series — using a byte-walking decoder (`count_calls.py`), because **both Windows xtensa objdump and gdb currently decode every ELF as raw hex words** (the Linux `.so` dynconfigs cannot load; the documented trap, now with a cause). OTA-flashed, 4 reps of `/api/update/check` per cell, all bodies validated, U0 re-flashed and re-run last (U0R) as the session-drift control: it agrees with U0 to **0.01%** on the offline verifies.
+
+Means of 4, `PAD-*.serial.log` in `spike/mbedtls-perf/results/`:
+
+| cell | `ecp_mod_p256` at | TLS phase (httpd) | handshake core 1 | chain verify | P-256 verify core 1 | P-384 verify core 1 |
+|---|---|---|---|---|---|---|
+| U0 | 0x40132c5c | 8325 ms | 4702 ms | 3445 ms | 702 ms | 1145 ms |
+| U1 (+1528 B) | 0x40133254 | 8488 ms | 4650 ms | 3458 ms | 713 ms | 1171 ms |
+| U2 (+3180 B) | 0x401338c8 | 8219 ms | 4512 ms | 3376 ms | 747 ms | 1040 ms |
+| P0 | 0x40132920 | 6800 ms | 3685 ms | 2986 ms | 1043 ms | 589 ms |
+| P1 | 0x40132f18 | 6128 ms | 3460 ms | 2610 ms | 858 ms | 584 ms |
+| P2 | 0x40133588 | 7140 ms | 3772 ms | 3091 ms | 995 ms | 673 ms |
+| U0R (= U0 image) | 0x40132c5c | 8249 ms | 4699 ms | 3430 ms | 702 ms | 1147 ms |
+
+Three findings:
+
+1. **The 875 ms does not reproduce — the sign flips.** Every patched cell beats every unpatched cell end to end, by 1.1–2.4 s on the TLS phase and ~1 s on the core-1 handshake. The PR body's warning ("do not expect the same magnitude or necessarily the same sign") is now a measurement, not a caveat. The original 875 ms was a true A-B-A of *those two binaries*; it is not a property of the series.
+2. **Placement alone moves the handshake by more than 875 ms.** Within the patched family — byte-identical library, pad-only differences — the TLS phase spans 6128–7140 ms (~1.0 s). At the primitive level the same binary shows the patch making P-256 *slower* (+150–340 ms) and P-384 *faster* (−370–590 ms) simultaneously — impossible as arithmetic (the harness has the series at parity on both curves in exactly this configuration, §*Second update*), and exactly what per-function cache alignment produces. The tight-loop multiply is flat across all seven cells (22–25 µs), as it should be.
+3. **The series shrinks Xtensa code.** Summed `.text` of the ecp/bignum/constant-time symbols: 21190 → 21048 B (**−142 B**); whole image 1465904 → 1465760 B (**−144 B**). The out-of-line `mbedtls_ct_uint_lt` copies (3 × 41 B) disappear, as the upstream README's Arm analysis predicted. There is no code growth for the code-growth hypothesis to stand on.
+
+**The 875 ms question is closed: it was placement.** What the accelerator-on configuration actually shows, once the series is in, is the same story as everywhere else in this record — on this chip, timing is a property of the binary, and the padding experiment now brackets how much: ~±0.5 s on a handshake, ±20% on a single primitive, from moving code nobody executes.
+
 ---
 
 # Part 3 — The accelerator and the constant-time regression
@@ -418,6 +444,9 @@ python3 framework/scripts/code_style.py --fix --uncrustify ~/uncrustify-build/un
 | `src/core/Http.cpp` | phase split (open/headers/body), TCP-vs-TLS connect split, the core-0/core-1/core-0 handshake matrix, and the bench calls — `SPIKE` markers throughout |
 | `src/core/spike_x509.inc` | the X.509 benchmark, identical source in both builds, plus the library-counter dump |
 | `src/core/spike_chain.h` | GitHub's live chain as DER, captured 2026-08-25 |
+| `src/core/spike_pad.cpp` | §2.8's placement pad: reachable-never-executed code sized by `SPIKE_PAD_COUNT` (left at 0). Referenced from `Http.cpp` behind a volatile guard |
+| `sdkconfig.spike-mpi` | §2.8's config overlay (accelerator on, fixed-point off), used via `SDKCONFIG_DEFAULTS` into `build/smolbase-mpi/` — a scratch build dir, not the shipped one |
+| `spike/mbedtls-perf/results/PAD-*` | §2.8's captures: serial logs, symbol snapshots, and the seven ELF/bin images (the binaries are evidence for the placement claims; do not commit them) |
 | `src/core/spike_psa_vs_legacy.cpp` | PSA-vs-legacy verify, the core/priority matrix, the per-operand-size multiply benchmark, the `grp.modp` check, the heap counter, and a `--wrap` counter for `mbedtls_mpi_mul_mpi`. Own translation unit because `MBEDTLS_ALLOW_PRIVATE_ACCESS` must precede every mbedTLS include and `Http.cpp` has already pulled in `esp_tls.h`. **The `--wrap` counter is inert unless the build supplies the link flag** |
 | `D:\source\smolbase-v033` | the same three probe files plus instrumentation in `src/core/GhUpdate.cpp` and a `--wrap` flag in `platformio.ini`, **all uncommitted**. The device does not run this build — it was restored to Smolbase by full serial flash |
 
@@ -475,10 +504,7 @@ Leave the flag out of timing runs: it moves the binary layout and shifted a P-25
 
 The two patched legs agree to 0.8 µs (296.5844 and 296.5850 ms), and the in-session unpatched figure matches the earlier session's to 0.02%. **So the series reaches parity with 3.6.6 in both accelerator configurations and on both curves** — which also settles what the 875 ms is not. It is not the series computing more slowly; the arithmetic is at parity in exactly that configuration. What is left is code growth or code placement, and those two remain unseparated. Captures: `spike/mbedtls-perf/results/SERIES-{A1,B-unpatched,A2}-idf6-mpi-on-nowrap.log`.
 
-Still open on the PR:
-
-- **Separating patch effect from placement effect on the 875 ms** would need several builds with deliberate padding. Worth doing before anyone drops commit 1/3 on the strength of that number.
-- **No `.text` figure for the series on Xtensa** — the Arm size cost is measured, the ESP32 one is not, and it is the number the code-growth hypothesis turns on.
+Both PR open items were closed by the padding experiment on 2026-08-29 — see [§2.8](#28--the-875-ms-does-not-survive-the-padding-experiment). In short: the 875 ms does not reproduce (its sign flips — the series is 1.1–2.4 s *faster* end to end in this image family), placement alone moves the patched handshake by ~1 s, and the series **shrinks** Xtensa code: −142 B over the ecp/bignum/constant-time symbols, −144 B whole image. The code-growth hypothesis is dead. The PR body has not yet been updated with these figures.
 
 **3. The Espressif fix — branch pushed, PR not opened, awaiting review.** [`sweetlilmre/esp-idf:fix/mpi-hw-min-bit-len`](https://github.com/sweetlilmre/esp-idf/tree/fix/mpi-hw-min-bit-len), one commit, one file, +100/−0, one ahead of `espressif:master` and zero behind. Description ready in [espressif-hardware-mpi-report-draft.md](espressif-hardware-mpi-report-draft.md); the patch itself is also saved at `spike/mbedtls-perf/upstream/esp-idf-mpi-min-bitlen.patch`.
 
