@@ -6,99 +6,8 @@
 #include <cstring>
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
-#include <esp_log.h>    // SPIKE: temporary phase-split instrumentation
-#include <esp_timer.h>  // SPIKE: temporary phase-split instrumentation
-#include <esp_tls.h>    // SPIKE
-#include <lwip/netdb.h> // SPIKE
-#include <lwip/sockets.h> // SPIKE
-#include <freertos/FreeRTOS.h> // SPIKE
-#include <freertos/task.h>     // SPIKE
 
 namespace Http {
-
-// SPIKE: identical X.509 benchmark to the one in the arduino-esp32 v0.3.3
-// build. See spike_x509.inc.
-#define SPIKE_LOG(fmt, ...) ESP_LOGW("spike", fmt, ##__VA_ARGS__)
-#define SPIKE_MS() ((unsigned long)(esp_timer_get_time() / 1000))
-#define SPIKE_X509_LIB_PROF 1
-#include "spike_x509.inc"
-
-// SPIKE: PSA-vs-legacy ECDSA verify, in its own TU. See
-// spike_psa_vs_legacy.cpp.
-extern "C" void spike_psa_vs_legacy(void);
-
-// SPIKE: split TCP connect from the TLS handshake, mirroring the probe added to
-// the arduino-esp32 v0.3.3 build so the two can be compared. A plain TCP
-// connect to the same host and port gives the network cost; a full esp_tls
-// connection gives network + handshake; the difference is the handshake.
-static void spikeTlsOnce(const char* tag) {
-  const char* host = "api.github.com";
-  esp_tls_cfg_t cfg = {};
-  cfg.crt_bundle_attach = esp_crt_bundle_attach;
-  const int64_t a = esp_timer_get_time();
-  esp_tls_t* t = esp_tls_init();
-  const int r = t ? esp_tls_conn_new_sync(host, (int)strlen(host), 443, &cfg, t) : -1;
-  const int64_t b = esp_timer_get_time();
-  if (t) esp_tls_conn_destroy(t);
-  ESP_LOGW("spike", "%s=%lld ms ok=%d", tag, (b - a) / 1000, r);
-}
-
-static void spikeConnectSplit() {
-  const char* host = "api.github.com";
-  {
-    const int64_t a = esp_timer_get_time();
-    struct addrinfo hints = {};
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    struct addrinfo* res = nullptr;
-    int ok = -1;
-    if (getaddrinfo(host, "443", &hints, &res) == 0 && res) {
-      const int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-      if (fd >= 0) {
-        ok = connect(fd, res->ai_addr, res->ai_addrlen);
-        close(fd);
-      }
-      freeaddrinfo(res);
-    }
-    ESP_LOGW("spike", "tcp_connect=%lld ms ok=%d",
-             (esp_timer_get_time() - a) / 1000, ok == 0 ? 1 : 0);
-  }
-  spikeTlsOnce("tcp+tls_connect");
-}
-
-// SPIKE: the same handshake on a task pinned to a chosen core. Elliptic-curve
-// maths measured 1.75x slower on core 0 than on core 1 (see
-// spike_psa_vs_legacy.cpp), and core 0 is where the WiFi driver lives and where
-// the httpd task that serves /api/update/check happens to run. If that carries
-// through to a whole handshake, this is a fix and not just a curiosity.
-// Run A-B-A in one session: cross-session comparisons are worthless here.
-struct SpikeTlsArgs {
-  TaskHandle_t waiter;
-  const char* tag;
-};
-
-static void spikeTlsTask(void* arg) {
-  SpikeTlsArgs* a = static_cast<SpikeTlsArgs*>(arg);
-  spikeTlsOnce(a->tag);
-  xTaskNotifyGive(a->waiter);
-  vTaskDelete(nullptr);
-}
-
-static void spikeTlsOnCore(int core, const char* tag) {
-  SpikeTlsArgs args = {xTaskGetCurrentTaskHandle(), tag};
-  if (xTaskCreatePinnedToCore(spikeTlsTask, "spiketls", 16384, &args, 5, nullptr,
-                              core) != pdPASS) {
-    ESP_LOGW("spike", "[spike-tls] task create failed (core %d)", core);
-    return;
-  }
-  ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-}
-
-static void spikeTlsCoreMatrix() {
-  spikeTlsOnCore(0, "tls_core0_a");
-  spikeTlsOnCore(1, "tls_core1");
-  spikeTlsOnCore(0, "tls_core0_b");
-}
 
 namespace {
 
@@ -219,13 +128,7 @@ Result json(const Request& req, JsonDocument& out) {
     esp_http_client_set_post_field(c, req.body, (int)bodyLen);
   }
 
-  spike_x509_bench();                            // SPIKE
-  spike_psa_vs_legacy();                         // SPIKE
-  spikeConnectSplit();                           // SPIKE
-  spikeTlsCoreMatrix();                          // SPIKE
-  const int64_t t_spike0 = esp_timer_get_time(); // SPIKE
   esp_err_t err = esp_http_client_open(c, (int)bodyLen);
-  const int64_t t_spike1 = esp_timer_get_time(); // SPIKE: connect + TLS handshake
   if (err != ESP_OK) {
     res.status = ERR_INIT;
     setErr(res, "open: %s (errno %d)", esp_err_to_name(err), esp_http_client_get_errno(c));
@@ -241,7 +144,6 @@ Result json(const Request& req, JsonDocument& out) {
   }
 
   esp_http_client_fetch_headers(c);
-  const int64_t t_spike2 = esp_timer_get_time(); // SPIKE: headers
   res.status = esp_http_client_get_status_code(c);
 
   if (res.status == 200) {
@@ -258,14 +160,6 @@ Result json(const Request& req, JsonDocument& out) {
       setErr(res, "json: %s", de.c_str());
     }
   }
-
-  // SPIKE: temporary phase split. Which phase of the request the time is in --
-  // connect+TLS, headers, or the JSON body -- so the handshake cost can be
-  // compared against what the offline primitive measurements predict.
-  const int64_t t_spike3 = esp_timer_get_time();
-  ESP_LOGW("spike", "open(connect+tls)=%lld headers=%lld body=%lld total=%lld ms status=%d",
-           (t_spike1 - t_spike0) / 1000, (t_spike2 - t_spike1) / 1000,
-           (t_spike3 - t_spike2) / 1000, (t_spike3 - t_spike0) / 1000, res.status);
 
   esp_http_client_close(c);
   esp_http_client_cleanup(c);
