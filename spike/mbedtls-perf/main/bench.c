@@ -129,8 +129,12 @@ static mbedtls_ecp_group g_grp384;
 static mbedtls_ecp_point g_Q384, g_R384;
 static mbedtls_mpi g_d384, g_r384, g_s384;
 
-static mbedtls_mpi g_mul_a[5], g_mul_b[5], g_mul_x; // 256/512/1024/2048/4096
-static const size_t MUL_BITS[5] = {256, 512, 1024, 2048, 4096};
+// 384 appended (index 5, out of size order) so the original five keep their
+// indices and every earlier capture stays comparable. Added for the S3
+// crossover measurement: the esp-idf threshold fix gates at 512 bits, and 384
+// is the largest ECC operand below the gate.
+static mbedtls_mpi g_mul_a[6], g_mul_b[6], g_mul_x; // 256/512/1024/2048/4096/384
+static const size_t MUL_BITS[6] = {256, 512, 1024, 2048, 4096, 384};
 
 static mbedtls_mpi g_exp2_a, g_exp2_n, g_exp4_a, g_exp4_n, g_exp_e, g_exp_x;
 static mbedtls_mpi g_inv_a, g_inv_x;
@@ -171,6 +175,7 @@ static void op_ecp_mul(void)
 // would be indistinguishable from the accelerator's own overhead, which is the
 // exact quantity under test.
 static void op_mul_256(void) { g_last_rc |= spike_real_mul_mpi(&g_mul_x, &g_mul_a[0], &g_mul_b[0]); }
+static void op_mul_384(void) { g_last_rc |= spike_real_mul_mpi(&g_mul_x, &g_mul_a[5], &g_mul_b[5]); }
 static void op_mul_512(void) { g_last_rc |= spike_real_mul_mpi(&g_mul_x, &g_mul_a[1], &g_mul_b[1]); }
 static void op_mul_1024(void) { g_last_rc |= spike_real_mul_mpi(&g_mul_x, &g_mul_a[2], &g_mul_b[2]); }
 static void op_mul_2048(void) { g_last_rc |= spike_real_mul_mpi(&g_mul_x, &g_mul_a[3], &g_mul_b[3]); }
@@ -214,6 +219,7 @@ static const bench_t BENCHES[] = {
     {"ecp_mul_p384", 384, op_ecp_mul_384},
     {"mpi_inv_mod_p256", 256, op_inv_256},
     {"mpi_mul", 256, op_mul_256},
+    {"mpi_mul", 384, op_mul_384},
     {"mpi_mul", 512, op_mul_512},
     {"mpi_mul", 1024, op_mul_1024},
     {"mpi_mul", 2048, op_mul_2048},
@@ -234,7 +240,7 @@ static int setup(void)
     mbedtls_mpi_init(&g_d);
     mbedtls_mpi_init(&g_r);
     mbedtls_mpi_init(&g_s);
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 6; i++) {
         mbedtls_mpi_init(&g_mul_a[i]);
         mbedtls_mpi_init(&g_mul_b[i]);
     }
@@ -332,7 +338,7 @@ static int setup(void)
         return rc;
     }
 
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 6; i++) {
         if ((rc = mpi_fixed(&g_mul_a[i], MUL_BITS[i], 0x11110000u + (uint32_t)i, 0)) != 0 ||
             (rc = mpi_fixed(&g_mul_b[i], MUL_BITS[i], 0x22220000u + (uint32_t)i, 0)) != 0) {
             printf("[error] mul operand %u rc=-0x%04x\n", (unsigned)MUL_BITS[i], (unsigned)-rc);
