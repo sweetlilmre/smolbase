@@ -1,0 +1,48 @@
+From c64192a8f7e6aaa2bc19a09889afb86dadd7a7e7 Mon Sep 17 00:00:00 2001
+From: sweetlilmre <sweetlilmre@gmail.com>
+Date: Tue, 25 Aug 2026 13:34:42 +0200
+Subject: [PATCH] bignum_core: use _if_else_0 where the zero branch is unused
+
+mbedtls_mpi_core_sub() and mbedtls_mpi_core_mla() call mbedtls_ct_mpi_uint_if(cond, 1, 0) to turn a condition into a 0/1 borrow or carry bit. With if0 == 0 the general form reduces to (cond & if1): the (~cond & if0) half is always zero. mbedtls_ct_mpi_uint_if_else_0() is exactly that, and needs no mbedtls_ct_compiler_opaque() barrier to build ~cond.
+
+This is a small improvement and it touches constant-time code, so it is deliberately separate from the rest of the series and can be dropped without affecting it. It is architecture-independent, unlike patches 1/3 and 2/3.
+
+Measured contribution, on an ESP32-D0WD-V3 in the one configuration where I isolated it: a P-256 ECDSA verify went from 266.29 ms to 263.06 ms, about 1.2%. I did not isolate it again in the final configuration, so I have no figure for it there.
+
+Verified constant-flow clean on its own with MBEDTLS_TEST_CONSTANT_FLOW_MEMSAN, in the same run where a plain-C carry fails - so the harness demonstrably detects the property being claimed.
+
+Signed-off-by: sweetlilmre <sweetlilmre@gmail.com>
+---
+ drivers/builtin/src/bignum_core.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/builtin/src/bignum_core.c b/drivers/builtin/src/bignum_core.c
+index fc1b537c7..43b29e0af 100644
+--- a/drivers/builtin/src/bignum_core.c
++++ b/drivers/builtin/src/bignum_core.c
+@@ -452,10 +452,10 @@ mbedtls_mpi_uint mbedtls_mpi_core_sub(mbedtls_mpi_uint *X,
+     mbedtls_mpi_uint c = 0;
+ 
+     for (size_t i = 0; i < limbs; i++) {
+-        mbedtls_mpi_uint z = mbedtls_ct_mpi_uint_if(mbedtls_ct_uint_lt(A[i], c),
+-                                                    1, 0);
++        mbedtls_mpi_uint z = mbedtls_ct_mpi_uint_if_else_0(
++            mbedtls_ct_uint_lt(A[i], c), 1);
+         mbedtls_mpi_uint t = A[i] - c;
+-        c = mbedtls_ct_mpi_uint_if(mbedtls_ct_uint_lt(t, B[i]), 1, 0) + z;
++        c = mbedtls_ct_mpi_uint_if_else_0(mbedtls_ct_uint_lt(t, B[i]), 1) + z;
+         X[i] = t - B[i];
+     }
+ 
+@@ -493,7 +493,7 @@ mbedtls_mpi_uint mbedtls_mpi_core_mla(mbedtls_mpi_uint *d, size_t d_len,
+ 
+     while (excess_len--) {
+         *d += c;
+-        c = mbedtls_ct_mpi_uint_if(mbedtls_ct_uint_lt(*d, c), 1, 0);
++        c = mbedtls_ct_mpi_uint_if_else_0(mbedtls_ct_uint_lt(*d, c), 1);
+         d++;
+     }
+ 
+-- 
+2.55.0.windows.3
+

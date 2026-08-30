@@ -40,8 +40,20 @@ CONFIG_FREERTOS_HZ=1000
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
 # ---- mbedTLS ----
-# The RSA/MPI accelerator is OFF, which is the opposite of what you would guess
-# and is MEASURED. On this device, one TLS handshake to api.github.com:
+# TEMPORARY STATE — read this WITH cmake/upstream_patches.cmake and
+# patches/README.md. Two upstream fixes this project authored are applied to
+# the SDK tree at configure time while their PRs are in review:
+#   - TF-PSA-Crypto#873: the mbedTLS 4 constant-time bignum series, ~30% off
+#     every EC primitive (830 ms off a real update check, measured A-B-A).
+#   - esp-idf#19027: a 512-bit lower threshold on the RSA/MPI peripheral, so
+#     small (ECC-sized) multiplies go to software and big (RSA) ones keep the
+#     hardware. THIS is what makes HARDWARE_MPI=y below correct: without that
+#     patch the accelerator is a measured net loss on ECDSA handshakes and
+#     must go back to unset (see the history below and patches/README.md).
+#
+# The historical record, still true for an UNPATCHED tree — the accelerator is
+# the opposite of what you would guess, and it is MEASURED. One TLS handshake
+# to api.github.com:
 #
 #   HARDWARE_MPI=y, FIXED_POINT_OPTIM=n   6.85 s   watchdog trips every request
 #   HARDWARE_MPI=y, FIXED_POINT_OPTIM=y   6.50 s   watchdog trips every request
@@ -57,9 +69,11 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # software multiply - 19.5 us against 9.8 us, measured on-device offline. The
 # crossover is between 384 and 512 bits (measured at exactly 512 on an
 # ESP32-S3): from 512 bits up the peripheral wins, and at 2048/4096 bits it is
-# 3.7-4.0x faster, which is why it exists. A fix that keeps the peripheral for
-# RSA while routing ECC-sized operands to software is upstream as
-# espressif/esp-idf#19027; if it merges, HARDWARE_MPI=y becomes viable again.
+# 3.7-4.0x faster, which is why it exists. esp-idf#19027 adds exactly that
+# threshold, and with it applied (see the TEMPORARY STATE note above)
+# HARDWARE_MPI=y gives ECC at software speed AND RSA on the hardware in one
+# build - measured: 256-bit mul 11.78 us (software 11.28), P-256 verify within
+# 2% of software, mpi_exp_mod 2048 19.45 ms against 74.50 in software.
 #
 # This is NOT a mbedTLS 4 behaviour. An earlier version of this comment said v4's
 # ECP calls mul_mpi far more often than 3.x did; that was inference and it is now
@@ -75,17 +89,16 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # artefact of the watchdog tripping in three of those four cells and not in the
 # fourth.
 #
-# #119 IS STILL SAFE, by a simpler route. The failure was the RSA accelerator
-# being unable to complete the 4096-bit verify in GitHub's ISRG Root X1
-# cross-signed chain (PK error 0x4290), which LARGE_KEY_SOFTWARE_MPI patched by
-# adding a software fallback for oversized keys. With no hardware MPI there is no
-# hardware limit to exceed: every RSA op is software, so the 4096-bit verify
-# simply works. LARGE_KEY_SOFTWARE_MPI depends on HARDWARE_MPI and is therefore
-# gone with it - deliberately, not by omission.
+# #119 STAYS SAFE with the accelerator back on: LARGE_KEY_SOFTWARE_MPI comes
+# back at its =y default alongside HARDWARE_MPI and is the software fallback
+# for the oversized verify in GitHub's ISRG Root X1 cross-signed chain (PK
+# error 0x4290) - the very fix #119 shipped. If HARDWARE_MPI ever goes back to
+# unset (see the TEMPORARY STATE note), #119 is safe by the simpler route:
+# all-software RSA has no hardware limit to exceed.
 #
 # HARDWARE_SHA and HARDWARE_AES stay at their =y defaults: those accelerators
 # are a real win, and the arduino-esp32 build had them on too.
-# CONFIG_MBEDTLS_HARDWARE_MPI is not set
+CONFIG_MBEDTLS_HARDWARE_MPI=y
 # Fixed-point ECP precomputation tables: ~1.7 s off a handshake for ~23 KB of
 # flash, which is cheap in a partition that is a third empty.
 CONFIG_MBEDTLS_ECP_FIXED_POINT_OPTIM=y
