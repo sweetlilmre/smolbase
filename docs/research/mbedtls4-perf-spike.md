@@ -1,7 +1,7 @@
 # mbedTLS 4 TLS performance — the complete record
 
 **Written:** 2026-08-24/25, rewritten 2026-08-25 once the investigation finished. **Read this first if you are picking this up with no context.** It is the single document for the TLS performance work: what was asked, what caused it, how three wrong answers happened along the way, and what is left.
-**Branch:** `idf6-migration`. Working tree clean except the probes under [*Dirty state*](#dirty-state--revert-before-the-branch-ships), which are deliberate. **The IDF 6 SDK tree is instrumented too** — check that section before trusting any measurement.
+**Branch:** `idf6-migration`. **All instrumentation was removed 2026-08-30** — the repo probes, the SDK-tree counters, and the v0.3.3 worktree probes are gone; see [*Dirty state*](#dirty-state--reverted-2026-08-30-all-of-it) for what was where. Reinstate from git history if a measurement needs repeating.
 **Companions:** [mbedtls4-ct-bignum-root-cause.md](mbedtls4-ct-bignum-root-cause.md) is the evidence log for the constant-time strand and the upstream patch. [idf6-migration-continuation.md](idf6-migration-continuation.md) is the wider migration state.
 
 > An earlier version of this file was written in layers, as parts 1a through 1f, each correcting the one before. Three of those conclusions were wrong and were retracted. That history is in git; the corrections that matter are folded into [Part 4](#part-4--how-three-wrong-answers-happened), because how they happened is the most transferable thing here.
@@ -48,7 +48,7 @@ The arduino build cannot be run with the accelerator off — its mbedTLS is prec
 | ESP-IDF 5.5.5 | `~/esp/esp-idf-v5.5` → mbedTLS 3.6.6. `& $HOME\esp\esp-idf-v5.5\export.ps1` |
 | **arduino baseline** | worktree `D:\source\smolbase-v033`, detached at `v0.3.3` (`22f1580`). Builds with `pio` (pioarduino). **Its probes are uncommitted — do not `git checkout` it.** |
 | Device | ESP32-D0WD-V3 on **COM5**, RTS auto-reset. Running Smolbase `0.4.0-dev`, shipped config. IP `10.0.0.32`. |
-| Second device | ESP32-S3 on **COM9** — a Waveshare "xiaozhi" board, **not ours**, restored to its original firmware. Leave alone. |
+| Second device | ESP32-S3 (LX7) on **COM9**, MAC `28:84:85:8d:31:b4` — user-supplied for harness runs (NOT the Waveshare "xiaozhi" board, MAC `e0:72:a1:f8:99:00`, which is not ours; identify by MAC before flashing). Runs the perf harness as of 2026-08-30. |
 | Upstream clone | `D:\source\TF-PSA-Crypto`, branch `constant-time-embedded-perf`. `origin` = the fork, `upstream` = Mbed-TLS. |
 | MemSan clone | `~/ctflow/tfpsa` in WSL Ubuntu, for constant-flow testing. |
 | uncrustify 0.75.1 | `~/uncrustify-build/uncrustify/build/uncrustify`. The version `code_style.py` pins; Ubuntu's 0.78.1 is refused. |
@@ -437,7 +437,9 @@ python3 framework/scripts/code_style.py --fix --uncrustify ~/uncrustify-build/un
 
 `constant-flow/rebuild_series.sh` rebuilds the whole three-commit series from `development` with the style fix applied per stage.
 
-## Dirty state — revert before the branch ships
+## Dirty state — REVERTED 2026-08-30, all of it
+
+Everything in the table below was removed or reverted in the spike-cleanup commit of 2026-08-30: the `src/core/` probes and pad are deleted, `Http.cpp` is de-instrumented, `sdkconfig.spike-mpi` and the scratch `build/smolbase-mpi/` are gone, the SDK tree's two counter files are checked out clean, and the `smolbase-v033` worktree is pristine again. The `PAD-*.elf`/`.bin` evidence binaries were deleted (the committed `PAD-*.symbols.txt` snapshots carry the placement facts). The table stays as the record of what was where.
 
 | file | what |
 |---|---|

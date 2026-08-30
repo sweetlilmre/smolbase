@@ -55,8 +55,11 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # accelerator does is intercept mbedtls_mpi_mul_mpi, and at the 256-bit operands
 # ECDSA works on, the peripheral's per-call setup and locking cost about TWICE a
 # software multiply - 19.5 us against 9.8 us, measured on-device offline. The
-# crossover is between 256 and 512 bits: from 512 bits up the peripheral wins,
-# and at 2048/4096 bits it is 3.7-4.0x faster, which is why it exists.
+# crossover is between 384 and 512 bits (measured at exactly 512 on an
+# ESP32-S3): from 512 bits up the peripheral wins, and at 2048/4096 bits it is
+# 3.7-4.0x faster, which is why it exists. A fix that keeps the peripheral for
+# RSA while routing ECC-sized operands to software is upstream as
+# espressif/esp-idf#19027; if it merges, HARDWARE_MPI=y becomes viable again.
 #
 # This is NOT a mbedTLS 4 behaviour. An earlier version of this comment said v4's
 # ECP calls mul_mpi far more often than 3.x did; that was inference and it is now
@@ -130,6 +133,14 @@ CONFIG_LITTLEFS_LOOKAHEAD_SIZE=128
 CONFIG_LITTLEFS_BLOCK_CYCLES=512
 CONFIG_LITTLEFS_USE_MTIME=y
 CONFIG_LITTLEFS_MTIME_USE_SECONDS=y
+
+# ---- Task watchdog ----
+# CONFIG_ESP_TASK_WDT_PANIC stays at the IDF default (n): a watchdog trip logs
+# and continues. arduino-esp32 shipped it =y, so anyone "restoring parity" with
+# the old build would make a trip REBOOT the device - mid-OTA if a handshake
+# ever outran the timeout again. Since the TLS fix (accelerator off, fixed-point
+# on, buffered reader) the watchdog no longer trips at all, but the asymmetry is
+# deliberate, not an oversight.
 
 # ---- Console and logging ----
 # There is no serial flasher or UART reader on the dev bench (docs/flashing.md):
