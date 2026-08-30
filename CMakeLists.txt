@@ -54,6 +54,14 @@ else()
     "Unknown SMOLBASE_APP='${SMOLBASE_APP}'. Expected one of: smolbase weatherclock gcm")
 endif()
 
+# ---- TEMPORARY: upstream patches, applied to the SDK tree ------------------
+# Two performance fixes this project measured and sent upstream are applied at
+# configure time while their PRs are in review (TF-PSA-Crypto#873 and
+# esp-idf#19027). This leaves $IDF_PATH dirty on purpose. When a PR merges,
+# delete its patch and restore the SDK: patches/README.md has the protocol,
+# and the step fails loudly rather than build a hybrid if the SDK moves.
+include(${SB_ROOT}/cmake/upstream_patches.cmake)
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(smolbase)
 
