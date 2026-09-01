@@ -78,11 +78,19 @@ jobs:
 
       # Deterministic ustar (docs/research/assets-tar-mechanics.md): stable bytes
       # -> stable GitHub asset digest across rebuilds, which AssetUpdate verifies.
+      #
+      # Written straight into dist/ and NOT into build/: esp-idf-ci-action runs
+      # the build inside a container as root, so build/ and everything in it is
+      # root-owned, while these steps run as the runner user. Creating a file
+      # under build/ therefore fails with EACCES -- it did, on the first CI run
+      # this workflow ever had. Reading what the build produced is unaffected,
+      # which is why the copies below still work.
       - name: Build asset tar
         run: |
+          mkdir -p dist
           tar --format=ustar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
-            -cf "build/${{ matrix.app }}/assets.tar" -C "data-${{ matrix.app }}/w" .
-          tar -tvf "build/${{ matrix.app }}/assets.tar"
+            -cf "dist/${{ matrix.app }}-assets.tar" -C "data-${{ matrix.app }}/w" .
+          tar -tvf "dist/${{ matrix.app }}-assets.tar"
 
       # Names carry the App so the three legs' artifacts can be told apart, and
       # so the release job below can pick them up unambiguously.
@@ -91,7 +99,6 @@ jobs:
           mkdir -p dist
           cp "build/${{ matrix.app }}/smolbase.bin" "dist/${{ matrix.app }}-firmware.bin"
           cp "build/${{ matrix.app }}/spiffs.bin" "dist/${{ matrix.app }}-littlefs.bin"
-          cp "build/${{ matrix.app }}/assets.tar" "dist/${{ matrix.app }}-assets.tar"
 
       - name: Upload binaries
         uses: actions/upload-artifact@v7
