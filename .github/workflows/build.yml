@@ -79,10 +79,16 @@ jobs:
           # The App is selected with -D, and the assets + filesystem image come
           # from the smolbase_assets / littlefs targets the root CMakeLists wires
           # into the default build. ccache -s at the end reports the hit rate, so
-          # a cache that silently stops working is visible in the log.
+          # a cache that silently stops working is visible in the log -- but only
+          # because `ccache -z` zeroes the counters first. ccache keeps its stats
+          # INSIDE the cache directory, so a restored cache brings the previous
+          # run's misses with it: the first warm run read 49.90% when it had in
+          # fact hit 1022 of 1024 compiles, the other ~1024 being the cold run's
+          # misses carried over. Zeroed, the number means this run alone.
           command: >-
             export CCACHE_DIR="$PWD/.ccache" CCACHE_MAXSIZE=400M
             CCACHE_COMPILERCHECK=content CCACHE_BASEDIR="$PWD"
+            && ccache -z
             && idf.py -B build/${{ matrix.app }} -D SMOLBASE_APP=${{ matrix.app }} build
             && ccache -s
             && chmod -R a+rX "$PWD/.ccache"
