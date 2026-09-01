@@ -56,15 +56,23 @@ jobs:
       # the pass-through touch filter in Touch.cpp (upstream RAW-read guard bug
       # espressif/esp-idf#18811, fixed after this tag) — that workaround is
       # valid on fixed versions too, so moving this pin is safe but deliberate.
+      # The ccache settings are exported INSIDE the container command, not as
+      # step-level env. esp-idf-ci-action mounts the workspace at its own path
+      # (/app/<owner>/<repo>), so a CCACHE_DIR built from github.workspace --
+      # a path that exists only on the runner -- does not exist in the
+      # container; ccache silently falls back to its default directory, which
+      # dies with the container. That is what happened on the first two CI runs
+      # this workflow ever had: 0% hit rate, and `ccache -s` reporting the
+      # default 5 GiB max instead of the 400M set here. $PWD is the mounted
+      # workspace inside the container, so it resolves on both sides of the
+      # mount without hardcoding the action's layout.
+      #
+      # CCACHE_COMPILERCHECK=content: compiler paths differ between container
+      # runs, so hash the preprocessed source rather than the command line.
+      # The chmod is required because the container writes .ccache as root
+      # while the cache-save step runs as the runner user and must read it.
       - name: Build ${{ matrix.app }}
         uses: espressif/esp-idf-ci-action@v1
-        env:
-          CCACHE_DIR: ${{ github.workspace }}/.ccache
-          CCACHE_MAXSIZE: 400M
-          # Compiler paths differ between container runs; hash the preprocessed
-          # source instead of the command line so the cache survives that.
-          CCACHE_COMPILERCHECK: content
-          CCACHE_BASEDIR: ${{ github.workspace }}
         with:
           esp_idf_version: v6.0.2
           target: esp32
@@ -73,8 +81,11 @@ jobs:
           # into the default build. ccache -s at the end reports the hit rate, so
           # a cache that silently stops working is visible in the log.
           command: >-
-            idf.py -B build/${{ matrix.app }} -D SMOLBASE_APP=${{ matrix.app }} build
+            export CCACHE_DIR="$PWD/.ccache" CCACHE_MAXSIZE=400M
+            CCACHE_COMPILERCHECK=content CCACHE_BASEDIR="$PWD"
+            && idf.py -B build/${{ matrix.app }} -D SMOLBASE_APP=${{ matrix.app }} build
             && ccache -s
+            && chmod -R a+rX "$PWD/.ccache"
 
       # Deterministic ustar (docs/research/assets-tar-mechanics.md): stable bytes
       # -> stable GitHub asset digest across rebuilds, which AssetUpdate verifies.
