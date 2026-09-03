@@ -15,12 +15,13 @@
 #include "../core/App.h"
 #include "WeatherData.h"
 #include <LovyanGFX.hpp>
+#include <string>
 
 // Unit prefs (#68 catalog values) as one bundle. Filled by loadSettings()
 // — which begin() calls before any render — so no member defaults here:
 // the defaults live at the getString calls, in one place.
 struct WxUnits {
-  String temp, wind, press;
+  std::string temp, wind, press;
 };
 
 class WeatherScreen : public Screen {
@@ -57,8 +58,8 @@ private:
   // member defaults: those live at the WeatherKeys.h-cited reads, once (#98).
   uint32_t colHour = 0, colMin = 0, colSec = 0;
   bool h24 = true;
-  String dateFmt;
-  String nickname;
+  std::string dateFmt;
+  std::string nickname;
   Units units;
   // Change-detection caches: -1 differs from every real value, so it doubles
   // as "force repaint". The clock band redraws whole on every seconds change

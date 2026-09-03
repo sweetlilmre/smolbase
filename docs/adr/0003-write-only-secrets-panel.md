@@ -41,4 +41,4 @@ row: an undeclared secret remains reachable by `curl`, not by UI.
 - The existence-map contract hardens from "current behavior" into a promise
   UIs build on: no future endpoint may echo secret values.
 - Descriptors are firmware-side strings in flash; renaming a label is free, renaming a *key* orphans the stored NVS value (it stays until factory reset or a curl clear) — the descriptor key is effectively an API.
-- A per-env `html-{PIOENV}/validators.js` can register client-side validators in `window.SECRET_VALIDATORS` (keyed by secret key). The Set button runs the validator and shows errors inline before posting — no firmware involvement, no round-trip. The settings page loads the file gracefully; a 404 is silently ignored.
+- A per-App `src/app-<name>/html/validators.js` can register client-side validators in `window.SECRET_VALIDATORS` (keyed by secret key). The Set button runs the validator and shows errors inline before posting — no firmware involvement, no round-trip. The settings page loads the file gracefully; a 404 is silently ignored.

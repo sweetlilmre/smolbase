@@ -6,82 +6,152 @@ on:
     tags: ["v*"]
   pull_request:
 
+# One matrix leg per App, because there is no multi-target build any more: the
+# App is a configure-time choice (see CMakeLists.txt). Every App still builds on
+# every push, which is the guarantee `pio run` used to give.
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [smolbase, weatherclock, gcm]
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: platformio.ini
-
-      - name: Cache PlatformIO packages
+      # Everything the build fetches from the network, cached. Without these
+      # every leg re-resolves the component registry, re-clones LovyanGFX and
+      # rebuilds the littlefs-python venv before it compiles a single file.
+      #
+      # Keys are content-addressed on what actually determines the contents, so
+      # a stale entry is impossible rather than merely unlikely:
+      #   managed_components  <- dependencies.lock (the resolved dependency set)
+      #   lovyangfx/upstream  <- the CMakeLists that pins the tag
+      - name: Cache managed components
         uses: actions/cache@v6
         with:
-          path: ~/.platformio
-          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          path: managed_components
+          key: idf-components-${{ hashFiles('dependencies.lock') }}
 
-      # The hybrid compile (custom_sdkconfig in platformio.ini) rebuilds the
-      # IDF static libs into .pio/build/<env>/esp-idf on the first build
-      # (~15+ min) and skips the rebuild when the hash stamped into
-      # sdkconfig.defaults matches. Cache that state so CI pays the rebuild
-      # once per platformio.ini change, not per run. (.pio also carries
-      # libdeps and the build_cache_dir object cache.) If a build ever looks
-      # stale after a toolchain change, bump the key prefix to bust this.
-      - name: Cache project build state (hybrid IDF libs, libdeps)
+      - name: Cache LovyanGFX checkout
         uses: actions/cache@v6
         with:
-          path: |
-            .pio
-            sdkconfig.defaults
-            managed_components
-          key: idf-hybrid-v1-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          path: components/lovyangfx/upstream
+          key: lovyangfx-${{ hashFiles('components/lovyangfx/CMakeLists.txt') }}
 
-      - name: Install PlatformIO Core
-        run: pip install platformio
+      # ccache is enabled by default in the IDF build, so this is the one that
+      # actually moves the wall clock on a warm run. Per-App because each App
+      # compiles a different source set; restore-keys lets a new commit start
+      # from the previous run's cache instead of cold. CCACHE_DIR is redirected
+      # under the workspace because that is what the container has mounted.
+      - name: Cache ccache
+        uses: actions/cache@v6
+        with:
+          path: .ccache
+          key: ccache-${{ matrix.app }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ matrix.app }}-
 
-      - name: Build firmware (all apps)
-        run: pio run
+      # Pinned to the IDF version the migration was verified on. v6.0.2 needs
+      # the pass-through touch filter in Touch.cpp (upstream RAW-read guard bug
+      # espressif/esp-idf#18811, fixed after this tag) — that workaround is
+      # valid on fixed versions too, so moving this pin is safe but deliberate.
+      # The ccache settings are exported INSIDE the container command, not as
+      # step-level env. esp-idf-ci-action mounts the workspace at its own path
+      # (/app/<owner>/<repo>), so a CCACHE_DIR built from github.workspace --
+      # a path that exists only on the runner -- does not exist in the
+      # container; ccache silently falls back to its default directory, which
+      # dies with the container. That is what happened on the first two CI runs
+      # this workflow ever had: 0% hit rate, and `ccache -s` reporting the
+      # default 5 GiB max instead of the 400M set here. $PWD is the mounted
+      # workspace inside the container, so it resolves on both sides of the
+      # mount without hardcoding the action's layout.
+      #
+      # CCACHE_COMPILERCHECK=content: compiler paths differ between container
+      # runs, so hash the preprocessed source rather than the command line.
+      # The chmod is required because the container writes .ccache as root
+      # while the cache-save step runs as the runner user and must read it.
+      - name: Build ${{ matrix.app }}
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v6.0.2
+          target: esp32
+          # The App is selected with -D, and the assets + filesystem image come
+          # from the smolbase_assets / littlefs targets the root CMakeLists wires
+          # into the default build. ccache -s at the end reports the hit rate, so
+          # a cache that silently stops working is visible in the log -- but only
+          # because `ccache -z` zeroes the counters first. ccache keeps its stats
+          # INSIDE the cache directory, so a restored cache brings the previous
+          # run's misses with it: the first warm run read 49.90% when it had in
+          # fact hit 1022 of 1024 compiles, the other ~1024 being the cold run's
+          # misses carried over. Zeroed, the number means this run alone.
+          command: >-
+            export CCACHE_DIR="$PWD/.ccache" CCACHE_MAXSIZE=400M
+            CCACHE_COMPILERCHECK=content CCACHE_BASEDIR="$PWD"
+            && ccache -z
+            && idf.py -B build/${{ matrix.app }} -D SMOLBASE_APP=${{ matrix.app }} build
+            && ccache -s
+            && chmod -R a+rX "$PWD/.ccache"
 
-      - name: Build filesystem images (all apps)
-        run: pio run -t buildfs
-
-      # Deterministic ustar per env (docs/research/assets-tar-mechanics.md):
-      # stable bytes -> stable GitHub asset digest across rebuilds.
-      - name: Build asset tars
+      # Deterministic ustar (docs/research/assets-tar-mechanics.md): stable bytes
+      # -> stable GitHub asset digest across rebuilds, which AssetUpdate verifies.
+      #
+      # Written straight into dist/ and NOT into build/: esp-idf-ci-action runs
+      # the build inside a container as root, so build/ and everything in it is
+      # root-owned, while these steps run as the runner user. Creating a file
+      # under build/ therefore fails with EACCES -- it did, on the first CI run
+      # this workflow ever had. Reading what the build produced is unaffected,
+      # which is why the copies below still work.
+      - name: Build asset tar
         run: |
-          for app in smolbase weatherclock gcm; do
-            tar --format=ustar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner                 -cf ".pio/build/${app}/assets.tar" -C "data-${app}/w" .
-            tar -tvf ".pio/build/${app}/assets.tar"
-          done
+          mkdir -p dist
+          tar --format=ustar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
+            -cf "dist/${{ matrix.app }}-assets.tar" -C "data-${{ matrix.app }}/w" .
+          tar -tvf "dist/${{ matrix.app }}-assets.tar"
+
+      # Names carry the App so the three legs' artifacts can be told apart, and
+      # so the release job below can pick them up unambiguously.
+      - name: Stage release assets
+        run: |
+          mkdir -p dist
+          cp "build/${{ matrix.app }}/smolbase.bin" "dist/${{ matrix.app }}-firmware.bin"
+          cp "build/${{ matrix.app }}/spiffs.bin" "dist/${{ matrix.app }}-littlefs.bin"
 
       - name: Upload binaries
         uses: actions/upload-artifact@v7
         with:
-          name: firmware-binaries
-          path: |
-            .pio/build/*/firmware.bin
-            .pio/build/*/littlefs.bin
-            .pio/build/*/assets.tar
+          name: firmware-${{ matrix.app }}
+          path: dist/*
           retention-days: 14
 
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: firmware-*
+          merge-multiple: true
+          path: dist
+
+      # Asset names must stay <app>-<kind>-<tag>.<ext>: GhUpdate and AssetUpdate
+      # build exactly these names from SMOLBASE_FW_ASSET_PREFIX /
+      # SMOLBASE_ASSETS_PREFIX plus the tag.
       - name: Create GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG=${GITHUB_REF#refs/tags/}
           assets=()
           for app in smolbase weatherclock gcm; do
-            cp ".pio/build/${app}/firmware.bin" "${app}-firmware-${TAG}.bin"
-            cp ".pio/build/${app}/littlefs.bin" "${app}-littlefs-${TAG}.bin"
-            cp ".pio/build/${app}/assets.tar" "${app}-assets-${TAG}.tar"
-            assets+=("${app}-firmware-${TAG}.bin" "${app}-littlefs-${TAG}.bin" "${app}-assets-${TAG}.tar")
+            for kind in firmware:bin littlefs:bin assets:tar; do
+              name=${kind%:*}; ext=${kind#*:}
+              mv "dist/${app}-${name}.${ext}" "${app}-${name}-${TAG}.${ext}"
+              assets+=("${app}-${name}-${TAG}.${ext}")
+            done
           done
           gh release create "$TAG" "${assets[@]}" \
             --title "$TAG" \

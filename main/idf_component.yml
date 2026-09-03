@@ -1,0 +1,23 @@
+dependencies:
+  idf: ">=6.0"
+
+  # mDNS. Bundled with IDF up to 5.x (which is how the arduino-esp32 build got
+  # it, via ESPmDNS); from IDF 6 it is registry-only.
+  espressif/mdns: "^1.11.3"
+
+  # LittleFS on the `spiffs` partition (label is historical; the filesystem is
+  # LittleFS). Same component arduino-esp32 wrapped, so image geometry and the
+  # on-flash layout are unchanged — fielded devices keep mounting.
+  joltwallet/littlefs: "^1.22.3"
+
+  # PsychicHttp in NATIVE (non-Arduino) mode. Taken from git, not the registry:
+  # the PlatformIO tarball we used to build against strips CMakeLists.txt and
+  # idf_component.yml. Upstream tags carry no "v" prefix.
+  psychichttp:
+    git: https://github.com/hoeken/PsychicHttp.git
+    version: "3.1.2"
+
+  # Declared by the PROJECT, not inherited from PsychicHttp — its README is
+  # explicit about this on native IDF. Exact-ish pin for template
+  # reproducibility (wayfinder #3, #4).
+  bblanchon/arduinojson: "^7.4.3"

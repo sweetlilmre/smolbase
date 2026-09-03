@@ -1,14 +1,18 @@
 #include "Net.h"
 #include "ConfigStore.h"
 #include "Events.h"
+#include "Platform.h"
 #include "smolbase_config.h"
-#include <ESPmDNS.h>
-#include <Preferences.h>
-#include <esp_mac.h>
-#include <WiFi.h>
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cstdio>
+#include <cstring>
+#include <esp_mac.h>
+#include <esp_netif.h>
+#include <esp_wifi.h>
+#include <mdns.h>
+#include <nvs.h>
 #include <vector>
 
 namespace Net {
@@ -16,26 +20,83 @@ namespace Net {
 enum class State : uint8_t { Idle, Connecting, Sta, Ap };
 // Written by the WiFi event task (core 0) and the main loop (core 1).
 static std::atomic<State> state{State::Idle};
+// The link itself, distinct from `state`: a disconnect leaves state == Sta (the
+// reconnect-forever policy never leaves STA) but must make isUp() false, which
+// is what WiFi.isConnected() used to provide.
+static std::atomic<bool> linkUp{false};
 static uint32_t connectStart = 0;
-static String name;
-static String joinSsid; // the network begin() is trying; for the boot join screen
+static std::string name;
+static std::string joinSsid; // the network begin() is trying; for the boot join screen
 
-String deviceName() { return name; }
-bool isUp() { return state.load() == State::Sta && WiFi.isConnected(); }
+// esp_netif handles. Both are created up front so PsychicHttp's ON_AP_FILTER /
+// ON_STA_FILTER can classify a request by the netif that carried it — they read
+// ESP_NETIF_DHCP_SERVER off the handle, so the AP netif must exist even while
+// the AP is down (an inactive netif holds 0.0.0.0 and cannot false-match).
+static esp_netif_t* staNetif = nullptr;
+static esp_netif_t* apNetif = nullptr;
+static std::atomic<uint32_t> staIp{0}; // network byte order, 0 when not up
+
+std::string deviceName() { return name; }
+bool isUp() { return state.load() == State::Sta && linkUp.load(); }
 bool inApMode() { return state.load() == State::Ap; }
-IPAddress ip() { return inApMode() ? WiFi.softAPIP() : WiFi.localIP(); }
-int32_t rssi() { return isUp() ? WiFi.RSSI() : 0; }
-String ssid() { return isUp() ? WiFi.SSID() : String(""); }
 
-// WiFi.SSID() is empty while the link is still coming up, so the name being
+static std::string ipToString(uint32_t addr) {
+  char buf[16];
+  snprintf(buf, sizeof(buf), IPSTR, IP2STR((const esp_ip4_addr_t*)&addr));
+  return buf;
+}
+
+std::string ip() {
+  if (inApMode()) {
+    esp_netif_ip_info_t info = {};
+    if (apNetif && esp_netif_get_ip_info(apNetif, &info) == ESP_OK)
+      return ipToString(info.ip.addr);
+    return "0.0.0.0";
+  }
+  return ipToString(staIp.load());
+}
+
+// Mirrors PsychicHttp's _netif_is_connected: up, plus an address that is
+// neither unset nor loopback. Deliberately the same test rather than an
+// approximation of it — Web::loop() uses this to decide when start() will
+// succeed, so a looser test would just move the failed call somewhere quieter.
+static bool netifUsable(esp_netif_t* n) {
+  if (!n || !esp_netif_is_netif_up(n)) return false;
+  esp_netif_ip_info_t info = {};
+  if (esp_netif_get_ip_info(n, &info) != ESP_OK) return false;
+  return info.ip.addr != 0 && (info.ip.addr & 0xFF) != 127;
+}
+
+// Only these two exist in this firmware, both created up front by wifiInit(),
+// so there is no need to walk the global netif list.
+bool hasUsableNetif() { return netifUsable(staNetif) || netifUsable(apNetif); }
+
+// esp_wifi_sta_get_ap_info fails unless the link is actually up, which is the
+// same condition the old WiFi.RSSI()/WiFi.SSID() guards enforced.
+static bool apInfo(wifi_ap_record_t& out) {
+  return isUp() && esp_wifi_sta_get_ap_info(&out) == ESP_OK;
+}
+
+int32_t rssi() {
+  wifi_ap_record_t rec;
+  return apInfo(rec) ? rec.rssi : 0;
+}
+
+std::string ssid() {
+  wifi_ap_record_t rec;
+  if (!apInfo(rec)) return {};
+  return std::string(reinterpret_cast<const char*>(rec.ssid));
+}
+
+// The joined SSID is empty while the link is still coming up, so the name being
 // joined is remembered from begin()'s credential load instead.
 bool isJoining() { return state.load() == State::Connecting; }
-String joiningSsid() { return isJoining() ? joinSsid : String(""); }
-uint32_t joinElapsedMs() { return isJoining() ? millis() - connectStart : 0; }
+std::string joiningSsid() { return isJoining() ? joinSsid : std::string(); }
+uint32_t joinElapsedMs() { return isJoining() ? Platform::millis() - connectStart : 0; }
 
 // mDNS labels: lowercase alnum + dash, no leading/trailing dash, keep it short.
-static String sanitizeHostname(const String& raw) {
-  String out;
+static std::string sanitizeHostname(const std::string& raw) {
+  std::string out;
   for (size_t i = 0; i < raw.length(); ++i) {
     char c = raw[i];
     if (isalnum(static_cast<unsigned char>(c))) {
@@ -44,43 +105,67 @@ static String sanitizeHostname(const String& raw) {
       if (out.length() && out[out.length() - 1] != '-') out += '-';
     } // anything else is dropped
   }
-  if (out.length() > 32) out.remove(32);
-  while (out.length() && out[out.length() - 1] == '-') out.remove(out.length() - 1);
-  while (out.length() && out[0] == '-') out.remove(0, 1);
+  if (out.length() > 32) out.resize(32);
+  while (!out.empty() && out.back() == '-') out.pop_back();
+  while (!out.empty() && out.front() == '-') out.erase(0, 1);
   return out;
 }
 
-static void loadCreds(String& ssid, String& pass) {
-  Preferences p;
-  p.begin("smolbase", true);
-  ssid = p.getString("ssid", "");
-  pass = p.getString("pass", "");
-  p.end();
+// Credentials live in this NVS namespace. Arduino's Preferences was a thin
+// wrapper over exactly these calls, and the phase 0 spike confirmed ON HARDWARE
+// that strings written by Preferences::putString read back through
+// nvs_get_str — so fielded devices keep their credentials across this change.
+// Secrets.cpp already used the raw API; this matches it.
+//
+// Nothing here calls nvs_flash_init() — app_main() does, once, before this or
+// Secrets.cpp can run. It has to: Arduino's initArduino() used to, and a
+// missing init presents as "every setting and credential vanished".
+static constexpr const char* NVS_NS = "smolbase";
+
+// Reads a string value, leaving `out` untouched when the key is absent.
+static bool nvsGetStr(nvs_handle_t h, const char* key, std::string& out) {
+  size_t len = 0; // includes the NUL
+  if (nvs_get_str(h, key, nullptr, &len) != ESP_OK || len == 0) return false;
+  std::vector<char> buf(len);
+  if (nvs_get_str(h, key, buf.data(), &len) != ESP_OK) return false;
+  out.assign(buf.data());
+  return true;
+}
+
+static void loadCreds(std::string& ssid, std::string& pass) {
+  nvs_handle_t h;
+  // Namespace absent is the normal first-boot state, not an error.
+  if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return;
+  nvsGetStr(h, "ssid", ssid);
+  nvsGetStr(h, "pass", pass);
+  nvs_close(h);
 }
 
 bool hasCredentials() {
-  String s, p;
+  std::string s, p;
   loadCreds(s, p);
   return s.length() > 0;
 }
 
-bool saveCredentials(const String& ssid, const String& pass) {
-  // putString returns bytes written; 0 = failure (e.g. NVS full of the old
-  // firmware's namespaces). Surfacing this matters: a silent failure here looks
-  // like an unexplained provisioning loop to the user.
-  Preferences p;
-  if (!p.begin("smolbase", false)) return false;
-  bool ok = p.putString("ssid", ssid) == ssid.length() &&
-            p.putString("pass", pass) == pass.length();
-  p.end();
+bool saveCredentials(const std::string& ssid, const std::string& pass) {
+  // A write failure here (e.g. NVS full of an old firmware's namespaces) must
+  // surface: silently failing looks like an unexplained provisioning loop to
+  // the user.
+  nvs_handle_t h;
+  if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return false;
+  bool ok = nvs_set_str(h, "ssid", ssid.c_str()) == ESP_OK &&
+            nvs_set_str(h, "pass", pass.c_str()) == ESP_OK &&
+            nvs_commit(h) == ESP_OK;
+  nvs_close(h);
   return ok;
 }
 
 void clearCredentials() {
-  Preferences p;
-  p.begin("smolbase", false);
-  p.clear();
-  p.end();
+  nvs_handle_t h;
+  if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+  nvs_erase_all(h); // Preferences::clear() erased the namespace, same as this
+  nvs_commit(h);
+  nvs_close(h);
 }
 
 void restartToApply() {
@@ -88,50 +173,14 @@ void restartToApply() {
   // but a phone in power-save on a flaky AP link needs an RTO retransmission
   // (~1 s) to actually receive it. Blocking the httpd task here is fine — the
   // device is about to reboot anyway.
-  delay(1500);
-  ESP.restart();
-}
-
-static void startAp() {
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP(name.c_str()); // open AP; its single page is the provisioning portal
-  state.store(State::Ap);
-  Events::post(SysEvent::ApModeEntered);
-}
-
-static void onWiFiEvent(WiFiEvent_t event) {
-  // Runs on the WiFi task (core 0) — post events only, never touch consumer state.
-  switch (event) {
-    case ARDUINO_EVENT_WIFI_STA_GOT_IP: {
-      // CAS, not load-then-store: a late GOT_IP racing the boot-timeout
-      // teardown on core 1 must not overwrite Idle/Ap with Sta (that would
-      // wedge inApMode()==false while the softAP is actually running).
-      State expected = State::Connecting;
-      if (state.compare_exchange_strong(expected, State::Sta) || expected == State::Sta) {
-        Events::post(SysEvent::NetworkUp);
-      }
-      break;
-    }
-    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: {
-      State s = state.load();
-      if (s == State::Sta) Events::post(SysEvent::NetworkDown);
-      // No runtime AP fallback (ticket #8): reconnect forever. Belt-and-braces
-      // under arduino-esp32 3.x — the core's auto-reconnect does not fire for
-      // every disconnect reason, so kick an explicit reconnect ourselves.
-      // Guarded by state so the boot-timeout teardown (state -> Idle before
-      // disconnect) and AP mode never fight a stray reconnect.
-      if (s == State::Sta || s == State::Connecting) WiFi.reconnect();
-      break;
-    }
-    default:
-      break;
-  }
+  Platform::delayMs(1500);
+  Platform::restart();
 }
 
 // Effective device name: the sanitized "hostname" setting, else smolbase-XXXX.
-static String computeName() {
-  String n = sanitizeHostname(ConfigStore::getString("hostname", ""));
-  if (!n.isEmpty()) return n;
+static std::string computeName() {
+  std::string n = sanitizeHostname(ConfigStore::getString("hostname", ""));
+  if (!n.empty()) return n;
   // esp_read_mac works before any netif exists; WiFi.macAddress() at this
   // point returns without writing the buffer (verified in the installed core),
   // which made the identity suffix uninitialized-stack garbage.
@@ -139,134 +188,328 @@ static String computeName() {
   esp_read_mac(mac, ESP_MAC_WIFI_STA);
   char suffix[5];
   snprintf(suffix, sizeof(suffix), "%02x%02x", mac[4], mac[5]);
-  return String(SMOLBASE_NAME_PREFIX "-") + suffix;
+  return std::string(SMOLBASE_NAME_PREFIX "-") + suffix;
 }
 
-// mDNS lifecycle state — owned by the main loop (loop()/applyHostname() only).
+// mDNS lifecycle state â€” owned by the main loop (loop()/applyHostname() only).
+// Arduino's ESPmDNS was a wrapper over the espressif/mdns component; these are
+// the same calls it made, minus the global object.
 static bool mdnsUp = false;
 static uint32_t mdnsLastTry = 0;
+static uint32_t mdnsLinkDownAt = 0; // 0 = link up, else when it went down
+// How long the link must stay down before the responder is torn down. Long
+// enough to ride out a re-association, short enough that a real outage still
+// stops answering with a stale address. See the note in loop().
+static constexpr uint32_t kMdnsHoldMs = 3000;
+
+// mdns_free() is safe when nothing was started, which the old MDNS.end() call
+// relied on to clear a half-dead responder.
+static void mdnsStop() {
+  mdns_free();
+  mdnsUp = false;
+}
+
+static bool mdnsStart(const char* host) {
+  if (mdns_init() != ESP_OK) return false;
+  if (mdns_hostname_set(host) != ESP_OK) {
+    mdns_free();
+    return false;
+  }
+  // Instance name is what shows up in service browsers; hostname is fine.
+  mdns_instance_name_set(host);
+  if (mdns_service_add(nullptr, "_http", "_tcp", 80, nullptr, 0) != ESP_OK) {
+    mdns_free();
+    return false;
+  }
+  return true;
+}
+
+// ---- scan state ----
+// esp_wifi's scan is fire-and-forget with a completion EVENT, where Arduino's
+// scanComplete() polled a count.
+//
+// The results are collected IN the SCAN_DONE handler, which is what
+// arduino-esp32 did (WiFiScanClass::_scanDone calls get_ap_num + get_ap_records
+// immediately) and what the first version of this port did NOT: it set a flag
+// and left the fetch to the next HTTP poll, up to 2500 ms later. Deferring it
+// leaves the results sitting in the driver across an arbitrary window in which
+// anything touching WiFi state can clear them, and the symptom is a scan that
+// reports "done" with zero networks — which the portal renders as "No networks
+// found. Try a rescan.", a dead end a user has to know to press a button out of.
+//
+// scanHits is published by the event task and read by the httpd task. No mutex:
+// the handler fills it and THEN stores scanDone (release), and the reader only
+// touches it after loading scanDone true (acquire). std::atomic<bool> gives
+// those orderings by default.
+static std::atomic<bool> scanDone{false};
+static std::atomic<bool> scanRunning{false};
+static uint32_t scanStartedMs = 0;
+// Arduino's scanComplete() failed a scan that had not completed within its
+// timeout, and the caller re-kicked. Without an equivalent, a SCAN_DONE that
+// never arrives leaves the portal on "Scanning..." forever.
+static constexpr uint32_t kScanTimeoutMs = 15000;
+struct Hit {
+  std::string ssid;
+  int32_t rssi;
+  bool secure;
+};
+static std::vector<Hit> scanHits;
+
+// Drain the driver's results into scanHits: dedupe by SSID (strongest wins),
+// drop hidden networks (unjoinable from the portal), sort by RSSI descending.
+// Runs on the event task.
+static void collectScanResults() {
+  uint16_t n = 0;
+  esp_wifi_scan_get_ap_num(&n);
+  scanHits.clear();
+  if (n) {
+    std::vector<wifi_ap_record_t> recs(n);
+    if (esp_wifi_scan_get_ap_records(&n, recs.data()) == ESP_OK) {
+      for (uint16_t i = 0; i < n; ++i) {
+        std::string s(reinterpret_cast<const char*>(recs[i].ssid));
+        if (s.empty()) continue; // hidden networks are unjoinable from the portal
+        const int32_t r = recs[i].rssi;
+        const bool secure = recs[i].authmode != WIFI_AUTH_OPEN;
+        bool merged = false;
+        for (auto& h : scanHits) {
+          if (h.ssid == s) { // dedupe multi-AP SSIDs, strongest signal wins
+            if (r > h.rssi) {
+              h.rssi = r;
+              h.secure = secure;
+            }
+            merged = true;
+            break;
+          }
+        }
+        if (!merged) scanHits.push_back({s, r, secure});
+      }
+    }
+  }
+  std::sort(scanHits.begin(), scanHits.end(),
+            [](const Hit& a, const Hit& b) { return a.rssi > b.rssi; });
+  printf("[net] scan done: %u record(s) -> %u network(s)\n", (unsigned)n,
+         (unsigned)scanHits.size());
+}
+
+static void startAp() {
+  // Mode change is legal while the driver is running, which is the case when we
+  // arrive here from the boot-join timeout.
+  esp_wifi_set_mode(WIFI_MODE_AP);
+  wifi_config_t cfg = {};
+  snprintf(reinterpret_cast<char*>(cfg.ap.ssid), sizeof(cfg.ap.ssid), "%s", name.c_str());
+  cfg.ap.ssid_len = (uint8_t)strnlen(reinterpret_cast<char*>(cfg.ap.ssid), sizeof(cfg.ap.ssid));
+  cfg.ap.channel = 1;
+  cfg.ap.authmode = WIFI_AUTH_OPEN; // open AP; its single page is the provisioning portal
+  cfg.ap.max_connection = 4;
+  cfg.ap.beacon_interval = 100;
+  esp_wifi_set_config(WIFI_IF_AP, &cfg);
+  esp_wifi_start(); // ESP_ERR_WIFI_NOT_STOPPED when already running: fine
+  state.store(State::Ap);
+  Events::post(SysEvent::ApModeEntered);
+}
+
+// Runs on the WiFi/event task (core 0) — post events only, never touch consumer
+// state. Same contract the Arduino WiFi.onEvent handler had.
+static void onWifiEvent(void*, esp_event_base_t, int32_t id, void*) {
+  switch (id) {
+    case WIFI_EVENT_STA_START:
+      esp_wifi_connect();
+      break;
+    case WIFI_EVENT_STA_DISCONNECTED: {
+      linkUp.store(false);
+      staIp.store(0);
+      State s = state.load();
+      if (s == State::Sta) Events::post(SysEvent::NetworkDown);
+      // No runtime AP fallback (ticket #8): reconnect forever. esp_wifi has no
+      // auto-reconnect of its own, so this IS the reconnect policy rather than
+      // a belt on top of one. Guarded by state so the boot-timeout teardown
+      // (state -> Idle before disconnect) and AP mode never fight a stray
+      // reconnect.
+      if (s == State::Sta || s == State::Connecting) esp_wifi_connect();
+      break;
+    }
+    case WIFI_EVENT_SCAN_DONE:
+      // Collect BEFORE publishing the flag: the reader treats scanDone as
+      // "scanHits is ready". See the note at the scan state above for why this
+      // does not wait for the next poll.
+      collectScanResults();
+      scanDone.store(true);
+      break;
+    default:
+      break;
+  }
+}
+
+static void onIpEvent(void*, esp_event_base_t, int32_t, void* data) {
+  auto* e = static_cast<ip_event_got_ip_t*>(data);
+  staIp.store(e->ip_info.ip.addr);
+  linkUp.store(true);
+  // CAS, not load-then-store: a late GOT_IP racing the boot-timeout teardown on
+  // core 1 must not overwrite Idle/Ap with Sta (that would wedge
+  // inApMode()==false while the softAP is actually running).
+  State expected = State::Connecting;
+  if (state.compare_exchange_strong(expected, State::Sta) || expected == State::Sta) {
+    Events::post(SysEvent::NetworkUp);
+  }
+}
+
+// Brings up esp_netif + the event loop + the WiFi driver. esp_netif_init and
+// esp_event_loop_create_default return ESP_ERR_INVALID_STATE when the Arduino
+// core has already run them, which is not an error for us.
+static void wifiInit() {
+  esp_netif_init();
+  esp_event_loop_create_default();
+  if (!staNetif) staNetif = esp_netif_create_default_wifi_sta();
+  if (!apNetif) apNetif = esp_netif_create_default_wifi_ap();
+  wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
+  esp_wifi_init(&init);
+  // Credentials live in our own NVS namespace, single source of truth — do not
+  // let the driver keep a second copy (this is WiFi.persistent(false)).
+  esp_wifi_set_storage(WIFI_STORAGE_RAM);
+  esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &onWifiEvent, nullptr,
+                                      nullptr);
+  esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &onIpEvent, nullptr,
+                                      nullptr);
+}
 
 void applyHostname() {
   // Called on SettingsChanged (main loop). A changed name re-registers mDNS
   // immediately; the DHCP hostname and AP SSID pick it up on the next
   // reconnect/boot (changing those live would mean bouncing the link).
-  String next = computeName();
+  std::string next = computeName();
   if (next == name) return;
   name = next;
-  WiFi.setHostname(name.c_str());
-  if (mdnsUp) {
-    MDNS.end();
-    mdnsUp = false; // loop() re-registers under the new name within ~1 s
-  }
+  if (staNetif) esp_netif_set_hostname(staNetif, name.c_str());
+  if (mdnsUp) mdnsStop(); // loop() re-registers under the new name within ~1 s
 }
 
 void begin() {
   name = computeName();
+  wifiInit();
 
-  WiFi.onEvent(onWiFiEvent);
-  WiFi.persistent(false); // creds live in our own NVS namespace, single source of truth
-
-  String ssid, pass;
+  std::string ssid, pass;
   loadCreds(ssid, pass);
-  if (ssid.isEmpty()) {
+  if (ssid.empty()) {
     startAp();
     return;
   }
   joinSsid = ssid;
-  WiFi.setHostname(name.c_str()); // must precede mode(): applies as the STA netif comes up
-  WiFi.mode(WIFI_STA);
-  WiFi.setAutoReconnect(true);
-  WiFi.begin(ssid.c_str(), pass.c_str());
+
+  esp_wifi_set_mode(WIFI_MODE_STA);
+  wifi_config_t cfg = {};
+  snprintf(reinterpret_cast<char*>(cfg.sta.ssid), sizeof(cfg.sta.ssid), "%s", ssid.c_str());
+  snprintf(reinterpret_cast<char*>(cfg.sta.password), sizeof(cfg.sta.password), "%s",
+           pass.c_str());
+  esp_wifi_set_config(WIFI_IF_STA, &cfg);
+  // Hostname must be set before the netif comes up for DHCP to carry it.
+  esp_netif_set_hostname(staNetif, name.c_str());
   state.store(State::Connecting);
-  connectStart = millis();
+  connectStart = Platform::millis();
+  esp_wifi_start(); // STA_START fires and the handler calls esp_wifi_connect()
 }
 
 void loop() {
-  if (state.load() == State::Connecting && millis() - connectStart > SMOLBASE_CONNECT_TIMEOUT_MS) {
+  if (state.load() == State::Connecting &&
+      Platform::millis() - connectStart > SMOLBASE_CONNECT_TIMEOUT_MS) {
     // Boot-time fallback only: the stored network never answered. CAS parks the
     // state so a GOT_IP landing at this exact moment wins the race cleanly
     // (we see Sta and skip the teardown) instead of being overwritten.
     State expected = State::Connecting;
     if (state.compare_exchange_strong(expected, State::Idle)) {
-      WiFi.setAutoReconnect(false);
-      WiFi.disconnect(true);
+      esp_wifi_disconnect();
       startAp();
     }
   }
 
   // mDNS lifecycle (main loop only): register once up, tear down on a drop so
   // the reconnect path re-registers cleanly.
-  bool up = isUp();
-  if (mdnsUp && !up) {
-    MDNS.end();
-    mdnsUp = false;
+  // A brief link blip does NOT tear the responder down. Measured on this
+  // hardware: the STA re-associates exactly once per boot, 5-15 s after
+  // connecting, and is back with the same IP inside ~200 ms. Rebuilding mDNS for
+  // that costs far more than it saves — a client that queries during the gap can
+  // cache the negative answer for much longer than the outage lasted, which is
+  // what "mDNS takes a while to come up" actually looked like. (Not power save:
+  // verified with WIFI_PS_NONE, pm type 0 and zero sleep time, and the
+  // re-association still happened. Not any WiFi call of ours either.)
+  const bool up = isUp();
+  if (up) {
+    mdnsLinkDownAt = 0;
+  } else if (mdnsUp) {
+    if (!mdnsLinkDownAt) mdnsLinkDownAt = Platform::millis();
+    if (Platform::millis() - mdnsLinkDownAt > kMdnsHoldMs) mdnsStop();
   }
-  if (!mdnsUp && up && millis() - mdnsLastTry > 1000) {
-    mdnsLastTry = millis();
-    MDNS.end(); // safe when not started; clears any half-dead responder
-    if (MDNS.begin(name.c_str())) {
-      MDNS.addService("http", "tcp", 80);
-      mdnsUp = true;
-    }
+  if (!mdnsUp && up && Platform::millis() - mdnsLastTry > 1000) {
+    mdnsLastTry = Platform::millis();
+    mdnsStop(); // clears any half-dead responder before retrying
+    mdnsUp = mdnsStart(name.c_str());
   }
 }
 
 // ---- WiFi scan (called from the httpd task, core 0) ----
 
-void scanNetworks() {
+static void startScan() {
   // Scanning needs the STA interface. In AP mode flip to AP_STA — the softAP
   // interface stays up throughout; we deliberately never flip back, since the
   // provisioning flow ends in restartToApply() anyway.
-  wifi_mode_t mode = WiFi.getMode();
-  if (mode == WIFI_AP) WiFi.mode(WIFI_AP_STA);
-  WiFi.scanNetworks(true /*async*/);
-}
-
-void scanResultsJson(JsonDocument& out) {
-  int16_t n = WiFi.scanComplete();
-  if (n < 0) {
-    // WIFI_SCAN_RUNNING, or failed/never started — restart so polling self-heals.
-    if (n != WIFI_SCAN_RUNNING) scanNetworks();
-    out["status"] = "scanning";
-    out["networks"].to<JsonArray>();
+  wifi_mode_t mode = WIFI_MODE_NULL;
+  esp_wifi_get_mode(&mode);
+  if (mode == WIFI_MODE_AP) {
+    esp_wifi_set_mode(WIFI_MODE_APSTA);
+    esp_wifi_start(); // no-op when running; needed if only the AP was up
+  }
+  scanDone.store(false);
+  scanStartedMs = Platform::millis();
+  // Explicit scan times rather than a zero-filled struct. Arduino passed
+  // active min/max per channel (100/300 ms); leaving them 0 asks esp_wifi for
+  // its own defaults, which is a different scan and not one we ever measured.
+  // scan_type stays ACTIVE, which enum 0 happens to be — stated because
+  // "zero-initialised IDF config struct" is exactly how the touch driver's
+  // charge_speed went wrong.
+  wifi_scan_config_t sc = {};
+  sc.scan_type = WIFI_SCAN_TYPE_ACTIVE;
+  sc.scan_time.active.min = 100;
+  sc.scan_time.active.max = 300;
+  if (esp_wifi_scan_start(&sc, false /*async*/) != ESP_OK) {
+    scanRunning.store(false);
     return;
   }
-  struct Hit {
-    String ssid;
-    int32_t rssi;
-    bool secure;
-  };
-  std::vector<Hit> hits;
-  hits.reserve(n);
-  for (int16_t i = 0; i < n; ++i) {
-    String ssid = WiFi.SSID(i);
-    if (ssid.isEmpty()) continue; // hidden networks are unjoinable from the portal
-    int32_t rssi = WiFi.RSSI(i);
-    bool secure = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
-    bool merged = false;
-    for (auto& h : hits) {
-      if (h.ssid == ssid) { // dedupe multi-AP SSIDs, strongest signal wins
-        if (rssi > h.rssi) {
-          h.rssi = rssi;
-          h.secure = secure;
-        }
-        merged = true;
-        break;
-      }
-    }
-    if (!merged) hits.push_back({ssid, rssi, secure});
-  }
-  std::sort(hits.begin(), hits.end(), [](const Hit& a, const Hit& b) { return a.rssi > b.rssi; });
+  scanRunning.store(true);
+}
 
-  out["status"] = "done";
-  JsonArray arr = out["networks"].to<JsonArray>();
-  for (const auto& h : hits) {
-    JsonObject o = arr.add<JsonObject>();
-    o["ssid"] = h.ssid;
-    o["rssi"] = h.rssi;
-    o["secure"] = h.secure;
+void scanNetworks() { startScan(); }
+
+void scanResultsJson(JsonDocument& out) {
+  // scanDone first: it means the event task has filled scanHits, and it stays
+  // true until the next startScan(), so repeated polls answer from the same
+  // list. That is the behaviour the portal's polling loop expects, and it no
+  // longer depends on this function racing the driver for the records.
+  if (scanDone.load()) {
+    out["status"] = "done";
+    JsonArray arr = out["networks"].to<JsonArray>();
+    for (const auto& h : scanHits) {
+      JsonObject o = arr.add<JsonObject>();
+      o["ssid"] = h.ssid;
+      o["rssi"] = h.rssi;
+      o["secure"] = h.secure;
+    }
+    return;
   }
-  // Results are left in place so repeated polls stay "done" until a new scan.
+
+  if (scanRunning.load()) {
+    // Still going — unless it has been going too long. Arduino's scanComplete()
+    // failed a scan past its timeout and our caller re-kicked it; without an
+    // equivalent, a SCAN_DONE that never arrives parks the portal on
+    // "Scanning..." for as long as the page is open.
+    if (Platform::millis() - scanStartedMs > kScanTimeoutMs) {
+      printf("[net] scan timed out after %u ms; restarting\n", (unsigned)kScanTimeoutMs);
+      startScan();
+    }
+  } else {
+    // Never started, or the start failed — kick one so polling self-heals.
+    scanNetworks();
+  }
+  out["status"] = "scanning";
+  out["networks"].to<JsonArray>();
 }
 
 } // namespace Net

@@ -1,0 +1,10 @@
+-B
+build/idf6-s3-mpi-off-fix
+-D
+SDKCONFIG=build/idf6-s3-mpi-off-fix/sdkconfig
+-D
+SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.mpi-off
+-D
+SPIKE_NO_WRAP=1
+-D
+IDF_TARGET=esp32s3

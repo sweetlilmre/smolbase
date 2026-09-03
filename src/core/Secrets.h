@@ -14,12 +14,12 @@
 // Size limits are NVS's own: ~4000 B per value, ~20 KB partition shared with
 // WiFi creds. Thread-safe (NVS locks internally); callable from any task.
 #pragma once
-#include <Arduino.h>
 #include <ArduinoJson.h>
+#include <string>
 
 namespace Secrets {
-String get(const char* key);                // "" when absent
-bool set(const char* key, const String& v); // false = NVS write failed (full?)
+std::string get(const char* key);                // "" when absent
+bool set(const char* key, const std::string& v); // false = NVS write failed (full?)
 bool clear(const char* key);                // true when removed or already absent
 bool has(const char* key);
 

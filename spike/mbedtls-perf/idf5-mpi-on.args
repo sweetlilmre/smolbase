@@ -1,0 +1,6 @@
+-B
+build/idf5-mpi-on
+-D
+SDKCONFIG=build/idf5-mpi-on/sdkconfig
+-D
+SDKCONFIG_DEFAULTS=sdkconfig.defaults

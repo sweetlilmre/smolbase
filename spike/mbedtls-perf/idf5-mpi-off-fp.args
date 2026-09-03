@@ -1,0 +1,6 @@
+-B
+build/idf5-mpi-off-fp
+-D
+SDKCONFIG=build/idf5-mpi-off-fp/sdkconfig
+-D
+SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.mpi-off;sdkconfig.fixed-point

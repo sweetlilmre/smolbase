@@ -4,37 +4,45 @@
 // Hostname: the ConfigStore "hostname" setting (sanitized) when non-blank,
 // else smolbase-XXXX; it is also the mDNS name and the AP SSID.
 #pragma once
-#include <Arduino.h>
 #include <ArduinoJson.h>
-#include <IPAddress.h>
+#include <cstdint>
+#include <string>
 
 namespace Net {
 void begin();
 void loop(); // pumps the boot-connect timeout + mDNS lifecycle; cheap when settled
 bool isUp();
 bool inApMode();
-IPAddress ip(); // STA IP or AP IP as appropriate
-String deviceName(); // effective hostname: "hostname" setting or smolbase-XXXX
+std::string ip(); // dotted-quad STA IP, or the AP IP in AP mode
+std::string deviceName(); // effective hostname: "hostname" setting or smolbase-XXXX
 void applyHostname(); // re-apply after a settings change (re-registers mDNS live)
+// True once some netif is up AND holding a routable address. This is the exact
+// precondition PsychicHttp's start() enforces (PsychicHttpServer::isConnected),
+// exposed so Web::loop() can test it instead of calling start() and reading the
+// failure — start() logs at ERROR level, and polling it printed eighteen
+// "Server start failed" lines on a healthy boot.
+bool hasUsableNetif();
 int32_t rssi();      // STA link RSSI in dBm; 0 when not connected
-String ssid();       // joined network name; "" when not connected
+std::string ssid();  // joined network name; "" when not connected
 
 // The boot join, for anyone drawing it (the core's WifiJoinScreen). True only
 // while stored creds are being tried — it goes false the moment the link comes
 // up or the timeout hands over to AP mode, so it is never true at runtime.
 bool isJoining();
-String joiningSsid();     // network being joined; "" unless isJoining()
+std::string joiningSsid(); // network being joined; "" unless isJoining()
 uint32_t joinElapsedMs(); // since the attempt started; 0 unless isJoining()
 bool hasCredentials();
-bool saveCredentials(const String& ssid, const String& pass); // false = NVS write failed; then restartToApply()
+bool saveCredentials(const std::string& ssid, const std::string& pass); // false = NVS write failed; then restartToApply()
 void clearCredentials(); // factory reset path
-void restartToApply(); // brief delay (lets the HTTP response flush), then ESP.restart()
+void restartToApply(); // brief delay (lets the HTTP response flush), then Platform::restart()
 
 // WiFi scan for the provisioning portal / settings UI (ticket #13 calls these
 // from the httpd task on core 0 — they touch no main-loop state).
 void scanNetworks(); // kick an async scan; in AP mode flips to AP_STA so the AP stays up
 // Fills {status:"scanning"|"done", networks:[{ssid,rssi,secure}]} — deduplicated
-// by SSID (strongest wins), sorted by RSSI descending. A failed/never-started
-// scan is auto-restarted and reported as "scanning".
+// by SSID (strongest wins), sorted by RSSI descending. A failed, never-started
+// or timed-out scan is auto-restarted and reported as "scanning", so a polling
+// client always converges on a result rather than a dead end. The records are
+// collected when the driver signals SCAN_DONE, not when this is called.
 void scanResultsJson(JsonDocument& out);
 } // namespace Net

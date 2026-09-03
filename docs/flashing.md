@@ -38,22 +38,23 @@ must re-enter boot mode for each upload command.
 
 ### Upload
 
-Firmware and filesystem are two images; a fresh board needs both:
+One command writes everything a fresh board needs — bootloader, partition
+table, firmware, and the LittleFS image with the web assets and `zones.json`:
 
 ```
-pio run -t upload   --upload-port COM5   # firmware
-pio run -t uploadfs --upload-port COM5   # LittleFS image (web assets, zones.json)
+idf.py @smolbase.args -p COM5 flash
 ```
 
-(Combine as `pio run -t upload -t uploadfs --upload-port COM5` to flash both
-in one boot-mode session. On Linux/macOS the port is `/dev/ttyUSB0`-style.)
+(In PowerShell quote the argfile: `idf.py '@smolbase.args' -p COM5 flash`. On
+Linux/macOS the port is `/dev/ttyUSB0`-style. Substitute `@weatherclock.args`
+or `@gcm.args` for the other Apps.)
 
 After flashing, reset with GPIO0 released. The screen comes up, the device
 starts its provisioning AP (`smolbase-XXXX`), and the captive portal gets it
 onto your WiFi. Optionally watch it boot:
 
 ```
-pio device monitor -b 115200
+idf.py @smolbase.args -p COM5 monitor
 ```
 
 ## Ever after: OTA
@@ -64,8 +65,8 @@ both images update over HTTP.
 **Via the recovery page** — open `http://smolbase-XXXX.local/recover`
 (hostname is on the device's screen). It is compiled into the firmware
 itself, so it works even when the filesystem is empty, wiped, or broken —
-upload `firmware.bin` or `littlefs.bin` from `.pio/build/smolbase/`
-(build the latter first with `pio run -t buildfs`). If the device boots
+upload `smolbase.bin` (firmware) or `spiffs.bin` (filesystem) from
+`build/smolbase/`, both of which `idf.py build` produces. If the device boots
 with no web assets at all, plain `http://<ip>/` serves this same page.
 
 **Via the settings page** — once the filesystem image is on the device,
@@ -78,13 +79,16 @@ firmware updates.
 
 ```
 # firmware
-curl -F "file=@.pio/build/smolbase/firmware.bin" \
+curl -F "file=@build/smolbase/smolbase.bin" \
      http://smolbase-XXXX.local/api/update
 
-# filesystem (web assets) — build it first with: pio run -t buildfs
-curl -F "file=@.pio/build/smolbase/littlefs.bin" \
+# filesystem (web assets)
+curl -F "file=@build/smolbase/spiffs.bin" \
      "http://smolbase-XXXX.local/api/update?target=fs"
 ```
+
+(The filesystem image is named after its partition, which is labelled `spiffs`
+for historical reasons — the stock flash layout. It holds LittleFS.)
 
 A successful upload answers `{"ok":true,"restarting":true}` and the device
 reboots into the new image; errors come back as HTTP 400 with the reason.
@@ -103,10 +107,10 @@ and **Update** downloads and flashes it with live progress
 (`POST /api/update/github {"tag":"vX.Y.Z"}`, polled via
 `GET /api/update/ghprogress`). Under the hood a Core-0 task runs
 `esp_https_ota` against the release asset
-`<app>-firmware-<tag>.bin` — each app env pulls **its own** asset
-(`SMOLBASE_FW_ASSET_PREFIX` in `platformio.ini`), so a weatherclock device
-never flashes the smolbase image. A ~1.7 MB image takes ~25 s on a healthy
-WiFi link.
+`<app>-firmware-<tag>.bin` — each App pulls **its own** asset
+(`SMOLBASE_FW_ASSET_PREFIX`, set per App in `CMakeLists.txt`), so a
+weatherclock device never flashes the smolbase image. A ~1.5 MB image takes
+~25 s on a healthy WiFi link.
 
 The self-update also carries the **web assets**: the release ships an
 `<app>-assets-<tag>.tar` (the complete gzipped `/w/` set, ~30 KB) which the
@@ -134,7 +138,8 @@ the bootloader falls back to the previous firmware on its own — the device
 comes back on the old version, reachable for another upload. Side effect:
 power-cycling within 30 s of an update also reverts it; just upload again.
 (The serial log prints `[ota] image confirmed healthy` when the new image is
-accepted.)
+accepted. Without a UART, `GET /api/status` reaching 30 s of `uptimeS` on the
+new `fwVersion` is the same evidence.)
 
 **Dev loop — single-file upload.** Reflashing the whole filesystem for one
 edited page is slow and wipes `settings.json`. `POST /api/fs?path=...` writes

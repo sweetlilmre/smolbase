@@ -1,0 +1,78 @@
+ets Jul 29 2019 12:21:46
+
+rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+configsip: 0, SPIWP:0xee
+clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+mode:DIO, clock div:2
+load:0x3fff0040,len:6272
+load:0x40078000,len:15820
+load:0x40080400,len:3920
+entry 0x40080644
+I (27) boot: ESP-IDF v6.0.2-dirty 2nd stage bootloader
+I (27) boot: compile time Aug 26 2026 10:48:34
+I (28) boot: Multicore bootloader
+I (29) boot: chip revision: v3.1
+I (32) boot.esp32: SPI Speed      : 40MHz
+I (36) boot.esp32: SPI Mode       : DIO
+I (39) boot.esp32: SPI Flash Size : 8MB
+I (43) boot: Enabling RNG early entropy source...
+I (47) boot: Partition Table:
+I (50) boot: ## Label            Usage          Type ST Offset   Length
+I (56) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (63) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (69) boot:  2 factory          factory app      00 00 00010000 00100000
+I (76) boot: End of partition table
+I (79) esp_image: segment 0: paddr=00010020 vaddr=3f400020 size=09378h ( 37752) map
+I (100) esp_image: segment 1: paddr=000193a0 vaddr=3ffb0000 size=02824h ( 10276) load
+I (104) esp_image: segment 2: paddr=0001bbcc vaddr=40080000 size=0444ch ( 17484) load
+I (112) esp_image: segment 3: paddr=00020020 vaddr=400d0020 size=15174h ( 86388) map
+I (143) esp_image: segment 4: paddr=0003519c vaddr=4008444c size=051d8h ( 20952) load
+I (152) esp_image: segment 5: paddr=0003a37c vaddr=50000000 size=00028h (    40) load
+I (157) boot: Loaded app from partition at offset 0x10000
+I (157) boot: Disabling RNG early entropy source...
+I (171) cpu_start: Multicore app
+I (179) cpu_start: GPIO 3 and 1 are used as console UART I/O pins
+I (179) cpu_start: Pro cpu start user code
+I (179) cpu_start: cpu freq: 240000000 Hz
+I (181) app_init: Application information:
+I (185) app_init: Project name:     mbedtls_perf
+I (189) app_init: App version:      v0.3.3-89-gbc67354-dirty
+I (195) app_init: Compile time:     Aug 26 2026 17:45:20
+I (200) app_init: ELF file SHA256:  9c6190b83...
+I (204) app_init: ESP-IDF:          v6.0.2-dirty
+I (208) efuse_init: Min chip rev:     v0.0
+I (212) efuse_init: Max chip rev:     v3.99 
+I (216) efuse_init: Chip rev:         v3.1
+I (220) heap_init: Initializing. RAM available for dynamic allocation:
+I (226) heap_init: At 3FFAE6E0 len 00001920 (6 KiB): DRAM
+I (231) heap_init: At 3FFB33E8 len 0002CC18 (179 KiB): DRAM
+I (237) heap_init: At 3FFE0440 len 00003AE0 (14 KiB): D/IRAM
+I (242) heap_init: At 3FFE4350 len 0001BCB0 (111 KiB): D/IRAM
+I (247) heap_init: At 40089624 len 000169DC (90 KiB): IRAM
+I (254) spi_flash: detected chip: generic
+I (256) spi_flash: flash io: dio
+I (260) main_task: Started on CPU0
+I (260) main_task: Calling app_main()
+I (260) main_task: Returned from app_main()
+
+[id] mbedtls=4.1.0 idf=v6.0.2-dirty hw_mul=1 hw_exp=1 fixed_point=0 wrap=0 cpu_mhz=240 opt=mbedtls-Os core=1 free_internal=370824
+[vec] d=C9AFA9D845BA75166B5C215767B1D6934E50C3DB36E89B127B8A622B120F6721
+[vec] sig_r=EFD48B2AACB6A8FD1140DD9CD45E81D69D2C877B56AAF991C34D0EA84EAF3716
+[vec] sig_s=F7CB1C942D657C41D436C7A1B6E29F65F3E900DBB9AFF4064DC4AB2F843ACDA8
+[vec] sig384_r=ABCCC2AE1048B40BFA4E9F251FCA293F993B591897D5C85703F8883868BC7530182739F0C625F77E7F4073F91906759F
+[vec] sig384_s=553C1A04BDC6DE6E164EA7C09C1E2D8FB4A35F1773CAF82FBED80E7F1B7BF15B09F6B1C6AA4FEECCDCAA0C0924B7EF61
+[bench] name=ecdsa_verify_p256 bits=256 iters=1 reps=5 min_ns=334475000 mean_ns=334480400 max_ns=334496000 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 rc=0
+[ok] no-wrap control build: hooks are not linked, so every call count and mul_ns_per_op below reads zero by construction. Timings here carry no instrumentation.
+[bench] name=ecp_mul_p256 bits=256 iters=1 reps=5 min_ns=154915000 mean_ns=154923800 max_ns=154926000 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 rc=0
+[bench] name=ecdsa_verify_p384 bits=384 iters=1 reps=5 min_ns=704287000 mean_ns=704312600 max_ns=704319000 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 rc=0
+[bench] name=ecp_mul_p384 bits=384 iters=1 reps=5 min_ns=325781000 mean_ns=325799600 max_ns=325805000 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 rc=0
+[bench] name=mpi_inv_mod_p256 bits=256 iters=16 reps=5 min_ns=12252187 mean_ns=12252325 max_ns=12252500 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 rc=0
+[bench] name=mpi_mul bits=256 iters=7407 reps=5 min_ns=11780 mean_ns=11780 max_ns=11780 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 rc=0
+[bench] name=mpi_mul bits=512 iters=1769 reps=5 min_ns=22312 mean_ns=22312 max_ns=22314 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 rc=0
+[bench] name=mpi_mul bits=1024 iters=2666 reps=5 min_ns=36204 mean_ns=36204 max_ns=36206 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 rc=0
+[bench] name=mpi_mul bits=2048 iters=1652 reps=5 min_ns=76673 mean_ns=76674 max_ns=76676 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 rc=0
+[bench] name=mpi_mul bits=4096 iters=381 reps=5 min_ns=462296 mean_ns=462305 max_ns=462325 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 rc=0
+[bench] name=mpi_mul_hooked bits=256 iters=8000 reps=5 min_ns=12788 mean_ns=12789 max_ns=12789 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 rc=0
+[bench] name=mpi_exp_mod_e65537 bits=2048 iters=10 reps=5 min_ns=19454600 mean_ns=19454660 max_ns=19454900 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 rc=0
+[bench] name=mpi_exp_mod_e65537 bits=4096 iters=3 reps=5 min_ns=65382666 mean_ns=65390133 max_ns=65392000 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 rc=0
+[done] free_internal=368048

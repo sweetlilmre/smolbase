@@ -5,6 +5,7 @@
 #include "../core/Clock.h"
 #include "../core/ConfigStore.h"
 #include "../core/Net.h"
+#include "../core/Platform.h"
 #include "effects/BoingEffect.h"
 #include "effects/Effect.h"
 #include "effects/FireEffect.h"
@@ -12,8 +13,8 @@
 #include "effects/RotozoomEffect.h"
 #include "effects/TunnelEffect.h"
 #include "hex_color.h"
-#include <Arduino.h>
 #include <ctime>
+#include <cstdio>
 
 namespace {
 
@@ -47,7 +48,7 @@ constexpr int CALM_IDX = ROSTER_N - 1; // the fx == nullptr entry, last by conve
 // never drift.
 SettingChoice choices[ROSTER_N];
 
-int rosterIndexOf(const String& value) {
+int rosterIndexOf(const std::string& value) {
   for (int i = 0; i < ROSTER_N; ++i)
     if (value == ROSTER[i].value) return i;
   return -1;
@@ -101,10 +102,10 @@ void DemoScreen::select(int i, lgfx::LGFX_Sprite& f) {
     if (need != 0) i = CALM_IDX; // wanted memory, could not have it
     fx::releaseScratch();
   }
-  if (entered && i != idx) nameShownMs = millis(); // announce, but not at boot
+  if (entered && i != idx) nameShownMs = Platform::millis(); // announce, but not at boot
   idx = i;
   entered = true;
-  lastFrameMs = millis();
+  lastFrameMs = Platform::millis();
   lastMinute = -1; // force the calm clock to repaint if that is what we landed on
   if (ROSTER[idx].fx) ROSTER[idx].fx->enter(f);
 }
@@ -135,7 +136,7 @@ bool DemoScreen::calmDue() const {
   return t.tm_min != lastMinute || colonNow != colonOn;
 }
 
-void DemoScreen::shadowString(lgfx::LGFX_Sprite& f, const String& s, int x, int y,
+void DemoScreen::shadowString(lgfx::LGFX_Sprite& f, const char* s, int x, int y,
                               uint8_t idx) {
   f.setTextColor(fx::UI_BLACK);
   f.drawString(s, x + 2, y + 2);
@@ -173,12 +174,16 @@ void DemoScreen::drawIdentity(lgfx::LGFX_Sprite& f) {
   }
   f.setFont(&fonts::FreeSans9pt7b);
   f.setTextDatum(lgfx::middle_center);
-  shadowString(f, Net::deviceName() + ".local", 120, 160, fx::UI_TEXT + 3);
-  shadowString(f, Net::isUp() ? Net::ip().toString() : "connecting...", 120, 185,
+  // Stack buffer, not `deviceName() + ".local"`: at 19 chars that concat is past
+  // std::string's 15-byte SSO, so it heap-allocated once per frame at 30 FPS.
+  char host[48];
+  snprintf(host, sizeof(host), "%s.local", Net::deviceName().c_str());
+  shadowString(f, host, 120, 160, fx::UI_TEXT + 3);
+  shadowString(f, Net::isUp() ? Net::ip().c_str() : "connecting...", 120, 185,
                fx::UI_TEXT + 4);
   // "Now showing": one long press is the only way to discover the roster on a
   // device with a single touch pad, so it says what it just switched to.
-  if (nameShownMs && millis() - nameShownMs < NAME_MS)
+  if (nameShownMs && Platform::millis() - nameShownMs < NAME_MS)
     shadowString(f, ROSTER[idx].label, 120, 216, IDX_WHITE);
 }
 
@@ -205,7 +210,7 @@ void DemoScreen::onExit() {
 void DemoScreen::tick(lgfx::LGFX_Device&) {
   auto& f = Display::frame();
   if (entered && ROSTER[idx].fx) {
-    const uint32_t now = millis();
+    const uint32_t now = Platform::millis();
     if (now - lastFrameMs < FRAME_MS) return;
     lastFrameMs += FRAME_MS; // catch-up scheduling holds the average...
     if (now - lastFrameMs >= FRAME_MS) lastFrameMs = now; // ...a long stall resets it
@@ -221,30 +226,35 @@ void DemoScreen::tick(lgfx::LGFX_Device&) {
     }
   }
 
-#ifdef SMOLBASE_DEBUG
-  // Where the 33 ms goes, once a second. The claim this roster is built on is
-  // that an effect fits in what present() leaves over — this is how to check it
-  // on real hardware rather than trusting the arithmetic.
-  const uint32_t t0 = micros();
+  // Where the 33 ms goes. The claim this roster is built on is that an effect
+  // fits in what present() leaves over, and these three numbers are how to check
+  // it on real hardware instead of trusting the arithmetic. They used to be a
+  // debug-build-only printf — invisible without a rebuild, and unreadable at all
+  // on a bench with no serial line. Now they are always recorded and reported
+  // under "app" by GET /api/status. Four esp_timer reads per frame against a
+  // ~24 ms blocking panel push is not measurable.
+  const uint32_t t0 = Platform::micros();
   if (Effect* e = ROSTER[idx].fx) e->step(f);
   else f.fillScreen(fx::UI_BLACK);
-  const uint32_t t1 = micros();
+  const uint32_t t1 = Platform::micros();
   drawIdentity(f);
-  const uint32_t t2 = micros();
-  Display::present();
-  const uint32_t t3 = micros();
-  static uint32_t lastLog = 0;
-  if (t3 - lastLog > 1000000) {
-    lastLog = t3;
-    Serial.printf("[demo] %s: effect %lu us, overlay %lu us, present %lu us\n",
-                  ROSTER[idx].label, t1 - t0, t2 - t1, t3 - t2);
-  }
-#else
-  if (Effect* e = ROSTER[idx].fx) e->step(f);
-  else f.fillScreen(fx::UI_BLACK);
-  drawIdentity(f);
+  const uint32_t t2 = Platform::micros();
   Display::present(); // ~24 ms blocking push — the frame's real cost
-#endif
+  const uint32_t t3 = Platform::micros();
+  lastEffectUs = t1 - t0;
+  lastOverlayUs = t2 - t1;
+  lastPresentUs = t3 - t2;
+}
+
+void DemoScreen::statusJson(JsonObject out) const {
+  // Read on the httpd task (core 0) while the main loop writes them. Plain
+  // uint32 reads of independently-updated counters: the worst case is one
+  // frame's number beside another's, which is harmless for a diagnostic and
+  // not worth a lock on the frame path.
+  out["effect"] = ROSTER[idx].label;
+  out["effectUs"] = lastEffectUs;
+  out["overlayUs"] = lastOverlayUs;
+  out["presentUs"] = lastPresentUs;
 }
 
 void DemoScreen::onTap() {
