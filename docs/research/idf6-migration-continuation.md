@@ -1,9 +1,24 @@
 # IDF 6 migration — continuation note
 
-**Written:** 2026-08-23 at the end of the port. **Updated 2026-08-30**, after the spike cleanup. Read this first if you are picking smolbase up with no context.
-**Branch:** `idf6-migration`, 95 commits ahead of `main` and now pushed to `origin` — this note is near the tip. **The spike instrumentation is gone**: the 2026-08-30 cleanup commit removed the `src/core/` probes, de-instrumented `Http.cpp`, reverted the SDK-tree counters and the v0.3.3 worktree, and folded the last research findings into `sdkconfig.defaults` comments. The first *code* change since `3bf86f6` is that cleanup; everything between is research and documentation.
+**Written:** 2026-08-23 at the end of the port. **Updated 2026-09-03.** Read this first if you are picking smolbase up with no context.
+**Branch:** `idf6-migration`, 99 commits ahead of `main`, **pushed to `origin`** and tracking it. **Draft PR [#133](https://github.com/sweetlilmre/smolbase/pull/133)** exists purely so CI runs (the workflow triggers only on `push: [main]`, tags and `pull_request`) — it is not a request to merge. **The spike instrumentation is gone**: the 2026-08-30 cleanup commit removed the `src/core/` probes, de-instrumented `Http.cpp`, reverted the SDK-tree counters and the v0.3.3 worktree, and folded the last research findings into `sdkconfig.defaults` comments. The first *code* change since `3bf86f6` is that cleanup; everything between is research and documentation.
 **TLS performance work has its own record, and it is finished:** [mbedtls4-perf-spike.md](mbedtls4-perf-spike.md) — read that before touching anything TLS-shaped. Two upstream strands came out of it: [espressif-hardware-mpi-report-draft.md](espressif-hardware-mpi-report-draft.md) and [espressif-mpi-threshold-open-question.md](espressif-mpi-threshold-open-question.md).
 **Companions:** [esp-idf-6-migration.md](esp-idf-6-migration.md) (the plan, written before any of it happened) · [idf6-phase0-report.md](idf6-phase0-report.md) (Phase 0 evidence) · [idf6-ap-mode-verification.md](idf6-ap-mode-verification.md) (AP-mode procedure and results) · [idf-tuning-levers.md](idf-tuning-levers.md) (Kconfig measurements) · [littlefs-wrapper-sketch.md](littlefs-wrapper-sketch.md) (the `Fs` design) · [ADR 0006](../adr/0006-native-esp-idf-framework.md) (the framework decision)
+
+## Where the work is tracked
+
+**Remaining work now lives in GitHub issues, not in this note.** [#126](https://github.com/sweetlilmre/smolbase/issues/126) is the tracking issue and carries the rest as real sub-issues:
+
+| | | |
+|---|---|---|
+| [#127](https://github.com/sweetlilmre/smolbase/issues/127) | CI has never run | **closed 2026-09-01** |
+| [#128](https://github.com/sweetlilmre/smolbase/issues/128) | Core 0 or core 1 for the TLS handshake | open — the only one with a shipping consequence |
+| [#129](https://github.com/sweetlilmre/smolbase/issues/129) | The CGM app has never been flashed | open |
+| [#130](https://github.com/sweetlilmre/smolbase/issues/130) | Revert the build-time patches when their PRs merge | open — near-term, #873 is approved |
+| [#131](https://github.com/sweetlilmre/smolbase/issues/131) | The once-per-boot STA re-association | open, but now traced — see below |
+| [#132](https://github.com/sweetlilmre/smolbase/issues/132) | Stale claims in this note | **closed 2026-09-01** |
+
+The *Still open* section below mirrors them; the issues are the source of truth.
 
 ## State in one paragraph
 
@@ -41,6 +56,17 @@ Tee build output to `build\smolbase.log` whichever App you are building — a hu
 - **The dev device is back**: `10.0.0.32`, COM5 re-enumerated (the 2026-08-28 outage was transient). It runs the shipped-config firmware.
 - **A second board is on COM9**: a user-supplied ESP32-S3 (LX7, MAC `28:84:85:8d:31:b4`), used for the S3 crossover measurement and left running the perf harness. This is NOT the Waveshare "xiaozhi" board (MAC `e0:72:a1:f8:99:00`), which is not ours — identify by MAC read-only (`python -m esptool --port COMx --no-stub chip-id`) before flashing anything on an unfamiliar port.
 
+## CI — it runs now, and what it taught
+
+`.github/workflows/build.yml` first executed on **2026-09-01** and is green on all three Apps. Facts a fresh session needs:
+
+- **A branch push does not trigger it.** Triggers are `push: [main]`, tags, and `pull_request` only, and `workflow_dispatch` is unusable while `main` still carries the old PlatformIO workflow (GitHub discovers that trigger from the default branch). Draft PR #133 exists to provide the `pull_request` trigger.
+- **The build runs in a container as root.** Everything under `build/` is therefore root-owned, while later steps run as the runner user: creating a file there fails with EACCES. Reading is fine. This is why the asset tar is written into `dist/` and not `build/`.
+- **Anything the container must see cannot use `github.workspace`.** The action mounts the workspace at its own path (`/app/<owner>/<repo>`), so ccache settings are exported *inside* the container command from `$PWD`. Getting this wrong disabled caching silently for two runs.
+- **ccache stats live inside the cache directory**, so a restored cache carries the previous run's counters. `ccache -z` runs before the build to make the logged hit rate mean *this* run.
+- **Caching is verified end to end** — save, restore by exact key, restore by `restore-keys` prefix, hits: 99.8% on a warm run, ~266 s cold against ~140 s warm per leg.
+- **The `release` job has still never run.** It fires only on a `v*` tag, so the artifact renaming and `gh release create` path is unexercised.
+
 ## Where things live
 
 ```
@@ -52,6 +78,9 @@ sdkconfig.defaults     hand-written, every line justified in a comment
 <app>.args             idf.py argfiles: -B build/<app>, -D SMOLBASE_APP, -D SDKCONFIG
 scripts/pack_fs.py     assembles data-<app>/w from html/ + the App's html overlay
 scripts/mdns_probe.py  asks a device's mDNS responder directly, bypassing the host resolver
+patches/               TEMPORARY upstream patches applied to the SDK tree (see its README)
+cmake/upstream_patches.cmake  applies them at configure time; fails loudly if one stops
+.github/workflows/build.yml   CI: one matrix leg per App; green since 2026-09-01
 ```
 
 ## Verified on hardware
@@ -92,16 +121,25 @@ Both heap figures come from the same `/api/status` fields computed by the same `
 
 ## Still open
 
-1. **CI has never run.** `.github/workflows/build.yml` is rewritten — one `esp-idf-ci-action` matrix leg per App, with caches for managed components, the LovyanGFX clone, and per-App ccache — but has not executed once. Watch the LovyanGFX configure-time clone and the `littlefs-python` venv; both need network inside the container. Also confirm the `actions/*@v7` pins resolve: that is this repo's existing convention, not a normal one.
-2. ~~**`CONFIG_ESP_TASK_WDT_PANIC` asymmetry is undocumented.**~~ **Closed 2026-08-30**: `sdkconfig.defaults` now carries the comment explaining why the IDF default (`n`) is kept against arduino-esp32's `y`.
-3. **The TLS work is finished; two upstream strands are live.** Nothing about smolbase is blocked on either. Full record: [mbedtls4-perf-spike.md](mbedtls4-perf-spike.md).
-   - **[Mbed-TLS/TF-PSA-Crypto#873](https://github.com/Mbed-TLS/TF-PSA-Crypto/pull/873)** — open, out of draft, 6 commits, DCO green. All three of the reviewer's threads are answered and resolved, and the changes are pushed. **APPROVED by `gilles-peskine-arm` on 2026-08-31**, awaiting merge. The last blocker was a false claim in a code comment (it said `MBEDTLS_HAVE_INT64` and `MBEDTLS_HAVE_ASM` are mutually exclusive; they coexist on any 64-bit gcc/clang build, and the exclusion applies only to an *explicitly configured* INT64) — corrected in `40e3f4d82`, no code change. **2026-08-29:** the PR's two open measurement items are closed by the padding experiment ([mbedtls4-perf-spike.md §2.8](mbedtls4-perf-spike.md#28--the-875-ms-does-not-survive-the-padding-experiment)) — the ~875 ms accelerator-on regression was placement, not the series (sign flips; placement alone moves the handshake ~1 s), and the series *shrinks* Xtensa `.text` by 142 B. The PR body does not carry these figures yet.
-   - **An esp-idf fix, submitted.** `mbedtls_mpi_mul_mpi()` in the ESP port has an upper operand-size bound and no lower one, so every 256-bit multiply pays the peripheral's full per-call cost for a result software produces faster — and `CONFIG_MBEDTLS_HARDWARE_MPI` is `default y`. Adding a 512-bit lower threshold takes a P-256 ECDSA verify from 416.99 ms to 334.48 ms and a handshake from 7358 ms to 4929 ms, while leaving RSA on the hardware. **PR open and out of draft: [espressif/esp-idf#19027](https://github.com/espressif/esp-idf/pull/19027)** (commit `26338f54`, conventional format, CLA signed; #19026 was a first attempt lost to a shallow-clone amend mishap). **The 512-bit threshold is validated on the ESP32-S3 too** — its crossover is at 512 almost exactly; table posted on the PR and recorded in [espressif-mpi-threshold-open-question.md](espressif-mpi-threshold-open-question.md), whose measurement half is now answered. **Verified 2026-08-29** — the pushed commit builds as-is, matches the proven patch (the local patch file's extra CMake hunk is unnecessary), and delivers in the real firmware: core-1 handshake 4702 → 2746 ms against the padding experiment's baseline, within 13 ms of the harness prediction (mbedtls4-perf-spike.md, Part 3 / Open item 3). One decision is parked first — [espressif-mpi-threshold-open-question.md](espressif-mpi-threshold-open-question.md).
-4. ~~**Instrumentation is still in place and must come out.**~~ **Closed 2026-08-30**: all of it removed — repo probes deleted, `Http.cpp` de-instrumented, SDK-tree counters and the v0.3.3 worktree reverted. The *Dirty state* table in [mbedtls4-perf-spike.md](mbedtls4-perf-spike.md) stays as the record of what was where; reinstate from git history if a measurement needs repeating.
-5. **One decision with a shipping consequence: core 0 or core 1 for the TLS handshake.** Elliptic-curve maths costs 1.75× on core 0 because the WiFi and lwIP tasks deschedule it — the same handshake is 3.8 s on core 0 and 2.1 s on core 1. `httpServer.config.core_id = 0` is deliberate (ADR 0001 keeps core 1 for consumer code), so moving it moves a 2.1 s stall onto the task that drives the Screen. Options in [mbedtls4-perf-spike.md § 2.3](mbedtls4-perf-spike.md). Measure whichever is chosen against the App loop's frame budget.
-6. **The CGM app has never been flashed**, so `Secrets` set/get, `jwtPayload`'s base64 and `CgmFetch`'s PSA hashing have never run. The weather App runs, but the device has no OWM key, so only the keyless open-meteo path has executed.
-7. **Upstream patches are applied at build time and must be reverted on merge.** `patches/` + `cmake/upstream_patches.cmake` apply TF-PSA-Crypto#873 (the constant-time series, ~19.8% off an update check) and esp-idf#19027 (the MPI threshold, which is what licenses `CONFIG_MBEDTLS_HARDWARE_MPI=y`) to the SDK tree at configure time. **Whenever the SDK is upgraded — and periodically — check both PRs; when one merges, delete its patch and restore the SDK tree per `patches/README.md`.** The configure step fails loudly if a patch stops applying, so an SDK upgrade past the merge cannot silently build a hybrid. If #19027 is *rejected*, `HARDWARE_MPI` must go back to unset.
-8. **The once-per-boot STA re-association.** Observed, not explained: 5–15 s after connecting, back with the same IP in ~200 ms, once then stable. Ruled out: power save (`WIFI_PS_NONE`, pm type 0, zero sleep time, drop unchanged) and every WiFi call of ours. The link is WPA3-SAE with PMF. mDNS now rides through it. Low priority, but do not rediscover it from scratch.
+Mirrors the GitHub issues under [#126](https://github.com/sweetlilmre/smolbase/issues/126); the issues are the source of truth.
+
+1. ~~**CI has never run.**~~ **Closed 2026-09-01 (#127).** It runs, it is green on all three Apps, and it exposed three CI-only defects (root-owned `build/`, an invisible `CCACHE_DIR`, misleading ccache stats) — all fixed. See *CI* above.
+2. ~~**`CONFIG_ESP_TASK_WDT_PANIC` asymmetry is undocumented.**~~ **Closed 2026-08-30**: `sdkconfig.defaults` carries the comment.
+3. **Two upstream strands, both live. Nothing in smolbase is blocked on either.**
+   - **[Mbed-TLS/TF-PSA-Crypto#873](https://github.com/Mbed-TLS/TF-PSA-Crypto/pull/873) — APPROVED 2026-08-31, awaiting merge.** The last blocker was a false claim in a code comment (it said `MBEDTLS_HAVE_INT64` and `MBEDTLS_HAVE_ASM` are mutually exclusive; they coexist on any 64-bit gcc/clang build), corrected in `40e3f4d8`. The PR body still does not carry the §2.8 padding-experiment figures — deliberately, they were never added.
+   - **[espressif/esp-idf#19027](https://github.com/espressif/esp-idf/pull/19027) — open, out of draft, awaiting review.** The MPI lower-size threshold. The 512-bit constant is measured on **both** Xtensa parts (ESP32 and ESP32-S3, whose crossover is 512 almost exactly), so [espressif-mpi-threshold-open-question.md](espressif-mpi-threshold-open-question.md)'s measurement half is answered; only the constant's naming/location is left, and it is flagged for reviewers.
+4. ~~**Instrumentation is still in place and must come out.**~~ **Closed 2026-08-30.**
+5. **Core 0 or core 1 for the TLS handshake — [#128](https://github.com/sweetlilmre/smolbase/issues/128), the only item with a shipping consequence.** EC maths costs 1.75× on core 0 because the WiFi and lwIP tasks deschedule it: the same handshake is 3.8 s on core 0 and 2.1 s on core 1. `httpServer.config.core_id = 0` is deliberate (ADR 0001 keeps core 1 for consumer code), so moving it moves a 2.1 s stall onto the task that drives the Screen. Options in [mbedtls4-perf-spike.md §2.3](mbedtls4-perf-spike.md). Measure the choice against the App loop's frame budget, not just the handshake.
+6. **The CGM app has never been flashed — [#129](https://github.com/sweetlilmre/smolbase/issues/129).** So `Secrets` set/get, `jwtPayload` and `CgmFetch`'s PSA hashing have never run. The weather App runs, but with no OWM key only the keyless open-meteo path has executed.
+7. **Upstream patches are applied at build time and must be reverted on merge — [#130](https://github.com/sweetlilmre/smolbase/issues/130).** `patches/` + `cmake/upstream_patches.cmake` apply both PRs above to the SDK tree at configure time, which is what licenses `CONFIG_MBEDTLS_HARDWARE_MPI=y`. **Now near-term: #873 is approved.** When one merges into the SDK in use, delete its patch and restore the tree per `patches/README.md`. The configure step fails loudly if a patch stops applying, so an SDK upgrade past the merge cannot silently build a hybrid. **If #19027 is rejected, `HARDWARE_MPI` must go back to unset.**
+8. **The once-per-boot STA re-association — [#131](https://github.com/sweetlilmre/smolbase/issues/131). Traced 2026-09-01; cause not yet attributable to anything of ours.**
+   - **The AP sends the disassociation, with reason 34, `WIFI_REASON_DISASSOC_LOW_ACK`.** That single datum was missing for the whole life of this ticket; the handler discards `wifi_event_sta_disconnected_t::reason`.
+   - Always ~5–6 s after the **first** association of a boot, never after the reconnect (which returns in ~48 ms and is stable). RSSI −51 dBm, so "low ACK" is not a link-quality story. The second association is 14 ms against the first's 2.2 s — PMKSA caching.
+   - **Power save re-confirmed as not the cause**, this time with `WIFI_PS_NONE` set directly: `pm type: 0`, `total sleep time: 0 us`, still dropped. Note the shipped build does *not* set `WIFI_PS_NONE` and so runs on the IDF default `type: 1`.
+   - **mDNS eliminated** (disabled entirely, still dropped), and the log is silent for the whole 4.6 s before the drop.
+   - **The AP is a MikroTik** and is the party sending the disassoc, so **its own wireless log is the best next evidence** — better than anything more inferred from the client end. Failing that, reproduce against a different AP or with a stock ESP-IDF wifi example.
+   - Repro loop (RTS reset → capture COM5 with a ≥1 MB buffer → assert on a drop after the first got-ip) is ~40 s and red on every boot. Worth rebuilding rather than re-deriving.
+   - **Recommended and not done:** log the disconnect reason permanently. It cost a build-flash-capture cycle to learn it once, and any field report of a drop needs the same number.
 
 ## Serial is attached — use it
 
@@ -182,6 +220,12 @@ The bullets below still stand, and Part 4 of the spike doc records three conclus
 ## Mistakes worth not repeating
 
 Most of these were made during the sessions that produced this port. Each cost real time.
+
+- **I asserted a MAC's vendor without looking it up**, then built a whole "known steering behaviour in that family" explanation on the invention. The AP is a MikroTik, not what I claimed. The fabricated detail was less damaging than the *narrative* I hung off it, which made it sound researched. Same failure as the causal source comment below.
+- **I amended a commit inside a `--depth 1` shallow clone.** The grafted tip has no parent, so `--amend` produced a *parentless* commit; the force-push severed the branch from `master` and GitHub auto-closed the upstream PR, which then could not be reopened. Repaired with `git commit-tree -p <true parent>` on the same tree. Do not rewrite history in a shallow clone.
+- **I reported a build as passing without checking it had run.** The PowerShell invocation failed on `$HOME` escaping through bash, the log tail showed an *older* successful build, and the binary was hours stale. Check the artifact's timestamp, not the log's last lines.
+- **Windows `xtensa-esp32-elf-objdump` and `gdb` decode every ELF as raw hex words** on this install — their dynconfig `.so` plugins are Linux-only. `grep -c call8` then returns 0, indistinguishable from "no calls". A byte-walking decoder was written instead; see [mbedtls4-perf-spike.md §2.8](mbedtls4-perf-spike.md).
+- **Git Bash `/tmp` and Windows Python's `/tmp` are different directories.** A file written by one is invisible to the other; use the scratchpad with a `C:/...` path when both must see it.
 
 - **A heredoc mangled escape sequences four separate times.** `'\0'` became a literal NUL in a source file (caught only because `-Werror` flags "null character(s) preserved in literal"); `\n` became a real newline inside a `printf`, breaking a build; and earlier `"\xC2\xB0"` was double-encoded into `Â°C`, which nothing would have failed on. Non-ASCII or escape-heavy edits go through the editor tools, never a shell heredoc. Better still, write the code so it needs no escape.
 - **I flashed a stale binary because I did not check the build's exit code** before the OTA, then puzzled over missing instrumentation. Gate every flash on the build result.
