@@ -46,4 +46,56 @@ else()
   idf_build_set_property(LINK_OPTIONS "-Wl,--wrap=mbedtls_mpi_exp_mod" APPEND)
 endif()
 
+# -D SPIKE_MPI_THRESHOLD=<bits> overrides SOC_MPI_HW_MIN_BIT_LEN across the whole
+# build, the SDK's own esp_bignum.c included -- its definition of that constant is
+# #ifndef-guarded precisely so it can be overridden. A build property, not a
+# component one, because the constant has to reach the mbedtls component and not
+# just this app.
+#
+# The crossover cells pass 0: with the routing threshold at zero every multiply
+# reaches the peripheral, which gives the hardware column, while main/bench.c
+# calls the software path directly for the software column. One binary, both
+# curves, no layout difference between them.
+if(DEFINED SPIKE_MPI_THRESHOLD)
+  idf_build_set_property(COMPILE_DEFINITIONS "SOC_MPI_HW_MIN_BIT_LEN=${SPIKE_MPI_THRESHOLD}" APPEND)
+  idf_build_set_property(COMPILE_DEFINITIONS "SPIKE_MPI_THRESHOLD=${SPIKE_MPI_THRESHOLD}" APPEND)
+endif()
+
+# -D SPIKE_CROSSOVER=1 adds the 32-bit-step 256..512 sweep, in both hardware and
+# software, to answer where the crossover really sits. Off by default: it roughly
+# doubles the run time and every existing capture in results/ was taken without
+# it, so the default keeps those comparable.
+if(SPIKE_CROSSOVER)
+  idf_build_set_property(COMPILE_DEFINITIONS "SPIKE_CROSSOVER=1" APPEND)
+endif()
+
+# -D SPIKE_MULSTEP=1 moves that sweep up an octave (15..25 limbs) and drops the
+# hardware column, to test whether the software cost is a sawtooth in limb count.
+# Mutually exclusive with SPIKE_CROSSOVER: they share one operand array and one
+# size list, and asking for both would silently measure the second one's sizes
+# under the first one's bench names.
+if(SPIKE_MULSTEP)
+  if(SPIKE_CROSSOVER)
+    message(FATAL_ERROR "SPIKE_CROSSOVER and SPIKE_MULSTEP are mutually exclusive - they share XBITS.")
+  endif()
+  idf_build_set_property(COMPILE_DEFINITIONS "SPIKE_MULSTEP=1" APPEND)
+endif()
+
+# -D SPIKE_SOFTCOUNT=1 reads a counter injected into the SDK's esp_bignum.c by
+# the fix-stackcopy-count variant, and reports entries to mpi_mult_mpi_soft()
+# per operation. It exists because -Wl,--wrap cannot see same-TU calls, so the
+# wrap counter reports zero mul_mpi calls for exp_mod and that cannot be taken
+# at face value.
+if(SPIKE_SOFTCOUNT)
+  idf_build_set_property(COMPILE_DEFINITIONS "SPIKE_SOFTCOUNT=1" APPEND)
+endif()
+
+# -D SPIKE_WIPEAB=1 pairs each benchmark with a wipe-on and a wipe-off arm,
+# selected by a runtime flag in the SDK, and adds a direct microbenchmark of
+# mbedtls_platform_zeroize against memset. Needs the fix-stackcopy-ab variant,
+# which is what defines the flag.
+if(SPIKE_WIPEAB)
+  idf_build_set_property(COMPILE_DEFINITIONS "SPIKE_WIPEAB=1" APPEND)
+endif()
+
 project(mbedtls_perf)

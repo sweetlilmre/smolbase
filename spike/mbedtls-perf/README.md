@@ -43,6 +43,91 @@ Each argfile carries **its own build directory and its own generated `sdkconfig`
 
 Quote the `@` in PowerShell — bare `@` is the splatting operator.
 
+## The #19027 review run — captured 2026-09-07
+
+**Result: adopt the stack copy.** ECDSA P-256 verify −7.4% on the ESP32 and −6.0% on the S3; the RSA-2048 public operation the reviewer said had regressed, −8.9% and −4.0%. Operands of 512 bits and up — which never enter the patched function — move by under 0.2%, which is the control that makes the rest believable. Full numbers in [espressif-mpi-threshold-open-question.md](../../docs/research/espressif-mpi-threshold-open-question.md).
+
+The [espressif/esp-idf#19027](https://github.com/espressif/esp-idf/pull/19027) review on 2026-09-04 asked for one change and disputed one number. These four cells are the harness for the change; the disputed number gets its own six in *The crossover cells* below.
+
+**The change.** The threshold patch routes sub-threshold multiplies to a software path that copies an aliased operand into a heap `mbedtls_mpi`. The reviewer measured that heap allocation costing ~4.4 µs per call — more than the multiply — which makes an RSA-2048 public operation *slower* than unpatched, because inside one every small multiply aliases `Z` with an operand. Their patch bounds the copy by the routing threshold and puts it on the stack instead. They report both ECDSA and RSA improving.
+
+**Four cells, two boards, one variable.** `-fix` is the threshold patch as submitted (heap copy), `-fix-stackcopy` is that plus the reviewer's patch:
+
+| tag | board | SDK bignum port |
+|---|---|---|
+| `idf6-mpi-on-fix` | ESP32, COM5 | `esp-idf-mpi-min-bitlen.patch` |
+| `idf6-mpi-on-fix-stackcopy` | ESP32, COM5 | + `esp-idf-mpi-stack-copy.patch` |
+| `idf6-s3-mpi-on-fix` | ESP32-S3, COM9 | `esp-idf-mpi-min-bitlen.patch` |
+| `idf6-s3-mpi-on-fix-stackcopy` | ESP32-S3, COM9 | + `esp-idf-mpi-stack-copy.patch` |
+
+```
+& $HOME\esp\esp-idf\export.ps1
+./run.ps1 -Runs idf6-mpi-on-fix,idf6-mpi-on-fix-stackcopy -Flash                 # ESP32
+./run.ps1 -Runs idf6-s3-mpi-on-fix,idf6-s3-mpi-on-fix-stackcopy -Flash           # ESP32-S3
+```
+
+`run.ps1` picks the port from the tag, so the two commands above need no `-Port`.
+
+**Accelerator-on only, and that is not an omission.** `components/mbedtls/CMakeLists.txt` compiles `esp_bignum.c` only `if(CONFIG_MBEDTLS_HARDWARE_MPI)`. With the accelerator off the patched file is not in the build at all, so an `mpi-off` cell would measure nothing and invite the reader to think it had.
+
+**The rows that answer the review** are `mpi_exp_mod_e65537` at 2048 bits — that is the RSA public operation the reviewer says regressed, `e=65537` against a 2048-bit modulus — and `ecdsa_verify_p256`. The `mpi_mul` sweep is the mechanism underneath both. Every cell is `SPIKE_NO_WRAP=1`: the hook costs 0.21–1.30 µs per call and an ECDSA verify makes thousands, which would swamp a 4.4 µs-per-call effect.
+
+### What is being measured lives in the SDK tree, not here
+
+Nothing in this directory records which variant a build used, because the patched file is `$IDF_PATH/components/mbedtls/port/bignum/esp_bignum.c`. That is the same shape as the failure this README already warns about — a patched cell built, the patch reverted, then `idf.py flash` recompiling it unpatched during the flash step and capturing that. `sdk_variant.ps1` exists so nobody switches the tree by hand:
+
+```
+./sdk_variant.ps1 -Verify                 # what is in the tree right now
+./sdk_variant.ps1 -Set fix                # threshold patch only, heap copy
+./sdk_variant.ps1 -Set fix-stackcopy      # + the reviewer's patch
+./sdk_variant.ps1 -Set fix-stackcopy-wipe # + the zeroize fix (what the firmware ships)
+./sdk_variant.ps1 -Set stock              # pristine v6.0.2
+```
+
+`run.ps1` calls it from the tag immediately before the flash — which is the moment that matters, because flashing rebuilds — and then reads the tree back and asserts. It also reads the chip id read-only and refuses to flash a board whose MAC is not the one the tag expects, because the ESP32-S3 shares its bench with a Waveshare board that is not ours.
+
+**Leaving the tree in anything but `fix-stackcopy-wipe` will make the next smolbase build fail loudly**, because `cmake/upstream_patches.cmake` FATALs when its series neither applies nor reverse-applies. That is the design working. `sdk_variant.ps1 -Set fix-stackcopy-wipe` puts it back — the firmware ships all three patches.
+
+### Two things to read the patch for, before the numbers
+
+- **`MPI_SOFT_MAX_WORDS` divides by a hardcoded 32.** The bound itself is right — the caller routes on `MAX(x_bits, y_bits) < SOC_MPI_HW_MIN_BIT_LEN`, so each operand has at most `ceil((threshold-1)/32)` significant words and the rounding up covers a threshold that is not a multiple of 32. But 32 is the width of `mbedtls_mpi_uint` on these 32-bit parts by assumption, not by construction; `sizeof(mbedtls_mpi_uint) * 8` says the same thing and stays true if the port is ever built where `MBEDTLS_HAVE_INT64` holds. Worth raising on the PR rather than measuring.
+- **The aliasing analysis is sound.** `xp`/`yp` are captured before `mbedtls_mpi_grow(Z, …)` can reallocate `Z->p`, and an aliased operand has already been copied out by then; `z_sign` is read before `Z` is written. `string.h` is already included in `esp_bignum.c`.
+
+## The crossover cells — captured 2026-09-07
+
+**Result: the disagreement was ours.** We had been measuring an mbedTLS carrying the TF-PSA-Crypto #873 series, which makes the software multiply 6–12% faster and lifts the crossover ~5%. On a clean tree the ESP32 gives ~383 bits against the reviewer's 374 — agreement. The consequence is that **#873 flips 384-bit operands from the hardware side to the software side**, so a constant chosen against today's mbedTLS is wrong once it merges. 384 routes to software in all six shipped-tree cells.
+
+The other half of the same review. Their table puts the ESP32 crossover at 364–374 bits and the ESP32-S3 at 348 (80 MHz) → 508 (240 MHz), against the flat 512 in the patch. The S3-at-240 figure agrees with this project's own measurement; the rest does not, and the constant clearly is not one number.
+
+**The only part of the disagreement that changes a routing decision is 384 bits.** Only a few operand sizes ever reach `mbedtls_mpi_mul_mpi` — 256 and 384 (P-256 and P-384 ECC), 512, and RSA's 1024 and up — so every threshold in (384, 512] routes every real workload identically, and 374 versus our interpolated ~408 is a distinction without a difference. What matters is which side of **384** the threshold falls on, because GitHub's chain has a P-384 root. This project measured software winning at 384 on both parts (7% on ESP32, 18% on S3); their ESP32 figure of 374, and their S3 figure of 348 at 80 MHz, both put 384 on the hardware side. Full argument in [espressif-mpi-threshold-open-question.md](../../docs/research/espressif-mpi-threshold-open-question.md).
+
+Six cells, 32-bit steps from 256 to 512, three CPU frequencies per board:
+
+| tag | board | CPU |
+|---|---|---|
+| `idf6-xover-240` / `-160` / `-80` | ESP32, COM5 | 240 / 160 / 80 MHz |
+| `idf6-s3-xover-240` / `-160` / `-80` | ESP32-S3, COM9 | 240 / 160 / 80 MHz |
+
+```
+& $HOME\esp\esp-idf\export.ps1
+./run.ps1 -Runs idf6-xover-240,idf6-xover-160,idf6-xover-80 -Flash
+./run.ps1 -Runs idf6-s3-xover-240,idf6-s3-xover-160,idf6-s3-xover-80 -Flash
+```
+
+**Both curves come out of one binary**, which is the whole design. `SPIKE_MPI_THRESHOLD=0` disables the routing so every multiply reaches the peripheral — that is the `mpi_mul_hw` column — while `mul_soft()` in `main/bench.c` mirrors the port's software path for `mpi_mul_sw`. They are interleaved size by size in `BENCHES` so a thermal or scheduler drift over the run cannot masquerade as a crossover. Taking the two columns from two builds instead would carry a layout difference of unknown size: a 1424-byte code move has already cost this project 20–23% on identical source.
+
+These cells run against the **stock** SDK tree, not a patched one. With the threshold at zero the patch would change nothing, and one less moving part is one less thing to be wrong about; `run.ps1` sets and asserts that state like it does for the others.
+
+The frequency is a Kconfig **choice**, so `sdkconfig.cpu80`/`sdkconfig.cpu160` unset the 240 pick explicitly — adding the alternative alone leaves the earlier `=y` winning, silently. `run.ps1` asserts the generated `CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ` against the tag, and `[id]` now reports `cpu_mhz` (configured), `cpu_mhz_rt` (actually running), `target` and `mpi_min_bits` so a capture says what it measured without reference to its filename.
+
+### Reading them
+
+`mpi_mul_hw` minus `mpi_mul_sw` at each size; the crossover is the sign change. Three things to look for:
+
+1. **Which side of 384 the crossing falls on, at every frequency.** That is the answer to the review.
+2. **How far the crossover moves with frequency**, per part. Their ESP32 barely moves (364 → 374) and their S3 moves 46% (348 → 508); the mechanism is that a software multiply is entirely CPU-bound while the peripheral's cost is only partly so, and the ratio differs per part.
+3. **Whether the hardware column is flat from 256 to 512.** On the ESP32 it should be — the port rounds operands up to a multiple of 16 words before handing them over. The S3's measured 15.76 → 19.34 → 23.64 is not flat, so the two parts evidently do not round the same way, which matters before anyone writes a shared formula.
+
 ## Running
 
 **Flashing this spike erases the smolbase firmware.** It writes its own bootloader and its own default `single_app` partition table, so the device's custom layout from `partitions.csv` goes with it, and the NVS holding the WiFi credentials with that. Getting the device back is a full serial flash of the real firmware plus a re-provision through the captive portal. `run.ps1` therefore does nothing destructive without `-Flash`.
@@ -88,6 +173,15 @@ sdkconfig.fixed-point     fixed-point ECP on
 idf{5,6}-mpi-{on,off}[-fp].args   the eight cells
 idf{5,6}-mpi-{on,off}-nowrap.args the four uninstrumented controls
 run.ps1                   flash, capture, collate
+
+sdk_variant.ps1           put $IDF_PATH's esp_bignum.c into one known state
+upstream/esp-idf-mpi-min-bitlen.patch     the #19027 patch itself
+upstream/esp-idf-mpi-stack-copy.patch   the stack copy asked for in its review
+idf6[-s3]-mpi-on-fix[-stackcopy].args   the four stack-copy cells
+sdkconfig.cpu{80,160}     CPU frequency, for the crossover-vs-frequency sweep
+idf6[-s3]-xover-{80,160,240}.args       the six crossover cells
+idf6[-s3]-xover-240-ct-out.args         the same, mbedTLS submodule clean (#873 out)
+idf6[-s3]-mulstep-240.args              15..25 limbs, software only: the unroll sawtooth
 ```
 
 ### The one thing the spike plan got wrong

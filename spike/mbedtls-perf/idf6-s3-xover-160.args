@@ -1,0 +1,14 @@
+-B
+build/idf6-s3-xover-160
+-D
+SDKCONFIG=build/idf6-s3-xover-160/sdkconfig
+-D
+SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.cpu160
+-D
+SPIKE_NO_WRAP=1
+-D
+SPIKE_CROSSOVER=1
+-D
+SPIKE_MPI_THRESHOLD=0
+-D
+IDF_TARGET=esp32s3

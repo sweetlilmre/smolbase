@@ -28,6 +28,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_idf_version.h"
+#include "esp_private/esp_clk.h" // esp_clk_cpu_freq(): the frequency in force, not the configured one
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -42,6 +43,44 @@
 #define BATCH_TARGET_US 200000
 #define MAX_ITERS 200000
 #define REPS 5
+
+// -1 = no override; the SDK's own SOC_MPI_HW_MIN_BIT_LEN default is in force.
+// See the project CMakeLists for how -D SPIKE_MPI_THRESHOLD reaches esp_bignum.c.
+#ifndef SPIKE_MPI_THRESHOLD
+#define SPIKE_MPI_THRESHOLD (-1)
+#endif
+#ifndef SPIKE_CROSSOVER
+#define SPIKE_CROSSOVER 0
+#endif
+#ifndef SPIKE_MULSTEP
+#define SPIKE_MULSTEP 0
+#endif
+#ifndef SPIKE_SOFTCOUNT
+#define SPIKE_SOFTCOUNT 0
+#endif
+#ifndef SPIKE_WIPEAB
+#define SPIKE_WIPEAB 0
+#endif
+#if SPIKE_WIPEAB
+// The wipe A/B. Both arms are in THIS binary and are chosen by a runtime flag,
+// so the two arms have identical code layout. That matters more than usual:
+// this project has measured a 1424-byte code move costing 20-23% on unchanged
+// source, and two cross-build attempts at this measurement produced per-call
+// costs that disagreed with each other by 27x and 87x.
+#include "mbedtls/platform_util.h"
+extern volatile int esp_mpi_soft_wipe;
+extern uint32_t esp_mpi_soft_wipe_cycles;
+extern uint32_t esp_mpi_soft_wipe_words;
+static unsigned char g_zbuf[64];
+#endif
+#if SPIKE_SOFTCOUNT
+// Injected into the SDK's esp_bignum.c by the fix-stackcopy-count variant. It
+// counts entries to mpi_mult_mpi_soft(), including the same-TU calls that
+// -Wl,--wrap cannot see -- which is the whole point: the wrap counter reports
+// zero mul_mpi calls for exp_mod, and that needs confirming or refuting from
+// inside the binary rather than inferred across builds.
+extern size_t esp_mpi_soft_call_count;
+#endif
 
 // RFC 6979 A.2.5's P-256 private key. Used because it is a published,
 // unambiguous scalar known to be valid for this curve, not because any RFC 6979
@@ -136,6 +175,96 @@ static mbedtls_mpi g_d384, g_r384, g_s384;
 static mbedtls_mpi g_mul_a[6], g_mul_b[6], g_mul_x; // 256/512/1024/2048/4096/384
 static const size_t MUL_BITS[6] = {256, 512, 1024, 2048, 4096, 384};
 
+// ---- The crossover sweep (SPIKE_CROSSOVER) ------------------------------
+// Where the hardware unit starts beating a software multiply, measured at 32-bit
+// steps instead of the main sweep's 256 -> 384 -> 512 jumps. That resolution is
+// the point: the #19027 review puts the ESP32 crossover at 364-374 bits, this
+// project chose 512, and the main sweep has no measured point between 384 and
+// 512 to tell those apart. At 384 it has software ahead by 7%, so the two
+// positions are much closer than the constants suggest.
+//
+// BOTH curves come out of ONE binary, which is the only way this comparison is
+// worth making here: "timing is a property of the binary, not the source" is
+// already a hard-won fact in this project, with a 1424-byte code move costing
+// 20-23%. So a hardware-vs-software crossover taken from two different builds
+// carries a layout difference of unknown size, and these cells take the
+// hardware column from the routed path (built with SPIKE_MPI_THRESHOLD=0, so
+// every multiply reaches the peripheral) and the software column from
+// mul_soft() below, in the same image, interleaved in the same run.
+#if SPIKE_CROSSOVER || SPIKE_MULSTEP
+
+#include "bignum_core.h" // mbedtls_mpi_core_mul(), library-private
+
+// SPIKE_MULSTEP moves the same sweep up an octave, 15 to 25 limbs, to test one
+// prediction: that mbedtls_mpi_core_mla()'s unroll-by-8 makes the software cost
+// a SAWTOOTH in limb count rather than a smooth n^2. The 256..512 sweep found
+// 480 bits (15 limbs) costing MORE than 512 (16 limbs) in all six cells, which
+// the unroll explains -- 15 limbs pays one 8-block plus seven single steps that
+// each redo MULADDC_X1_INIT, 16 pays two 8-blocks and no singles. If that is the
+// mechanism the tooth must repeat: 736 bits (23 limbs) should cost more than 768
+// (24). A smooth curve here falsifies it.
+#if SPIKE_WIPEAB
+    // Interleaved, and each pair repeated, so a thermal or scheduler drift over
+    // the run shows up as disagreement between the two passes rather than as a
+    // wipe cost.
+    {"ab_ecdsa_p256_nowipe", 256, op_ecdsa_nowipe},   {"ab_ecdsa_p256_wipe", 256, op_ecdsa_wipe},
+    {"ab_ecdsa_p384_nowipe", 384, op_ecdsa384_nowipe},{"ab_ecdsa_p384_wipe", 384, op_ecdsa384_wipe},
+    {"ab_exp_2048_nowipe", 2048, op_exp2048_nowipe},  {"ab_exp_2048_wipe", 2048, op_exp2048_wipe},
+    {"ab_exp_4096_nowipe", 4096, op_exp4096_nowipe},  {"ab_exp_4096_wipe", 4096, op_exp4096_wipe},
+    {"ab_ecdsa_p256_nowipe2", 256, op_ecdsa_nowipe},  {"ab_ecdsa_p256_wipe2", 256, op_ecdsa_wipe},
+    {"ab_exp_2048_nowipe2", 2048, op_exp2048_nowipe}, {"ab_exp_2048_wipe2", 2048, op_exp2048_wipe},
+    {"zeroize", 32, op_zeroize_32}, {"memset", 32, op_memset_32},
+    {"zeroize", 64, op_zeroize_64}, {"memset", 64, op_memset_64},
+#endif
+#if SPIKE_MULSTEP
+#define NX 11
+static const size_t XBITS[NX] = {480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800};
+#else
+#define NX 9
+static const size_t XBITS[NX] = {256, 288, 320, 352, 384, 416, 448, 480, 512};
+#endif
+static mbedtls_mpi g_xa[NX], g_xb[NX], g_xz;
+
+// Mirrors mpi_mult_mpi_soft() in the SDK's esp_bignum.c for the non-aliased
+// case -- trim, grow, lset, mbedtls_mpi_core_mul -- so the software column is
+// what the router would really pay, not a bare core_mul with the bookkeeping
+// removed. Z never aliases an operand here, so the operand copy is absent from
+// both columns; that copy is the whole subject of the -fix / -fix-stackcopy
+// cells and is priced there instead.
+static int mul_soft(mbedtls_mpi *Z, const mbedtls_mpi *X, const mbedtls_mpi *Y)
+{
+    size_t i, j;
+    int ret;
+
+    for (i = X->MBEDTLS_PRIVATE(n); i > 0; i--) {
+        if (X->MBEDTLS_PRIVATE(p)[i - 1] != 0) {
+            break;
+        }
+    }
+    for (j = Y->MBEDTLS_PRIVATE(n); j > 0; j--) {
+        if (Y->MBEDTLS_PRIVATE(p)[j - 1] != 0) {
+            break;
+        }
+    }
+
+    if ((ret = mbedtls_mpi_grow(Z, i + j)) != 0 ||
+        (ret = mbedtls_mpi_lset(Z, 0)) != 0) {
+        return ret;
+    }
+
+    if (i > 0 && j > 0) {
+        mbedtls_mpi_core_mul(Z->MBEDTLS_PRIVATE(p),
+                             X->MBEDTLS_PRIVATE(p), i,
+                             Y->MBEDTLS_PRIVATE(p), j);
+    }
+
+    Z->MBEDTLS_PRIVATE(s) = (i == 0 || j == 0) ? 1
+                            : X->MBEDTLS_PRIVATE(s) * Y->MBEDTLS_PRIVATE(s);
+    return 0;
+}
+
+#endif // SPIKE_CROSSOVER
+
 static mbedtls_mpi g_exp2_a, g_exp2_n, g_exp4_a, g_exp4_n, g_exp_e, g_exp_x;
 static mbedtls_mpi g_inv_a, g_inv_x;
 
@@ -189,6 +318,57 @@ static void op_mul_256_hooked(void)
     g_last_rc |= mbedtls_mpi_mul_mpi(&g_mul_x, &g_mul_a[0], &g_mul_b[0]);
 }
 
+#if SPIKE_CROSSOVER || SPIKE_MULSTEP
+// One pair of functions per size, because bench_t's fn takes no argument. The
+// alternative -- a global index set between runs -- would put a write and a read
+// of shared state next to the timed loop for no gain.
+// Generated separately: the mul-step cells use only the software column, and an
+// unused static function is a -Werror away from failing the build.
+#define XOP_SW(i) static void op_x_sw_##i(void) { g_last_rc |= mul_soft(&g_xz, &g_xa[i], &g_xb[i]); }
+XOP_SW(0) XOP_SW(1) XOP_SW(2) XOP_SW(3) XOP_SW(4) XOP_SW(5) XOP_SW(6) XOP_SW(7) XOP_SW(8)
+#if SPIKE_WIPEAB
+    // Interleaved, and each pair repeated, so a thermal or scheduler drift over
+    // the run shows up as disagreement between the two passes rather than as a
+    // wipe cost.
+    {"ab_ecdsa_p256_nowipe", 256, op_ecdsa_nowipe},   {"ab_ecdsa_p256_wipe", 256, op_ecdsa_wipe},
+    {"ab_ecdsa_p384_nowipe", 384, op_ecdsa384_nowipe},{"ab_ecdsa_p384_wipe", 384, op_ecdsa384_wipe},
+    {"ab_exp_2048_nowipe", 2048, op_exp2048_nowipe},  {"ab_exp_2048_wipe", 2048, op_exp2048_wipe},
+    {"ab_exp_4096_nowipe", 4096, op_exp4096_nowipe},  {"ab_exp_4096_wipe", 4096, op_exp4096_wipe},
+    {"ab_ecdsa_p256_nowipe2", 256, op_ecdsa_nowipe},  {"ab_ecdsa_p256_wipe2", 256, op_ecdsa_wipe},
+    {"ab_exp_2048_nowipe2", 2048, op_exp2048_nowipe}, {"ab_exp_2048_wipe2", 2048, op_exp2048_wipe},
+    {"zeroize", 32, op_zeroize_32}, {"memset", 32, op_memset_32},
+    {"zeroize", 64, op_zeroize_64}, {"memset", 64, op_memset_64},
+#endif
+#if SPIKE_MULSTEP
+XOP_SW(9) XOP_SW(10)
+#endif
+#undef XOP_SW
+
+#if SPIKE_CROSSOVER
+#define XOP_HW(i) static void op_x_hw_##i(void) { g_last_rc |= spike_real_mul_mpi(&g_xz, &g_xa[i], &g_xb[i]); }
+XOP_HW(0) XOP_HW(1) XOP_HW(2) XOP_HW(3) XOP_HW(4) XOP_HW(5) XOP_HW(6) XOP_HW(7) XOP_HW(8)
+#undef XOP_HW
+#endif
+#endif
+
+#if SPIKE_WIPEAB
+// Each arm writes the flag once per operation, so that store is present in both
+// and cancels in the difference.
+static void op_ecdsa_nowipe(void)   { esp_mpi_soft_wipe = 0; op_ecdsa_verify(); }
+static void op_ecdsa_wipe(void)     { esp_mpi_soft_wipe = 1; op_ecdsa_verify(); }
+static void op_ecdsa384_nowipe(void){ esp_mpi_soft_wipe = 0; op_ecdsa_verify_384(); }
+static void op_ecdsa384_wipe(void)  { esp_mpi_soft_wipe = 1; op_ecdsa_verify_384(); }
+
+// The primitive on its own, at the two sizes the soft path actually wipes:
+// 32 bytes for a P-256 limb count, 64 bytes at the 512-bit routing threshold.
+// memset at the same sizes prices the volatile-indirection overhead separately
+// from the stores themselves.
+static void op_zeroize_32(void) { mbedtls_platform_zeroize(g_zbuf, 32); }
+static void op_zeroize_64(void) { mbedtls_platform_zeroize(g_zbuf, 64); }
+static void op_memset_32(void)  { memset(g_zbuf, 0, 32); __asm__ volatile("" : : "m"(g_zbuf) :); }
+static void op_memset_64(void)  { memset(g_zbuf, 0, 64); __asm__ volatile("" : : "m"(g_zbuf) :); }
+#endif
+
 static void op_exp_2048(void)
 {
     g_last_rc |= spike_real_exp_mod(&g_exp_x, &g_exp2_a, &g_exp_e, &g_exp2_n, NULL);
@@ -200,6 +380,13 @@ static void op_exp_4096(void)
 {
     g_last_rc |= spike_real_exp_mod(&g_exp_x, &g_exp4_a, &g_exp_e, &g_exp4_n, NULL);
 }
+
+#if SPIKE_WIPEAB
+static void op_exp2048_nowipe(void) { esp_mpi_soft_wipe = 0; op_exp_2048(); }
+static void op_exp2048_wipe(void)   { esp_mpi_soft_wipe = 1; op_exp_2048(); }
+static void op_exp4096_nowipe(void) { esp_mpi_soft_wipe = 0; op_exp_4096(); }
+static void op_exp4096_wipe(void)   { esp_mpi_soft_wipe = 1; op_exp_4096(); }
+#endif
 
 static void op_inv_256(void)
 {
@@ -227,6 +414,44 @@ static const bench_t BENCHES[] = {
     {"mpi_mul_hooked", 256, op_mul_256_hooked},
     {"mpi_exp_mod_e65537", 2048, op_exp_2048},
     {"mpi_exp_mod_e65537", 4096, op_exp_4096},
+#if SPIKE_CROSSOVER
+    // Interleaved hw/sw at each size rather than one full curve then the other,
+    // so a thermal or scheduler drift over the run cannot masquerade as a
+    // crossover: at every size the two columns are adjacent in time.
+    {"mpi_mul_hw", 256, op_x_hw_0}, {"mpi_mul_sw", 256, op_x_sw_0},
+    {"mpi_mul_hw", 288, op_x_hw_1}, {"mpi_mul_sw", 288, op_x_sw_1},
+    {"mpi_mul_hw", 320, op_x_hw_2}, {"mpi_mul_sw", 320, op_x_sw_2},
+    {"mpi_mul_hw", 352, op_x_hw_3}, {"mpi_mul_sw", 352, op_x_sw_3},
+    {"mpi_mul_hw", 384, op_x_hw_4}, {"mpi_mul_sw", 384, op_x_sw_4},
+    {"mpi_mul_hw", 416, op_x_hw_5}, {"mpi_mul_sw", 416, op_x_sw_5},
+    {"mpi_mul_hw", 448, op_x_hw_6}, {"mpi_mul_sw", 448, op_x_sw_6},
+    {"mpi_mul_hw", 480, op_x_hw_7}, {"mpi_mul_sw", 480, op_x_sw_7},
+    {"mpi_mul_hw", 512, op_x_hw_8}, {"mpi_mul_sw", 512, op_x_sw_8},
+#endif
+#if SPIKE_WIPEAB
+    // Interleaved, and each pair repeated, so a thermal or scheduler drift over
+    // the run shows up as disagreement between the two passes rather than as a
+    // wipe cost.
+    {"ab_ecdsa_p256_nowipe", 256, op_ecdsa_nowipe},   {"ab_ecdsa_p256_wipe", 256, op_ecdsa_wipe},
+    {"ab_ecdsa_p384_nowipe", 384, op_ecdsa384_nowipe},{"ab_ecdsa_p384_wipe", 384, op_ecdsa384_wipe},
+    {"ab_exp_2048_nowipe", 2048, op_exp2048_nowipe},  {"ab_exp_2048_wipe", 2048, op_exp2048_wipe},
+    {"ab_exp_4096_nowipe", 4096, op_exp4096_nowipe},  {"ab_exp_4096_wipe", 4096, op_exp4096_wipe},
+    {"ab_ecdsa_p256_nowipe2", 256, op_ecdsa_nowipe},  {"ab_ecdsa_p256_wipe2", 256, op_ecdsa_wipe},
+    {"ab_exp_2048_nowipe2", 2048, op_exp2048_nowipe}, {"ab_exp_2048_wipe2", 2048, op_exp2048_wipe},
+    {"zeroize", 32, op_zeroize_32}, {"memset", 32, op_memset_32},
+    {"zeroize", 64, op_zeroize_64}, {"memset", 64, op_memset_64},
+#endif
+#if SPIKE_MULSTEP
+    // Software only: the sawtooth is a property of mbedtls_mpi_core_mla(), and
+    // the hardware path is not involved in the question. Sizes come from XBITS
+    // above, 15 to 25 limbs.
+    {"mpi_mul_sw", 480, op_x_sw_0}, {"mpi_mul_sw", 512, op_x_sw_1},
+    {"mpi_mul_sw", 544, op_x_sw_2}, {"mpi_mul_sw", 576, op_x_sw_3},
+    {"mpi_mul_sw", 608, op_x_sw_4}, {"mpi_mul_sw", 640, op_x_sw_5},
+    {"mpi_mul_sw", 672, op_x_sw_6}, {"mpi_mul_sw", 704, op_x_sw_7},
+    {"mpi_mul_sw", 736, op_x_sw_8}, {"mpi_mul_sw", 768, op_x_sw_9},
+    {"mpi_mul_sw", 800, op_x_sw_10},
+#endif
 };
 
 // ---- Setup --------------------------------------------------------------
@@ -253,6 +478,13 @@ static int setup(void)
     mbedtls_mpi_init(&g_exp_x);
     mbedtls_mpi_init(&g_inv_a);
     mbedtls_mpi_init(&g_inv_x);
+#if SPIKE_CROSSOVER || SPIKE_MULSTEP
+    for (int i = 0; i < NX; i++) {
+        mbedtls_mpi_init(&g_xa[i]);
+        mbedtls_mpi_init(&g_xb[i]);
+    }
+    mbedtls_mpi_init(&g_xz);
+#endif
 
     if ((rc = mbedtls_ecp_group_load(&g_grp, MBEDTLS_ECP_DP_SECP256R1)) != 0) {
         printf("[error] ecp_group_load rc=-0x%04x\n", (unsigned)-rc);
@@ -346,6 +578,27 @@ static int setup(void)
         }
     }
 
+#if SPIKE_CROSSOVER || SPIKE_MULSTEP
+    for (int i = 0; i < NX; i++) {
+        if ((rc = mpi_fixed(&g_xa[i], XBITS[i], 0x66660000u + (uint32_t)i, 0)) != 0 ||
+            (rc = mpi_fixed(&g_xb[i], XBITS[i], 0x77770000u + (uint32_t)i, 0)) != 0) {
+            printf("[error] crossover operand %u rc=-0x%04x\n", (unsigned)XBITS[i], (unsigned)-rc);
+            return rc;
+        }
+    }
+    // Pre-grow the shared destination to the largest result the sweep produces
+    // (512 x 512 bits = 32 words) so mbedtls_mpi_grow() is a no-op in EVERY
+    // cell, hardware and software alike. Without this the sweep would reproduce
+    // the artefact that already fooled this spike once: mpi_mul_hooked's margin
+    // over mpi_mul turned out to be nothing but a destination left oversized by
+    // the preceding 4096-bit multiply. Sharing one pre-grown Z also keeps
+    // lset()'s cost identical across sizes instead of growing with the result.
+    if ((rc = mbedtls_mpi_grow(&g_xz, 2 * XBITS[NX - 1] / 32)) != 0) {
+        printf("[error] crossover destination grow rc=-0x%04x\n", (unsigned)-rc);
+        return rc;
+    }
+#endif
+
     // e = 65537: the public exponent in every certificate chain this firmware
     // meets, so exp_mod here is an RSA *verify*, which is the operation #119
     // was about.
@@ -414,6 +667,13 @@ static void run_bench(const bench_t *b)
     }
 
     spike_counters_reset();
+#if SPIKE_SOFTCOUNT
+    esp_mpi_soft_call_count = 0;
+#endif
+#if SPIKE_WIPEAB
+    esp_mpi_soft_wipe_cycles = 0;
+    esp_mpi_soft_wipe_words = 0;
+#endif
 
     int64_t best = INT64_MAX, worst = 0, total = 0;
     for (int rep = 0; rep < REPS; rep++) {
@@ -440,7 +700,7 @@ static void run_bench(const bench_t *b)
     printf("[bench] name=%s bits=%u iters=%d reps=%d "
            "min_ns=%lld mean_ns=%lld max_ns=%lld "
            "mul_calls_per_op=%lld mul_ns_per_op=%lld "
-           "exp_calls_per_op=%lld exp_ns_per_op=%lld rc=%d\n",
+           "exp_calls_per_op=%lld exp_ns_per_op=%lld soft_calls_per_op=%lld wipe_cyc_per_op=%lld wipe_words_per_op=%lld rc=%d\n",
            b->name, b->bits, iters, REPS,
            (long long)per_op_ns(best, iters),
            (long long)(total * 1000 / ops),
@@ -449,6 +709,17 @@ static void run_bench(const bench_t *b)
            (long long)(c.mul_us * 1000 / ops),
            (long long)((int64_t)c.exp_calls * 1000 / ops),
            (long long)(c.exp_us * 1000 / ops),
+#if SPIKE_SOFTCOUNT
+           (long long)((int64_t)esp_mpi_soft_call_count * 1000 / ops),
+#else
+           (long long)-1,
+#endif
+#if SPIKE_WIPEAB
+           (long long)((int64_t)esp_mpi_soft_wipe_cycles * 1000 / ops),
+           (long long)((int64_t)esp_mpi_soft_wipe_words * 1000 / ops),
+#else
+           (long long)-1, (long long)-1,
+#endif
            g_last_rc);
 
     if (g_last_rc != 0) {
@@ -462,11 +733,23 @@ static void bench_task(void *arg)
 {
     (void)arg;
 
-    printf("\n[id] mbedtls=%s idf=%s hw_mul=%d hw_exp=%d fixed_point=%d wrap=%d "
-           "cpu_mhz=%d opt=%s core=%d free_internal=%u\n",
-           MBEDTLS_VERSION_STRING, IDF_VER, SPIKE_HW_MUL, SPIKE_HW_EXP, SPIKE_FIXED_POINT,
+    printf("\n[id] mbedtls=%s idf=%s target=%s hw_mul=%d hw_exp=%d fixed_point=%d wrap=%d "
+           "cpu_mhz=%d cpu_mhz_rt=%d mpi_min_bits=%d opt=%s core=%d free_internal=%u\n",
+           MBEDTLS_VERSION_STRING, IDF_VER, CONFIG_IDF_TARGET,
+           SPIKE_HW_MUL, SPIKE_HW_EXP, SPIKE_FIXED_POINT,
            SPIKE_NO_WRAP ? 0 : 1,
            CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ,
+           // The Kconfig value is what the threshold table would be compiled
+           // against; this is what the CPU is actually running at when the
+           // benchmarks execute. They can differ -- power management, a
+           // bootloader override -- and the crossover depends on the second one,
+           // so the frequency sweep is only interpretable if both are recorded.
+           esp_clk_cpu_freq() / 1000000,
+           // -1 means no override was passed and the SDK's own default is in
+           // force. Reported because these cells vary it, and a threshold that
+           // failed to take reads as a perfectly plausible measurement of the
+           // wrong thing -- the same trap as a Kconfig value that did not land.
+           SPIKE_MPI_THRESHOLD,
            // IDF 6 has a per-component mbedTLS optimisation choice; IDF 5.5 does
            // not, and there mbedTLS inherits the global level. Test both so the
            // banner reports the level mbedTLS was really built at on either SDK

@@ -1,0 +1,12 @@
+-B
+build/idf6-mulstep-240
+-D
+SDKCONFIG=build/idf6-mulstep-240/sdkconfig
+-D
+SDKCONFIG_DEFAULTS=sdkconfig.defaults
+-D
+SPIKE_NO_WRAP=1
+-D
+SPIKE_MULSTEP=1
+-D
+SPIKE_MPI_THRESHOLD=0

@@ -20,7 +20,9 @@
 
 [CmdletBinding()]
 param(
-    [string]$Port = 'COM5',
+    # Left unset, the port is chosen from the tag: the ESP32-S3 cells run on the
+    # second board, the rest on the bench device. Pass -Port to override.
+    [string]$Port,
     [string[]]$Runs = @(
         'idf5-mpi-on', 'idf5-mpi-off', 'idf5-mpi-on-fp', 'idf5-mpi-off-fp',
         'idf6-mpi-on', 'idf6-mpi-off', 'idf6-mpi-on-fp', 'idf6-mpi-off-fp',
@@ -34,11 +36,56 @@ param(
     [string]$OutDir = 'results',
     [int]$TimeoutSec = 300,
     [switch]$Flash,
-    [switch]$ParseOnly
+    [switch]$ParseOnly,
+    # The SDK-tree patch state is synced from the tag before every flash. Opt out
+    # only if you are deliberately driving sdk_variant.ps1 yourself.
+    [switch]$NoSdkSync,
+    # The MAC check refuses to flash a board that is not the one the tag expects.
+    [switch]$SkipMacCheck
 )
 
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
+
+# Which board a tag belongs on, and how to know it is that board. The second
+# ESP32-S3 shares a bench with a Waveshare "xiaozhi" board that is NOT ours;
+# flashing that one would be somebody else's bad day, so the MAC is checked
+# read-only before anything is written.
+$BOARDS = @{
+    esp32   = @{ Port = 'COM5'; Mac = 'b4:bf:e9:c8:2e:00' }
+    esp32s3 = @{ Port = 'COM9'; Mac = '28:84:85:8d:31:b4' }
+}
+
+function Get-BoardKey { param([string]$Tag) if ($Tag -match '-s3-') { 'esp32s3' } else { 'esp32' } }
+
+# Which SDK-tree state a tag is measuring. Read the tag, set the tree, then read
+# the tree back -- see the header of sdk_variant.ps1 for why this is not optional.
+function Get-WantedSdkVariant {
+    param([string]$Tag)
+    if ($Tag -match '-fix-stackcopy-ab') { return 'fix-stackcopy-ab' }
+    if ($Tag -match '-fix-stackcopy-count') { return 'fix-stackcopy-count' }
+    if ($Tag -match '-fix-stackcopy-wipe') { return 'fix-stackcopy-wipe' }
+    if ($Tag -match '-fix-stackcopy') { return 'fix-stackcopy' }
+    if ($Tag -match '-fix') { return 'fix' }
+    return 'stock'
+}
+
+# The TF-PSA-Crypto #873 series lives in a different repo (the mbedtls submodule)
+# and is IN for every cell except the '-ct-out' controls, which exist to price
+# what it does to the crossover.
+function Get-WantedCt { param([string]$Tag) if ($Tag -match '-ct-out$') { 'out' } else { 'in' } }
+
+function Assert-Board {
+    param([string]$Port, [string]$ExpectMac, [string]$Tag)
+    $out = & python -m esptool --port $Port --no-stub chip-id 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        throw "${tag}: could not read the chip id on $Port before flashing. Is the board attached and the port free?`n$out"
+    }
+    if ($out -notmatch [regex]::Escape($ExpectMac)) {
+        throw "${tag}: $Port is NOT the expected board (MAC $ExpectMac). Refusing to flash. esptool said:`n$out"
+    }
+    Write-Host "$tag : $Port confirmed as $ExpectMac"
+}
 
 # ---- Serial capture -----------------------------------------------------
 # A default System.IO.Ports.SerialPort drops bytes during the boot burst and
@@ -111,6 +158,14 @@ function Parse-Run {
             $rows += [pscustomobject][ordered]@{
                 run              = $Tag
                 mbedtls          = $id['mbedtls']
+                # Read from the capture, not from the tag. Captures taken before
+                # these fields existed have none, and '' is the honest answer
+                # there -- inferring them from the filename is how a table ends
+                # up asserting something nobody measured.
+                target           = if ($id.ContainsKey('target')) { $id['target'] } else { '' }
+                cpu_mhz          = if ($id.ContainsKey('cpu_mhz')) { $id['cpu_mhz'] } else { '' }
+                cpu_mhz_rt       = if ($id.ContainsKey('cpu_mhz_rt')) { $id['cpu_mhz_rt'] } else { '' }
+                mpi_min_bits     = if ($id.ContainsKey('mpi_min_bits')) { $id['mpi_min_bits'] } else { '' }
                 hw_mul           = $id['hw_mul']
                 fixed_point      = $id['fixed_point']
                 # Captures taken before the no-wrap control existed have no
@@ -127,6 +182,7 @@ function Parse-Run {
                 mul_us_per_op    = [math]::Round([double]$f['mul_ns_per_op'] / 1000, 3)
                 exp_calls_per_op = [math]::Round([double]$f['exp_calls_per_op'] / 1000, 3)
                 exp_us_per_op    = [math]::Round([double]$f['exp_ns_per_op'] / 1000, 3)
+                soft_calls_per_op = if ($f.ContainsKey('soft_calls_per_op')) { [math]::Round([double]$f['soft_calls_per_op'] / 1000, 3) } else { '' }
                 rc               = $f['rc']
             }
         }
@@ -163,17 +219,63 @@ if (-not $ParseOnly) {
         if ($haveMpi -ne $wantMpi) { throw "${tag}: HARDWARE_MPI is $haveMpi in the generated sdkconfig, expected $wantMpi" }
         if ($haveFp -ne $wantFp) { throw "${tag}: ECP_FIXED_POINT_OPTIM is $haveFp in the generated sdkconfig, expected $wantFp" }
 
+        # The chip, from the generated sdkconfig rather than from the argfile. An
+        # s3 tag built for esp32 would otherwise flash, run, and produce a whole
+        # table of plausible numbers attributed to the wrong silicon.
+        $wantTarget = if ($tag -match '-s3-') { 'esp32s3' } else { 'esp32' }
+        $haveTarget = ($cfg | Select-String -Pattern '^CONFIG_IDF_TARGET="(.+)"$').Matches.Groups[1].Value
+        if ($haveTarget -ne $wantTarget) { throw "${tag}: built for '$haveTarget' but the tag says '$wantTarget'" }
+
+        # The CPU frequency, for the crossover-vs-frequency cells. It is a Kconfig
+        # CHOICE, which needs the current pick explicitly unset before the
+        # alternative takes -- so "the fragment is in SDKCONFIG_DEFAULTS" is not
+        # evidence that the frequency changed. Assert the generated value.
+        if ($tag -match '-(?:xover|mulstep)-(\d+)(?:-ct-out)?$') {
+            $wantMhz = [int]$Matches[1]
+            $haveMhz = [int]($cfg | Select-String -Pattern '^CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=(\d+)$').Matches.Groups[1].Value
+            if ($haveMhz -ne $wantMhz) { throw "${tag}: generated sdkconfig says ${haveMhz} MHz, the tag says ${wantMhz} MHz" }
+        }
+
         if (-not $Flash) {
             Write-Host "$tag : built and config-checked. Re-run with -Flash to flash and capture (this ERASES the smolbase firmware)."
             continue
         }
 
-        Write-Host "$tag : flashing $Port ..."
-        idf.py "@$tag.args" -p $Port -b 460800 flash | Out-Null
+        $board = $BOARDS[(Get-BoardKey $tag)]
+        $usePort = if ($Port) { $Port } else { $board.Port }
+
+        # The SDK tree, immediately before the flash. This is the moment that
+        # matters: `idf.py flash` REBUILDS, so a tree that was right at build time
+        # and wrong now produces a capture of something nobody asked for. That has
+        # happened here once already. Sync, then read the tree back and assert.
+        $wantVariant = Get-WantedSdkVariant $tag
+        $wantCt = Get-WantedCt $tag
+        if (-not $NoSdkSync) {
+            & (Join-Path $PSScriptRoot 'sdk_variant.ps1') -Set $wantVariant -Ct $wantCt | Out-Null
+        }
+        $haveVariant = & (Join-Path $PSScriptRoot 'sdk_variant.ps1') -Verify | Select-Object -Last 1
+        if ($haveVariant -ne $wantVariant) {
+            throw "${tag}: the SDK bignum port is in state '$haveVariant' but this run measures '$wantVariant'. Fix it with ./sdk_variant.ps1 -Set $wantVariant (or drop -NoSdkSync)."
+        }
+        Write-Host "$tag : SDK bignum port is '$haveVariant'"
+
+        if (-not $SkipMacCheck) { Assert-Board -Port $usePort -ExpectMac $board.Mac -Tag $tag }
+
+        Write-Host "$tag : flashing $usePort ..."
+        idf.py "@$tag.args" -p $usePort -b 460800 flash | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "${tag}: flash failed with exit code $LASTEXITCODE" }
 
+        # Again, AFTER the flash. The flash step is itself a build, so the state
+        # that matters is the state across it, not before it -- and the tree is a
+        # shared resource that another window can move. If this fires, the image
+        # now on the device is not the one the tag names: rebuild and reflash.
+        $afterVariant = & (Join-Path $PSScriptRoot 'sdk_variant.ps1') -Verify | Select-Object -Last 1
+        if ($afterVariant -ne $wantVariant) {
+            throw "${tag}: the SDK bignum port changed to '$afterVariant' during the flash. The device now carries something other than '$wantVariant' -- discard this run."
+        }
+
         Write-Host "$tag : capturing ..."
-        $text = Capture-Boot -Port $Port -TimeoutSec $TimeoutSec -Until '[done]'
+        $text = Capture-Boot -Port $usePort -TimeoutSec $TimeoutSec -Until '[done]'
         Set-Content -Path (Join-Path $OutDir "$tag.log") -Value $text -NoNewline
 
         if (-not $text.Contains('[done]')) {
@@ -199,3 +301,70 @@ $csv = Join-Path $OutDir 'results.csv'
 $all | Export-Csv -Path $csv -NoTypeInformation
 Write-Host "$($all.Count) rows from $((($all | Select-Object -ExpandProperty run) | Sort-Object -Unique).Count) run(s) -> $csv`n"
 $all | Format-Table run, bench, bits, mean_us, min_us, max_us, mul_calls_per_op, mul_us_per_op -AutoSize
+
+# ---- Crossover summary --------------------------------------------------
+# Doing this by eye off a 400-row table is how a sign change gets missed. For
+# every run that carries the paired mpi_mul_hw / mpi_mul_sw rows, print the
+# difference per size and interpolate the crossing.
+#
+# It reports "which side is 384 on" separately from the interpolated bits,
+# because that is the part with consequences: only 256, 384, 512 and RSA's 1024+
+# ever reach mbedtls_mpi_mul_mpi, so every threshold in (384, 512] routes real
+# workloads identically and the exact crossing is decoration.
+$xruns = $all | Where-Object { $_.bench -eq 'mpi_mul_hw' } | Select-Object -ExpandProperty run -Unique
+foreach ($r in $xruns) {
+    $hw = @{}; $sw = @{}
+    foreach ($row in ($all | Where-Object { $_.run -eq $r })) {
+        if ($row.bench -eq 'mpi_mul_hw') { $hw[[int]$row.bits] = [double]$row.mean_us }
+        if ($row.bench -eq 'mpi_mul_sw') { $sw[[int]$row.bits] = [double]$row.mean_us }
+    }
+    $sizes = $hw.Keys | Where-Object { $sw.ContainsKey($_) } | Sort-Object
+    if (-not $sizes) { continue }
+
+    $id = ($all | Where-Object { $_.run -eq $r } | Select-Object -First 1)
+    Write-Host "`n--- $r  ($($id.target) @ $($id.cpu_mhz_rt) MHz) ---"
+    $rows = foreach ($b in $sizes) {
+        [pscustomobject][ordered]@{
+            bits     = $b
+            hw_us    = [math]::Round($hw[$b], 2)
+            sw_us    = [math]::Round($sw[$b], 2)
+            'sw-hw'  = [math]::Round($sw[$b] - $hw[$b], 2)
+            faster   = if ($sw[$b] -lt $hw[$b]) { 'software' } else { 'hardware' }
+        }
+    }
+    $rows | Format-Table -AutoSize
+
+    # First sign change in (sw - hw), linearly interpolated between the two
+    # bracketing sizes. Linear is honest over a 32-bit step and no more is
+    # claimed by quoting it to the nearest bit.
+    $cross = $null
+    for ($i = 1; $i -lt $sizes.Count; $i++) {
+        $p = $sizes[$i - 1]; $q = $sizes[$i]
+        $dp = $sw[$p] - $hw[$p]; $dq = $sw[$q] - $hw[$q]
+        if ($dp -lt 0 -and $dq -ge 0) { $cross = $p + ($q - $p) * ($(-$dp) / ($dq - $dp)); break }
+    }
+    if ($null -eq $cross) {
+        $allSw = ($sizes | Where-Object { $sw[$_] -lt $hw[$_] }).Count
+        Write-Host ("crossover: none in {0}..{1} -- {2} wins at every measured size" -f $sizes[0], $sizes[-1],
+                    $(if ($allSw -eq $sizes.Count) { 'software' } else { 'hardware' }))
+    } else {
+        Write-Host ("crossover: ~{0:N0} bits" -f $cross)
+        # mbedtls_mpi_core_mla() unrolls by 8 limbs and does the remainder one
+        # limb at a time, so the software curve is a SAWTOOTH: 15 limbs (480
+        # bits) and 23 (736) cost more than the 16 and 24 above them. A lone
+        # sign change can therefore be a tooth rather than a crossing, and
+        # reporting it as "the crossover" is how a threshold table ends up
+        # naming the wrong number. If software wins again above the crossing,
+        # say so instead of pretending the first flip settled it.
+        $after = $sizes | Where-Object { $_ -gt $cross -and $sw[$_] -lt $hw[$_] }
+        if ($after) {
+            Write-Host ("  ...but software wins again at {0} -- that flip is a TOOTH, not a crossing. True crossover is above {1} bits." -f
+                        ($after -join ', '), $sizes[-1])
+        }
+    }
+    if ($hw.ContainsKey(384)) {
+        $side = if ($sw[384] -lt $hw[384]) { 'SOFTWARE' } else { 'HARDWARE' }
+        $pct = [math]::Round([math]::Abs($sw[384] - $hw[384]) / [math]::Max($sw[384], $hw[384]) * 100, 1)
+        Write-Host ("384 bits -> {0} is faster, by {1}%   <- the part that changes a routing decision" -f $side, $pct)
+    }
+}
