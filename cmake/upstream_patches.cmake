@@ -98,9 +98,41 @@ sb_apply_series(${SB_MBEDTLS_REPO}
   ${SB_PATCHES}/0002-constant_time-add-an-Xtensa-assembly-path.patch
   ${SB_PATCHES}/0003-bignum_core-use-_if_else_0-where-the-zero-branch-is-.patch)
 
-# espressif/esp-idf#19027 - the MPI lower-size threshold. Only the
-# esp_bignum.c hunk: the patch file also carries a CMakeLists include-path
-# hunk that turned out to be unnecessary (the PR branch does not have it).
-sb_apply_patch($ENV{IDF_PATH}
+# espressif/esp-idf#19027 - the MPI lower-size threshold, plus the stack-copy
+# change its review asked for on 2026-09-04. A SERIES, not two independent
+# patches: both edit mpi_mult_mpi_soft(), so once the second is in the first no
+# longer reverse-applies and a per-patch check would misfire into the FATAL.
+#
+# Only the esp_bignum.c hunk of the first: that patch file also carries a
+# CMakeLists include-path hunk that turned out to be unnecessary (the PR branch
+# does not have it). The second patch touches nothing else, so the same
+# --include is harmless there and keeps the series flags uniform.
+#
+# The THIRD patch wipes those stack copies before returning. The heap MPIs the
+# second patch replaced were zeroized by mbedtls_mpi_free(), and P-256 field
+# multiplies reach this path, so their limbs are secret-dependent. Reported by
+# Cursor Bugbot on the PR, 2026-09-08.
+#
+# It was added, reverted, and reapplied. The revert was my error: it rested on
+# a cost measured by comparing two BINARIES, and on this chip layout alone
+# moves timings by more than the effect. Re-measured with both arms in one
+# binary behind a runtime flag, and with a cycle counter around the wipe block
+# so the cost is attributed rather than inferred:
+#
+#   ECDSA verify P-256   741 us   0.32%     RSA-2048 public   172 us   1.05%
+#   ECDSA verify P-384  1122 us   0.22%     RSA-4096 public    57 us   0.09%
+#
+# At most ~1%, not the ~5% the revert claimed. mbedtls_platform_zeroize() costs
+# 0.05 us per call more than a bare memset, so an inlinable replacement would
+# buy almost nothing and the library function stays.
+#
+# The stack copy is worth having on its own account, not just to match the PR:
+# it is -7.4%/-6.0% on an ECDSA P-256 verify and -8.9%/-4.0% on an RSA-2048
+# public operation (ESP32/ESP32-S3), and without it the threshold patch makes
+# RSA-2048 SLOWER than no patch at all. Measured 2026-09-07, both boards; see
+# docs/research/espressif-mpi-threshold-open-question.md.
+sb_apply_series($ENV{IDF_PATH}
+  --include=components/mbedtls/port/bignum/esp_bignum.c -p1
   ${SB_PATCHES}/esp-idf-mpi-min-bitlen.patch
-  --include=components/mbedtls/port/bignum/esp_bignum.c -p1)
+  ${SB_PATCHES}/esp-idf-mpi-stack-copy.patch
+  ${SB_PATCHES}/esp-idf-mpi-zeroize-copy.patch)
