@@ -207,7 +207,18 @@ Every arm was run twice later in the same sweep; the pairs agree to 0.01%. The w
 
 **Why `exp_mod` and not ECDSA.** The soft path runs 142 times inside a 16 ms hardware-bound RSA-2048 operation, so its direct cost is tiny next to the total and second-order effects dominate. ECDSA P-256 runs it 6330 times, so the direct cost swamps them.
 
-**Consequence for the stack-copy figures below.** The ECDSA and ECP rows (−7.4% / −6.0% and similar) are corroborated across four benchmarks and two boards and stand. **The `−8.9%` on RSA-2048 and `−4.0%` on the S3 have never been re-measured within a binary and should not be quoted.** The per-call costs they imply — 11.13 µs on RSA-2048 against 2.76–3.00 µs on the four ECC benchmarks — are inconsistent in exactly the same way.
+**The stack-copy figures were re-measured too, on 2026-09-11, and they were understatements.** Same method: a heap-copy arm and a stack-copy arm in one binary behind a runtime flag, both arms wiping (`mbedtls_mpi_free()` zeroizes, so the heap arm always did), so the delta is purely allocation against stack copy.
+
+| operation | heap | stack | **within-binary** | cross-build said |
+|---|---|---|---|---|
+| ECDSA verify P-256 | 258,942 µs | 237,161 | **−8.41%** | −7.4% |
+| ECDSA verify P-384 | 539,574 µs | 507,872 | **−5.88%** | — |
+| RSA-2048 public | 20,302 µs | 17,087 | **−15.83%** | −8.9% |
+| RSA-4096 public | 65,220 µs | 61,458 | **−5.77%** | −0.92% |
+
+Repeat pairs agree to 0.005%. **RSA-2048 is −15.8%, not −8.9%**, and RSA-4096 moves from a rounding error to −5.77%. The reviewer's patch is worth more than either of us measured.
+
+The consistency check now passes where it previously failed, which is the point of repeating it: RSA-2048 and RSA-4096 agree at 22.64 and 21.75 µs per soft-path call (they disagreed by 3.6× across builds), and P-256 and P-384 agree at 3.44 and 3.39 µs. ECC and RSA still differ per *call*, because only an aliased operand allocates: ECDSA copies on roughly 23% of its 6330 calls while RSA-2048 copies on essentially all 142. Normalised per copy both land near 15–23 µs, which makes the reviewer's own ~4.4 µs estimate conservative. **That last step is an inference** — the copy counts are derived from the words-wiped data rather than counted directly. The operation-level percentages above are measured.
 
 **The rule this leaves.** Measure A against B inside one image, or do not claim a percentage. The crossover cells and the mul-step sweep already worked this way, which is why those results held up.
 
@@ -224,7 +235,7 @@ All captures in `spike/mbedtls-perf/results/`, collated in `results.csv`. Every 
 | ECDSA verify P-256 | 250.74 → 232.25 ms — **−7.4%** | 199.28 → 187.34 ms — **−6.0%** |
 | ECP mul P-256 | 117.55 → 108.11 ms — −8.0% | 92.89 → 86.55 ms — −6.8% |
 | ECDSA verify P-384 | 526.72 → 500.90 ms — −4.9% | 412.07 → 394.85 ms — −4.2% |
-| **RSA-2048 public** (`exp_mod`, e=65537) | 17.72 → 16.14 ms — ~~−8.9%~~ | 18.21 → 17.49 ms — ~~−4.0%~~ **← cross-build, do not quote; see the methodology correction above** |
+| **RSA-2048 public** (`exp_mod`, e=65537) | ~~−8.9%~~ → **−15.83%** | ~~−4.0%~~ ESP32-S3 not re-measured | **← re-measured within a binary 2026-09-11; the cross-build figure understated it** |
 | `mpi_mul` 256 | 10.30 → 10.02 µs — −2.7% | 7.76 → 7.54 µs — −2.9% |
 | `mpi_mul` 512 / 1024 / 2048 / 4096 | +0.06 / +0.06 / +0.02 / +0.20% | +0.01 / −0.00 / −0.00 / +0.02% |
 

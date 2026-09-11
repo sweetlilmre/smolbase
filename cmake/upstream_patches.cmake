@@ -126,11 +126,18 @@ sb_apply_series(${SB_MBEDTLS_REPO}
 # 0.05 us per call more than a bare memset, so an inlinable replacement would
 # buy almost nothing and the library function stays.
 #
-# The stack copy is worth having on its own account, not just to match the PR:
-# it is -7.4%/-6.0% on an ECDSA P-256 verify and -8.9%/-4.0% on an RSA-2048
-# public operation (ESP32/ESP32-S3), and without it the threshold patch makes
-# RSA-2048 SLOWER than no patch at all. Measured 2026-09-07, both boards; see
-# docs/research/espressif-mpi-threshold-open-question.md.
+# The stack copy is worth having on its own account, not just to match the PR.
+# Measured 2026-09-11 with a heap arm and a stack arm in ONE binary behind a
+# runtime flag, both arms wiping (mbedtls_mpi_free() zeroizes, so the heap arm
+# always did), so the delta is purely the allocation:
+#
+#   ECDSA verify P-256   -8.41%      RSA-2048 public   -15.83%
+#   ECDSA verify P-384   -5.88%      RSA-4096 public    -5.77%
+#
+# Repeat pairs agree to 0.005%. Earlier cross-build figures (-7.4% and -8.9%)
+# understated it; RSA-2048 is -15.8%, and RSA-4096 goes from a rounding error
+# to -5.77%. Without this patch the threshold patch is a net loss for RSA.
+# See docs/research/espressif-mpi-threshold-open-question.md.
 sb_apply_series($ENV{IDF_PATH}
   --include=components/mbedtls/port/bignum/esp_bignum.c -p1
   ${SB_PATCHES}/esp-idf-mpi-min-bitlen.patch

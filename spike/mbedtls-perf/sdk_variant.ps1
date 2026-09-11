@@ -41,7 +41,7 @@
 [CmdletBinding(DefaultParameterSetName = 'Verify')]
 param(
     [Parameter(ParameterSetName = 'Set', Mandatory)]
-    [ValidateSet('stock', 'fix', 'fix-stackcopy', 'fix-stackcopy-wipe', 'fix-stackcopy-count', 'fix-stackcopy-ab')]
+    [ValidateSet('stock', 'fix', 'fix-stackcopy', 'fix-stackcopy-wipe', 'fix-stackcopy-count', 'fix-stackcopy-ab', 'fix-heapab')]
     [string]$Set,
 
     # The TF-PSA-Crypto #873 constant-time series, in the mbedtls SUBMODULE --
@@ -76,6 +76,7 @@ $zeroizePatch   = Join-Path $PSScriptRoot 'upstream/esp-idf-mpi-zeroize-copy.pat
 # candidate for upstream.
 $softCountPatch = Join-Path $PSScriptRoot 'upstream/esp-idf-mpi-softcount.patch'
 $wipeAbPatch    = Join-Path $PSScriptRoot 'upstream/esp-idf-mpi-wipeab.patch'
+$heapAbPatch    = Join-Path $PSScriptRoot 'upstream/esp-idf-mpi-heapab.patch'
 
 # The #873 series lives in the repo's own patches/ directory, because the real
 # firmware build applies it from there via cmake/upstream_patches.cmake. Same
@@ -100,6 +101,7 @@ function Get-CtState {
 function Get-SdkVariant {
     $src = Get-Content $abs -Raw
     # Most specific first: the wipe implies the stack copy.
+    if ($src -match 'esp_mpi_soft_heapcopy') { return 'fix-heapab' }
     if ($src -match 'esp_mpi_soft_wipe') { return 'fix-stackcopy-ab' }
     if ($src -match 'esp_mpi_soft_call_count') { return 'fix-stackcopy-count' }
     if ($src -match 'mbedtls_platform_zeroize\(tx') { return 'fix-stackcopy-wipe' }
@@ -122,7 +124,12 @@ git -C $idf checkout -- $rel
 if ($LASTEXITCODE -ne 0) { throw "could not restore $rel in the SDK tree" }
 
 $applied = @()
-if ($Set -eq 'fix-stackcopy-ab') {
+if ($Set -eq 'fix-heapab') {
+    git -C $idf apply -p1 --include=$rel $heapAbPatch
+    if ($LASTEXITCODE -ne 0) { throw "failed to apply $heapAbPatch" }
+    $applied += 'esp-idf-mpi-heapab.patch (combined)'
+}
+elseif ($Set -eq 'fix-stackcopy-ab') {
     git -C $idf apply -p1 --include=$rel $wipeAbPatch
     if ($LASTEXITCODE -ne 0) { throw "failed to apply $wipeAbPatch" }
     $applied += 'esp-idf-mpi-wipeab.patch (combined)'

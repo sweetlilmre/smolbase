@@ -61,6 +61,17 @@
 #ifndef SPIKE_WIPEAB
 #define SPIKE_WIPEAB 0
 #endif
+#ifndef SPIKE_HEAPAB
+#define SPIKE_HEAPAB 0
+#endif
+#if SPIKE_HEAPAB
+// The heap-copy vs stack-copy A/B, both arms in this binary behind a runtime
+// flag. The -8.9% this project attributed to the stack copy on RSA-2048 came
+// from comparing two binaries, which on this chip is not evidence: the per-call
+// cost it implies (11.13 us) disagrees with the four ECC benchmarks in the same
+// table (2.76-3.00 us). This settles it or retires it.
+extern volatile int esp_mpi_soft_heapcopy;
+#endif
 #if SPIKE_WIPEAB
 // The wipe A/B. Both arms are in THIS binary and are chosen by a runtime flag,
 // so the two arms have identical code layout. That matters more than usual:
@@ -203,6 +214,14 @@ static const size_t MUL_BITS[6] = {256, 512, 1024, 2048, 4096, 384};
 // each redo MULADDC_X1_INIT, 16 pays two 8-blocks and no singles. If that is the
 // mechanism the tooth must repeat: 736 bits (23 limbs) should cost more than 768
 // (24). A smooth curve here falsifies it.
+#if SPIKE_HEAPAB
+    {"hb_ecdsa_p256_heap", 256, op_h_ecdsa_heap},   {"hb_ecdsa_p256_stack", 256, op_h_ecdsa_stack},
+    {"hb_ecdsa_p384_heap", 384, op_h_ecdsa384_heap},{"hb_ecdsa_p384_stack", 384, op_h_ecdsa384_stack},
+    {"hb_exp_2048_heap", 2048, op_h_exp2048_heap},  {"hb_exp_2048_stack", 2048, op_h_exp2048_stack},
+    {"hb_exp_4096_heap", 4096, op_h_exp4096_heap},  {"hb_exp_4096_stack", 4096, op_h_exp4096_stack},
+    {"hb_ecdsa_p256_heap2", 256, op_h_ecdsa_heap},  {"hb_ecdsa_p256_stack2", 256, op_h_ecdsa_stack},
+    {"hb_exp_2048_heap2", 2048, op_h_exp2048_heap}, {"hb_exp_2048_stack2", 2048, op_h_exp2048_stack},
+#endif
 #if SPIKE_WIPEAB
     // Interleaved, and each pair repeated, so a thermal or scheduler drift over
     // the run shows up as disagreement between the two passes rather than as a
@@ -326,6 +345,14 @@ static void op_mul_256_hooked(void)
 // unused static function is a -Werror away from failing the build.
 #define XOP_SW(i) static void op_x_sw_##i(void) { g_last_rc |= mul_soft(&g_xz, &g_xa[i], &g_xb[i]); }
 XOP_SW(0) XOP_SW(1) XOP_SW(2) XOP_SW(3) XOP_SW(4) XOP_SW(5) XOP_SW(6) XOP_SW(7) XOP_SW(8)
+#if SPIKE_HEAPAB
+    {"hb_ecdsa_p256_heap", 256, op_h_ecdsa_heap},   {"hb_ecdsa_p256_stack", 256, op_h_ecdsa_stack},
+    {"hb_ecdsa_p384_heap", 384, op_h_ecdsa384_heap},{"hb_ecdsa_p384_stack", 384, op_h_ecdsa384_stack},
+    {"hb_exp_2048_heap", 2048, op_h_exp2048_heap},  {"hb_exp_2048_stack", 2048, op_h_exp2048_stack},
+    {"hb_exp_4096_heap", 4096, op_h_exp4096_heap},  {"hb_exp_4096_stack", 4096, op_h_exp4096_stack},
+    {"hb_ecdsa_p256_heap2", 256, op_h_ecdsa_heap},  {"hb_ecdsa_p256_stack2", 256, op_h_ecdsa_stack},
+    {"hb_exp_2048_heap2", 2048, op_h_exp2048_heap}, {"hb_exp_2048_stack2", 2048, op_h_exp2048_stack},
+#endif
 #if SPIKE_WIPEAB
     // Interleaved, and each pair repeated, so a thermal or scheduler drift over
     // the run shows up as disagreement between the two passes rather than as a
@@ -369,6 +396,13 @@ static void op_memset_32(void)  { memset(g_zbuf, 0, 32); __asm__ volatile("" : :
 static void op_memset_64(void)  { memset(g_zbuf, 0, 64); __asm__ volatile("" : : "m"(g_zbuf) :); }
 #endif
 
+#if SPIKE_HEAPAB
+static void op_h_ecdsa_heap(void)    { esp_mpi_soft_heapcopy = 1; op_ecdsa_verify(); }
+static void op_h_ecdsa_stack(void)   { esp_mpi_soft_heapcopy = 0; op_ecdsa_verify(); }
+static void op_h_ecdsa384_heap(void) { esp_mpi_soft_heapcopy = 1; op_ecdsa_verify_384(); }
+static void op_h_ecdsa384_stack(void){ esp_mpi_soft_heapcopy = 0; op_ecdsa_verify_384(); }
+#endif
+
 static void op_exp_2048(void)
 {
     g_last_rc |= spike_real_exp_mod(&g_exp_x, &g_exp2_a, &g_exp_e, &g_exp2_n, NULL);
@@ -380,6 +414,13 @@ static void op_exp_4096(void)
 {
     g_last_rc |= spike_real_exp_mod(&g_exp_x, &g_exp4_a, &g_exp_e, &g_exp4_n, NULL);
 }
+
+#if SPIKE_HEAPAB
+static void op_h_exp2048_heap(void)  { esp_mpi_soft_heapcopy = 1; op_exp_2048(); }
+static void op_h_exp2048_stack(void) { esp_mpi_soft_heapcopy = 0; op_exp_2048(); }
+static void op_h_exp4096_heap(void)  { esp_mpi_soft_heapcopy = 1; op_exp_4096(); }
+static void op_h_exp4096_stack(void) { esp_mpi_soft_heapcopy = 0; op_exp_4096(); }
+#endif
 
 #if SPIKE_WIPEAB
 static void op_exp2048_nowipe(void) { esp_mpi_soft_wipe = 0; op_exp_2048(); }
@@ -427,6 +468,14 @@ static const bench_t BENCHES[] = {
     {"mpi_mul_hw", 448, op_x_hw_6}, {"mpi_mul_sw", 448, op_x_sw_6},
     {"mpi_mul_hw", 480, op_x_hw_7}, {"mpi_mul_sw", 480, op_x_sw_7},
     {"mpi_mul_hw", 512, op_x_hw_8}, {"mpi_mul_sw", 512, op_x_sw_8},
+#endif
+#if SPIKE_HEAPAB
+    {"hb_ecdsa_p256_heap", 256, op_h_ecdsa_heap},   {"hb_ecdsa_p256_stack", 256, op_h_ecdsa_stack},
+    {"hb_ecdsa_p384_heap", 384, op_h_ecdsa384_heap},{"hb_ecdsa_p384_stack", 384, op_h_ecdsa384_stack},
+    {"hb_exp_2048_heap", 2048, op_h_exp2048_heap},  {"hb_exp_2048_stack", 2048, op_h_exp2048_stack},
+    {"hb_exp_4096_heap", 4096, op_h_exp4096_heap},  {"hb_exp_4096_stack", 4096, op_h_exp4096_stack},
+    {"hb_ecdsa_p256_heap2", 256, op_h_ecdsa_heap},  {"hb_ecdsa_p256_stack2", 256, op_h_ecdsa_stack},
+    {"hb_exp_2048_heap2", 2048, op_h_exp2048_heap}, {"hb_exp_2048_stack2", 2048, op_h_exp2048_stack},
 #endif
 #if SPIKE_WIPEAB
     // Interleaved, and each pair repeated, so a thermal or scheduler drift over

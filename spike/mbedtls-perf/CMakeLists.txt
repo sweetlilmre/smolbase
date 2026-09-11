@@ -98,4 +98,10 @@ if(SPIKE_WIPEAB)
   idf_build_set_property(COMPILE_DEFINITIONS "SPIKE_WIPEAB=1" APPEND)
 endif()
 
+# -D SPIKE_HEAPAB=1 pairs a heap-copy arm with a stack-copy arm, chosen at run
+# time, to re-measure what the stack copy actually buys. Needs fix-heapab.
+if(SPIKE_HEAPAB)
+  idf_build_set_property(COMPILE_DEFINITIONS "SPIKE_HEAPAB=1" APPEND)
+endif()
+
 project(mbedtls_perf)

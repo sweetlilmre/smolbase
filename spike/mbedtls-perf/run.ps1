@@ -62,6 +62,7 @@ function Get-BoardKey { param([string]$Tag) if ($Tag -match '-s3-') { 'esp32s3' 
 # the tree back -- see the header of sdk_variant.ps1 for why this is not optional.
 function Get-WantedSdkVariant {
     param([string]$Tag)
+    if ($Tag -match '-fix-heapab') { return 'fix-heapab' }
     if ($Tag -match '-fix-stackcopy-ab') { return 'fix-stackcopy-ab' }
     if ($Tag -match '-fix-stackcopy-count') { return 'fix-stackcopy-count' }
     if ($Tag -match '-fix-stackcopy-wipe') { return 'fix-stackcopy-wipe' }
