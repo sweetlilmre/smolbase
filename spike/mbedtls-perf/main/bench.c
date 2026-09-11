@@ -71,6 +71,8 @@
 // cost it implies (11.13 us) disagrees with the four ECC benchmarks in the same
 // table (2.76-3.00 us). This settles it or retires it.
 extern volatile int esp_mpi_soft_heapcopy;
+extern uint32_t esp_mpi_soft_copy_count;
+extern uint32_t esp_mpi_soft_copy_words;
 #endif
 #if SPIKE_WIPEAB
 // The wipe A/B. Both arms are in THIS binary and are chosen by a runtime flag,
@@ -723,6 +725,10 @@ static void run_bench(const bench_t *b)
     esp_mpi_soft_wipe_cycles = 0;
     esp_mpi_soft_wipe_words = 0;
 #endif
+#if SPIKE_HEAPAB
+    esp_mpi_soft_copy_count = 0;
+    esp_mpi_soft_copy_words = 0;
+#endif
 
     int64_t best = INT64_MAX, worst = 0, total = 0;
     for (int rep = 0; rep < REPS; rep++) {
@@ -749,7 +755,7 @@ static void run_bench(const bench_t *b)
     printf("[bench] name=%s bits=%u iters=%d reps=%d "
            "min_ns=%lld mean_ns=%lld max_ns=%lld "
            "mul_calls_per_op=%lld mul_ns_per_op=%lld "
-           "exp_calls_per_op=%lld exp_ns_per_op=%lld soft_calls_per_op=%lld wipe_cyc_per_op=%lld wipe_words_per_op=%lld rc=%d\n",
+           "exp_calls_per_op=%lld exp_ns_per_op=%lld soft_calls_per_op=%lld wipe_cyc_per_op=%lld wipe_words_per_op=%lld copies_per_op=%lld copy_words_per_op=%lld rc=%d\n",
            b->name, b->bits, iters, REPS,
            (long long)per_op_ns(best, iters),
            (long long)(total * 1000 / ops),
@@ -766,6 +772,12 @@ static void run_bench(const bench_t *b)
 #if SPIKE_WIPEAB
            (long long)((int64_t)esp_mpi_soft_wipe_cycles * 1000 / ops),
            (long long)((int64_t)esp_mpi_soft_wipe_words * 1000 / ops),
+#else
+           (long long)-1, (long long)-1,
+#endif
+#if SPIKE_HEAPAB
+           (long long)((int64_t)esp_mpi_soft_copy_count * 1000 / ops),
+           (long long)((int64_t)esp_mpi_soft_copy_words * 1000 / ops),
 #else
            (long long)-1, (long long)-1,
 #endif

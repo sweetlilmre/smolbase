@@ -184,6 +184,8 @@ function Parse-Run {
                 exp_calls_per_op = [math]::Round([double]$f['exp_calls_per_op'] / 1000, 3)
                 exp_us_per_op    = [math]::Round([double]$f['exp_ns_per_op'] / 1000, 3)
                 soft_calls_per_op = if ($f.ContainsKey('soft_calls_per_op')) { [math]::Round([double]$f['soft_calls_per_op'] / 1000, 3) } else { '' }
+                copies_per_op    = if ($f.ContainsKey('copies_per_op')) { [math]::Round([double]$f['copies_per_op'] / 1000, 3) } else { '' }
+                copy_words_per_op = if ($f.ContainsKey('copy_words_per_op')) { [math]::Round([double]$f['copy_words_per_op'] / 1000, 3) } else { '' }
                 rc               = $f['rc']
             }
         }

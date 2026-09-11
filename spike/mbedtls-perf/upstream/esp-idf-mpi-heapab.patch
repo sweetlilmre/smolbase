@@ -1,5 +1,5 @@
 diff --git a/components/mbedtls/port/bignum/esp_bignum.c b/components/mbedtls/port/bignum/esp_bignum.c
-index 50b60bdd..97d36d18 100644
+index 50b60bdd..a707d6a1 100644
 --- a/components/mbedtls/port/bignum/esp_bignum.c
 +++ b/components/mbedtls/port/bignum/esp_bignum.c
 @@ -32,6 +32,10 @@
@@ -65,7 +65,7 @@ index 50b60bdd..97d36d18 100644
      /* Grow Z to result size early, avoid interim allocations */
      MBEDTLS_MPI_CHK( mbedtls_mpi_grow(Z, z_words) );
  
-@@ -559,6 +601,102 @@ cleanup:
+@@ -559,6 +601,116 @@ cleanup:
      return ret;
  }
  
@@ -91,6 +91,12 @@ index 50b60bdd..97d36d18 100644
 +   is not evidence. Both arms wipe -- mbedtls_mpi_free() zeroizes, so the heap
 +   arm always did -- which keeps the comparison honest. */
 +volatile int esp_mpi_soft_heapcopy;
++/* Copies actually performed, and the limbs in them. A copy happens only when
++   the result aliases an operand, so this is NOT the call count: reconciling
++   the ECC and RSA per-call costs needs the per-COPY cost, and deriving the
++   copy count from the words-wiped data was an inference. This counts it. */
++uint32_t esp_mpi_soft_copy_count;
++uint32_t esp_mpi_soft_copy_words;
 +
 +static int mpi_mult_mpi_soft(mbedtls_mpi *Z, const mbedtls_mpi *X, const mbedtls_mpi *Y)
 +{
@@ -123,19 +129,27 @@ index 50b60bdd..97d36d18 100644
 +        if (Z == X) {
 +            if ((ret = mbedtls_mpi_copy(&HX, X)) != 0) { goto done; }
 +            xp = HX.MBEDTLS_PRIVATE(p);
++            esp_mpi_soft_copy_count++;
++            esp_mpi_soft_copy_words += i;
 +        }
 +        if (Z == Y) {
 +            if ((ret = mbedtls_mpi_copy(&HY, Y)) != 0) { goto done; }
 +            yp = HY.MBEDTLS_PRIVATE(p);
++            esp_mpi_soft_copy_count++;
++            esp_mpi_soft_copy_words += j;
 +        }
 +    } else {
 +        if (Z == X) {
 +            memcpy(tx, xp, i * sizeof(mbedtls_mpi_uint));
 +            xp = tx;
++            esp_mpi_soft_copy_count++;
++            esp_mpi_soft_copy_words += i;
 +        }
 +        if (Z == Y) {
 +            memcpy(ty, yp, j * sizeof(mbedtls_mpi_uint));
 +            yp = ty;
++            esp_mpi_soft_copy_count++;
++            esp_mpi_soft_copy_words += j;
 +        }
 +    }
 +
