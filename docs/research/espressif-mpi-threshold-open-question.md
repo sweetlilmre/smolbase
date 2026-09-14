@@ -383,3 +383,96 @@ Refitting the same three constants on the ESP32 mul-step data alone — using on
 And the constant that matters — the cost of a leftover limb relative to an unrolled one — comes out at **1.43× on the ESP32 and 1.46× on the ESP32-S3** from two entirely independent fits on two different parts. The mechanism is settled.
 
 **It also produced a false crossover, which is the practical warning.** The S3 clean-tree cell shows software winning at every size except 480 bits, where the tooth lifts it just above the hardware curve. A sweep that stops at the first size where hardware wins would report ~464–480 there and call it the crossover — and the reviewer's S3-at-240 figure of 508 sits exactly where a tooth-driven answer would land. `run.ps1`'s crossover summary now checks whether software wins again above the first sign change and says "that flip is a TOOTH, not a crossing" when it does.
+
+## Carried forward from the review correspondence (2026-09-14)
+
+The reply drafts that carried these points have been deleted from the repository; the findings in them are recorded here, which is where they belonged in the first place. The PR thread itself is the record of what was sent.
+
+## How the threshold is actually applied, and why 385 rather than 384
+
+The routing test is in `mbedtls_mpi_mul_mpi()`:
+
+```c
+size_t x_bits = mbedtls_mpi_bitlen(X);
+size_t y_bits = mbedtls_mpi_bitlen(Y);
+...
+if (MAX(x_bits, y_bits) < SOC_MPI_HW_MIN_BIT_LEN) {
+    return mpi_mult_mpi_soft(Z, X, Y);
+}
+```
+
+Three properties follow, and all three matter when choosing the constant.
+
+**It compares against `MAX(bitlen(X), bitlen(Y))`** — the larger of the two operands.
+
+**`bitlen` is a property of the value, not of the type.** It is the position of the highest set bit of the number actually held. Not the allocated limb count, not the curve size. A P-384 field element holding the value 5 has `bitlen` 3 and routes to software whatever the threshold is.
+
+**The test is strictly less than.** So a threshold of 385 means "larger operand of 384 bits or fewer goes to software". 385 is the smallest value that puts every P-384 field element on the software side; at 384, an operand whose top bit sits at position 384 goes to hardware while one at 383 goes to software.
+
+Because the test is per value, "P-384 goes to software" is statistical rather than exact. `p384` is just under 2^384, so a uniformly distributed field element has `bitlen` 384 about half the time, 383 a quarter of the time, and so on. The chance of falling below 374 — the reviewer's ESP32 value — is under 2^-10, so **roughly 99.9% of P-384 operands land on whichever side 384 does.** Treating it as binary is a fair description of what happens.
+
+The same reasoning explains an otherwise puzzling measurement: the copies inside an RSA-2048 `exp_mod` are **two words, 64 bits**. Those are not 2048-bit operands. They are small intermediates of the modular arithmetic whose `bitlen` happens to be tiny, so they route to software and reach `mpi_mult_mpi_soft()` — which is why a 2048-bit operation touches the soft path 142 times and copies on nearly every one.
+
+Note also that the port already carried an **upper** bound before this work, at the same call site: `if (hw_words * 32 > SOC_RSA_MAX_BIT_LEN/2)` falls back for operands too large for the peripheral. The new constant is the matching lower bound.
+
+## The CT change is not uniform across architectures
+
+[Mbed-TLS/TF-PSA-Crypto#873](https://github.com/Mbed-TLS/TF-PSA-Crypto/pull/873) is three patches, and only two of them are generic:
+
+| patch | file | scope |
+|---|---|---|
+| `0001` force inlining, the `-Os` loss | `constant_time_impl.h` | no arch guard — **generic** |
+| `0002` assembly path | `constant_time_impl.h` | `__XTENSA__` — **Xtensa only** |
+| `0003` `_if_else_0` | `bignum_core.c` | no arch guard — **generic** |
+
+So the ESP32, ESP32-S2 and ESP32-S3 receive all three. The RISC-V parts receive the two generic patches only. **Our +5% crossover shift was measured on an ESP32 with all three and must not be extrapolated to RISC-V.**
+
+**The `S` prefix does not imply Xtensa.** The S2 and S3 are Xtensa; the **ESP32-S31 is a dual-core RISC-V part**. Classify by architecture, not by name.
+
+## Choosing a constant that survives the CT change
+
+The CT change moves the ESP32 crossover from 383 bits to 402. The only operand size between those is 384, so **any threshold from 385 to 512 classifies every size that occurs identically before and after it** — 256 and 384 for elliptic curves, 512, and RSA's 1024 and above.
+
+The choice at 384 is asymmetric, measured on the ESP32 at 240 MHz:
+
+| threshold | 384 goes to | without the CT change | after it |
+|---|---|---|---|
+| 384 or less | hardware | 0.4% better | **7.8% worse** |
+| 385 or more | software | 0.4% worse | **7.8% better** |
+
+Paying 0.4% now to avoid 7.8% later is the easy side of that trade, and P-384 is not hypothetical — it is GitHub's root.
+
+Applied to the reviewer's whole table, using for each part the clock whose crossover is **nearest 384**, because that is the hardest case for the claim:
+
+| target | arch | clock | value | with 0–5% more | 384 goes to | distance from 384 | closest after CT |
+|---|---|---|---|---|---|---|---|
+| esp32 | Xtensa | 240 MHz | 374 | 374–393 | **changes side** | 10 | 0 |
+| esp32s2 | Xtensa | 240 MHz | 325 | 325–341 | hardware | 59 | 43 |
+| esp32s3 | Xtensa | 160 MHz | 399 | 399–419 | software | 15 | 15 |
+| esp32c3 | RISC-V | 160 MHz | 269 | 269–282 | hardware | 115 | 102 |
+| esp32c5 | RISC-V | 160 MHz | 356 | 356–374 | hardware | 28 | 10 |
+| esp32c6 | RISC-V | 160 MHz | 389 | 389–408 | software | 5 | 5 |
+| esp32s31 | RISC-V | 240 MHz | 556 | 556–584 | software | 172 | 172 |
+| esp32h2 | RISC-V | 64 MHz | 346 | 346–363 | hardware | 38 | 21 |
+| esp32p4 | RISC-V | 400 MHz | 603 | 603–633 | software | 219 | 219 |
+
+**Only the esp32 row changes side for any shift between 0% and 5%**, so the argument holds without knowing the RISC-V figure.
+
+The last two columns are different risks and should not be conflated. *Distance from 384* is how near the measured value is, so how much error in the measurement would flip 384. *Closest after CT* is how near the 0–5% band comes, so whether the CT change alone can flip it. The **C6 has 5 bits** of the former and the **C5 has 28** (10 at the top of its band); for both, the risk is the measurement rather than the CT change, and both would be worth re-measuring.
+
+Every operand size that occurs is a whole number of 32-bit limbs — 256, 384, 512 — so no other operand size falls in these gaps. Only 384 is at stake.
+
+## The sawtooth does not need code
+
+The peaks at 15 limbs (480 bits) and 23 limbs (736 bits) do not create several crossovers. They create **one false sign change** if a sweep goes upward and stops at the first size where hardware wins. The remedy is to measure at the operand sizes that occur rather than to sweep; nothing in the port needs to change. The reviewer's ESP32-S3 value at 240 MHz (508) sits close to where such a sweep would stop on the 480-bit peak.
+
+## Prior art
+
+[espressif/esp-idf#8710](https://github.com/espressif/esp-idf/issues/8710) reports the same symptom — a TLS client tripping the task watchdog, fixed by disabling hardware MPI — with no measurement and no mechanism, and it is closed. No report was found that quantifies it or identifies the cache component, but that was a keyword search, so treat "not reported" as weak.
+
+## What is still not established
+
+- **The cache component is measured on the ESP32 (LX6) only.** An S3 was available for other parts of this work, but the flash-clock test was never run on it. The RISC-V parts are untested.
+- **No profiling of which code evicts what.** The conclusion rests on the flash-clock test and on the tight-loop-versus-in-situ split, not on cache performance counters.
+- **Everything here is `-Os`.** `-O2` was tried early and made TLS *slower*, which is consistent with the same mechanism, but it was not investigated.
+- **The ESP32-S3 stack-copy figure was never re-measured within a binary.** Only the ESP32 was.
