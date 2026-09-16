@@ -1,0 +1,13 @@
+# Kconfig-override validation for the #19027 per-target threshold work.
+# Identical to sdkconfig.defaults except for the one line under test, so the
+# two cells differ only in CONFIG_MBEDTLS_MPI_HW_MIN_BIT_LEN.
+#
+#   kc0   - 0 means "use the built-in per-target value", which on an ESP32 at
+#           240 MHz is 512. P-256 and P-384 operands route to SOFTWARE.
+#   kc256 - 256 makes the routing test MAX(x,y) < 256, so 256-bit and 384-bit
+#           operands are NOT below it and go to the HARDWARE unit instead.
+#
+# The gap between those two is around 50% on an ECDSA P-256 verify, which is far
+# larger than the code-layout effect that invalidates cross-build comparisons on
+# this chip. That is the point: it is a signal no layout artefact can fake.
+CONFIG_MBEDTLS_MPI_HW_MIN_BIT_LEN=0

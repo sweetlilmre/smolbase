@@ -1,0 +1,110 @@
+I (104) esp_image: segment 2: paddr=0001d1dc vaddr=40374000 sizeESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x15 (USB_UART_CHIP_RESET),boot:0x8 (SPI_FAST_FLASH_BOOT)
+Saved PC:0x403787a6
+SPIWP:0xee
+mode:DIO, clock div:2
+load:0x3fce2820,len:0x14f0
+load:0x403c8700,len:0xda0
+load:0x403cb700,len:0x2f54
+entry 0x403c8908
+I (27) boot: ESP-IDF v6.0.2-dirty 2nd stage bootloader
+I (27) boot: compile time Sep 15 2026 18:20:29
+I (27) boot: Multicore bootloader
+I (28) boot: chip revision: v0.2
+I (31) boot: efuse block revision: v1.4
+I (34) boot.esp32s3: Boot SPI Speed : 40MHz
+I (38) boot.esp32s3: SPI Mode       : DIO
+I (42) boot.esp32s3: SPI Flash Size : 8MB
+I (45) boot: Enabling RNG early entropy source...
+I (50) boot: Partition Table:
+I (53) boot: ## Label            Usage          Type ST Offset   Length
+I (59) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (65) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (72) boot:  2 factory          factory app      00 00 00010000 00100000
+I (78) boot: End of partition table
+I (82) esp_image: segment 0: paddr=00010020 vaddr=3c020020 size=0a29ch ( 41628) map
+I (100) esp_image: segment 1: paddr=0001a2c4 vaddr=3fc8ed00 size=02f10h ( 12048) load
+I (104) esp_image: segment 2: paddr=0001d1dc vaddr=40374000 size=02e3ch ( 11836) load
+I (108) esp_image: segment 3: paddr=00020020 vaddr=42000020 size=16500h ( 91392) map
+I (135) esp_image: segment 4: paddr=00036528 vaddr=40376e3c size=07de8h ( 32232) load
+I (145) esp_image: segment 5: paddr=0003e318 vaddr=50000000 size=00024h (    36) load
+I (150) boot: Loaded app from partition at offset 0x10000
+I (150) boot: Disabling RNG early entropy source...
+I (163) cpu_start: Multicore app
+I (171) cpu_start: GPIO 44 and 43 are used as console UART I/O pins
+I (172) cpu_start: Pro cpu start user code
+I (172) cpu_start: cpu freq: 80000000 Hz
+I (173) app_init: Application information:
+I (177) app_init: Project name:     mbedtls_perf
+I (182) app_init: App version:      v0.3.3-110-gc32d08f-dirty
+I (187) app_init: Compile time:     Sep 15 2026 18:19:27
+I (192) app_init: ELF file SHA256:  8b0aac973...
+I (196) app_init: ESP-IDF:          v6.0.2-dirty
+I (201) efuse_init: Min chip rev:     v0.0
+I (205) efuse_init: Max chip rev:     v0.99 
+I (208) efuse_init: Chip rev:         v0.2
+I (212) heap_init: Initializing. RAM available for dynamic allocation:
+I (219) heap_init: At 3FC928C0 len 00056E50 (347 KiB): RAM
+I (224) heap_init: At 3FCE9710 len 00005724 (21 KiB): RAM
+I (229) heap_init: At 3FCF0000 len 00008000 (32 KiB): DRAM
+I (234) heap_init: At 600FE000 len 00001FE8 (7 KiB): RTCRAM
+I (241) spi_flash: detected chip: generic
+I (243) spi_flash: flash io: dio
+W (246) spi_flash: Detected size(16384k) larger than the size in the binary image header(8192k). Using the size in the binary image header.
+I (259) sleep_gpio: Configure to isolate all GPIO pins in sleep state
+I (265) sleep_gpio: Enable automatic switching of GPIO sleep configuration
+I (272) main_task: Started on CPU0
+I (272) main_task: Calling app_main()
+I (282) main_task: Returned from app_main()
+
+[id] mbedtls=4.1.0 idf=v6.0.2-dirty target=esp32s3 hw_mul=1 hw_exp=1 fixed_point=0 wrap=0 cpu_mhz=80 cpu_mhz_rt=80 mpi_min_bits=0 opt=mbedtls-Os core=1 free_internal=377872
+[vec] d=C9AFA9D845BA75166B5C215767B1D6934E50C3DB36E89B127B8A622B120F6721
+[vec] sig_r=EFD48B2AACB6A8FD1140DD9CD45E81D69D2C877B56AAF991C34D0EA84EAF3716
+[vec] sig_s=F7CB1C942D657C41D436C7A1B6E29F65F3E900DBB9AFF4064DC4AB2F843ACDA8
+[vec] sig384_r=ABCCC2AE1048B40BFA4E9F251FCA293F993B591897D5C85703F8883868BC7530182739F0C625F77E7F4073F91906759F
+[vec] sig384_s=553C1A04BDC6DE6E164EA7C09C1E2D8FB4A35F1773CAF82FBED80E7F1B7BF15B09F6B1C6AA4FEECCDCAA0C0924B7EF61
+E (5282) task_wdt: Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:
+E (5282) task_wdt:  - IDLE1 (CPU 1)
+E (5282) task_wdt: Tasks currently running:
+E (5282) task_wdt: CPU 0: IDLE0
+E (5282) task_wdt: CPU 1: bench
+E (5282) task_wdt: Print CPU 1 backtrace
+
+
+Backtrace: 0x4037701E:0x3FC905D0 0x403769B7:0x3FC905F0 0x4200D5CB:0x3FC9BD40 0x4200BB91:0x3FC9BD80 0x4200BF04:0x3FC9BDA0 0x4200CB88:0x3FC9BDD0 0x4200CCF6:0x3FC9BE80 0x4200CD21:0x3FC9BEB0 0x4200B9B7:0x3FC9BF20 0x4200BA2E:0x3FC9BFA0 0x42007969:0x3FC9BFD0 0x42007E28:0x3FC9BFF0
+
+[bench] name=ecdsa_verify_p256 bits=256 iters=1 reps=5 min_ns=852139000 mean_ns=852218600 max_ns=852307000 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[ok] no-wrap control build: hooks are not linked, so every call count and mul_ns_per_op below reads zero by construction. Timings here carry no instrumentation.
+[bench] name=ecp_mul_p256 bits=256 iters=1 reps=5 min_ns=392317000 mean_ns=392396800 max_ns=392475000 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=ecdsa_verify_p384 bits=384 iters=1 reps=5 min_ns=1597765000 mean_ns=1597833600 max_ns=1597868000 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=ecp_mul_p384 bits=384 iters=1 reps=5 min_ns=727131000 mean_ns=727151200 max_ns=727181000 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_inv_mod_p256 bits=256 iters=6 reps=5 min_ns=32078166 mean_ns=32078400 max_ns=32079333 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_mul bits=256 iters=1470 reps=5 min_ns=38701 mean_ns=38703 max_ns=38712 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_mul bits=384 iters=2272 reps=5 min_ns=44146 mean_ns=44149 max_ns=44150 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_mul bits=512 iters=2439 reps=5 min_ns=50420 mean_ns=50422 max_ns=50422 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_mul bits=1024 iters=1754 reps=5 min_ns=83347 mean_ns=83347 max_ns=83350 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_mul bits=2048 iters=896 reps=5 min_ns=187830 mean_ns=187833 max_ns=187847 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_mul bits=4096 iters=168 reps=5 min_ns=1113476 mean_ns=1113547 max_ns=1113565 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_mul_hooked bits=256 iters=2380 reps=5 min_ns=71166 mean_ns=71168 max_ns=71173 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_exp_mod_e65537 bits=2048 iters=4 reps=5 min_ns=43826750 mean_ns=43828700 max_ns=43836500 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_exp_mod_e65537 bits=4096 iters=1 reps=5 min_ns=155279000 mean_ns=155293000 max_ns=155349000 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_mul_hw bits=256 iters=3125 reps=5 min_ns=40907 mean_ns=40909 max_ns=40915 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_mul_sw bits=256 iters=2105 reps=5 min_ns=25035 mean_ns=25035 max_ns=25036 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_mul_hw bits=288 iters=3125 reps=5 min_ns=41887 mean_ns=41887 max_ns=41888 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_mul_sw bits=288 iters=5882 reps=5 min_ns=29967 mean_ns=29967 max_ns=29967 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_mul_hw bits=320 iters=3389 reps=5 min_ns=42857 mean_ns=42857 max_ns=42858 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_mul_sw bits=320 iters=5000 reps=5 min_ns=35437 mean_ns=35437 max_ns=35437 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_mul_hw bits=352 iters=4000 reps=5 min_ns=44050 mean_ns=44050 max_ns=44051 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_mul_sw bits=352 iters=4444 reps=5 min_ns=41371 mean_ns=41371 max_ns=41371 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_mul_hw bits=384 iters=3636 reps=5 min_ns=45244 mean_ns=45245 max_ns=45248 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_mul_sw bits=384 iters=3921 reps=5 min_ns=47843 mean_ns=47844 max_ns=47844 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_mul_hw bits=416 iters=3846 reps=5 min_ns=46436 mean_ns=46436 max_ns=46439 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_mul_sw bits=416 iters=3389 reps=5 min_ns=54778 mean_ns=54778 max_ns=54778 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_mul_hw bits=448 iters=3703 reps=5 min_ns=47617 mean_ns=47617 max_ns=47617 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_mul_sw bits=448 iters=3076 reps=5 min_ns=62252 mean_ns=62252 max_ns=62252 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_mul_hw bits=480 iters=3703 reps=5 min_ns=49016 mean_ns=49019 max_ns=49020 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_mul_sw bits=480 iters=2702 reps=5 min_ns=70186 mean_ns=70187 max_ns=70191 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_mul_hw bits=512 iters=3571 reps=5 min_ns=50422 mean_ns=50423 max_ns=50424 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[bench] name=mpi_mul_sw bits=512 iters=2777 reps=5 min_ns=69249 mean_ns=69249 max_ns=69249 mul_calls_per_op=0 mul_ns_per_op=0 exp_calls_per_op=0 exp_ns_per_op=0 soft_calls_per_op=-1 wipe_cyc_per_op=-1 wipe_words_per_op=-1 copies_per_op=-1 copy_words_per_op=-1 rc=0
+[done] free_internal=373952
