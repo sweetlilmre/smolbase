@@ -46,11 +46,20 @@ else()
   idf_build_set_property(LINK_OPTIONS "-Wl,--wrap=mbedtls_mpi_exp_mod" APPEND)
 endif()
 
-# -D SPIKE_MPI_THRESHOLD=<bits> overrides SOC_MPI_HW_MIN_BIT_LEN across the whole
+# -D SPIKE_MPI_THRESHOLD=<bits> overrides the routing threshold across the whole
 # build, the SDK's own esp_bignum.c included -- its definition of that constant is
 # #ifndef-guarded precisely so it can be overridden. A build property, not a
 # component one, because the constant has to reach the mbedtls component and not
 # just this app.
+#
+# BOTH names are defined on purpose. The spike applies upstream/*.patch, which is
+# the PR branch, where the constant is still SOC_MPI_HW_MIN_BIT_LEN. The firmware
+# build additionally applies patches/esp-idf-mpi-kconfig-threshold.patch, which
+# renames it to ESP_MPI_HW_MIN_BIT_LEN. Defining only one of them would leave the
+# other unread the moment that patch reaches the spike's variants, and the failure
+# is silent: every crossover cell would quietly measure the default instead of the
+# threshold it was asked for. Defining a macro nothing reads is harmless; the
+# reverse is not.
 #
 # The crossover cells pass 0: with the routing threshold at zero every multiply
 # reaches the peripheral, which gives the hardware column, while main/bench.c
@@ -58,6 +67,7 @@ endif()
 # curves, no layout difference between them.
 if(DEFINED SPIKE_MPI_THRESHOLD)
   idf_build_set_property(COMPILE_DEFINITIONS "SOC_MPI_HW_MIN_BIT_LEN=${SPIKE_MPI_THRESHOLD}" APPEND)
+  idf_build_set_property(COMPILE_DEFINITIONS "ESP_MPI_HW_MIN_BIT_LEN=${SPIKE_MPI_THRESHOLD}" APPEND)
   idf_build_set_property(COMPILE_DEFINITIONS "SPIKE_MPI_THRESHOLD=${SPIKE_MPI_THRESHOLD}" APPEND)
 endif()
 

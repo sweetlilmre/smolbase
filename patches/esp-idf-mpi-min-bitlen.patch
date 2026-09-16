@@ -1,21 +1,17 @@
-diff --git a/components/mbedtls/CMakeLists.txt b/components/mbedtls/CMakeLists.txt
-index 6d5c3143..6662d75a 100644
---- a/components/mbedtls/CMakeLists.txt
-+++ b/components/mbedtls/CMakeLists.txt
-@@ -426,6 +426,11 @@ endif()
- if(CONFIG_MBEDTLS_HARDWARE_MPI)
-     target_sources(tfpsacrypto PRIVATE  "${COMPONENT_DIR}/port/bignum/esp_bignum.c"
-                                        "${COMPONENT_DIR}/port/bignum/bignum_alt.c")
-+    # esp_bignum.c falls back to mbedtls_mpi_core_mul() for operands below the
-+    # hardware unit's crossover size, and that is declared in a library-private
-+    # header.
-+    target_include_directories(tfpsacrypto PRIVATE
-+        "${COMPONENT_DIR}/mbedtls/tf-psa-crypto/drivers/builtin/src")
- endif()
- 
- if(CONFIG_MBEDTLS_HARDWARE_GCM OR CONFIG_MBEDTLS_HARDWARE_AES)
+Route multiplies below the hardware unit's crossover size to software.
+
+espressif/esp-idf#19027, commit 26338f54 on the PR branch.
+Regenerated from that commit; `git apply` ignores text before the first "diff --git".
+
+Earlier revisions of this file also carried a components/mbedtls/CMakeLists.txt
+hunk adding a private include directory. The PR branch does not have it and it
+turned out to be unnecessary, so it is gone and the series no longer needs a
+--include filter to suppress it.
+
+Verified to apply cleanly to a pristine esp-idf v6.0.2 tree.
+
 diff --git a/components/mbedtls/port/bignum/esp_bignum.c b/components/mbedtls/port/bignum/esp_bignum.c
-index 50b60bdd..a8a51dab 100644
+index 42392c6e..8242ca5c 100644
 --- a/components/mbedtls/port/bignum/esp_bignum.c
 +++ b/components/mbedtls/port/bignum/esp_bignum.c
 @@ -32,6 +32,8 @@
@@ -27,7 +23,7 @@ index 50b60bdd..a8a51dab 100644
  
  #include "hal/mpi_hal.h"
  
-@@ -483,6 +485,31 @@ int mbedtls_mpi_exp_mod( mbedtls_mpi *X, const mbedtls_mpi *A,
+@@ -506,6 +508,31 @@ int mbedtls_mpi_exp_mod( mbedtls_mpi *X, const mbedtls_mpi *A,
  
  static int mpi_mult_mpi_failover_mod_mult( mbedtls_mpi *Z, const mbedtls_mpi *X, const mbedtls_mpi *Y, size_t z_words);
  static int mpi_mult_mpi_overlong(mbedtls_mpi *Z, const mbedtls_mpi *X, const mbedtls_mpi *Y, size_t y_words, size_t z_words);
@@ -59,7 +55,7 @@ index 50b60bdd..a8a51dab 100644
  
  /* Z = X * Y */
  int mbedtls_mpi_mul_mpi( mbedtls_mpi *Z, const mbedtls_mpi *X, const mbedtls_mpi *Y )
-@@ -516,6 +543,19 @@ int mbedtls_mpi_mul_mpi( mbedtls_mpi *Z, const mbedtls_mpi *X, const mbedtls_mpi
+@@ -539,6 +566,19 @@ int mbedtls_mpi_mul_mpi( mbedtls_mpi *Z, const mbedtls_mpi *X, const mbedtls_mpi
          return ret;
      }
  
@@ -79,7 +75,7 @@ index 50b60bdd..a8a51dab 100644
      /* Grow Z to result size early, avoid interim allocations */
      MBEDTLS_MPI_CHK( mbedtls_mpi_grow(Z, z_words) );
  
-@@ -559,6 +599,66 @@ cleanup:
+@@ -582,6 +622,66 @@ cleanup:
      return ret;
  }
  

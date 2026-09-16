@@ -140,8 +140,9 @@ elseif ($Set -eq 'fix-stackcopy-count') {
     $applied += 'esp-idf-mpi-softcount.patch (combined)'
 }
 elseif ($Set -ne 'stock') {
-    # --include: the patch file also carries a CMakeLists hunk that the PR branch
-    # does not have, exactly as cmake/upstream_patches.cmake does it.
+    # --include is belt and braces now: the patch is generated from the PR branch
+    # and touches this file only. It also keeps the variant patches, which are
+    # spike-only, from ever reaching anything else in the SDK tree.
     git -C $idf apply -p1 --include=$rel $thresholdPatch
     if ($LASTEXITCODE -ne 0) { throw "failed to apply $thresholdPatch" }
     $applied += 'esp-idf-mpi-min-bitlen.patch'

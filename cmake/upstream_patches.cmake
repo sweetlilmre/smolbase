@@ -99,14 +99,16 @@ sb_apply_series(${SB_MBEDTLS_REPO}
   ${SB_PATCHES}/0003-bignum_core-use-_if_else_0-where-the-zero-branch-is-.patch)
 
 # espressif/esp-idf#19027 - the MPI lower-size threshold, plus the stack-copy
-# change its review asked for on 2026-09-04. A SERIES, not two independent
-# patches: both edit mpi_mult_mpi_soft(), so once the second is in the first no
-# longer reverse-applies and a per-patch check would misfire into the FATAL.
+# change its review asked for on 2026-09-04. A SERIES, not independent patches:
+# they all edit mpi_mult_mpi_soft(), so once a later one is in the earlier ones
+# no longer reverse-apply and a per-patch check would misfire into the FATAL.
 #
-# Only the esp_bignum.c hunk of the first: that patch file also carries a
-# CMakeLists include-path hunk that turned out to be unnecessary (the PR branch
-# does not have it). The second patch touches nothing else, so the same
-# --include is harmless there and keeps the series flags uniform.
+# All four are generated from the PR branch, so there is no longer a stray
+# CMakeLists include-path hunk to filter out and the series takes no --include.
+# The FOURTH patch is deliberately not on the PR: it renames the constant to
+# ESP_MPI_HW_MIN_BIT_LEN, gives it a per-target/per-clock value, and adds the
+# CONFIG_MBEDTLS_MPI_HW_MIN_BIT_LEN override. It touches Kconfig as well as the
+# port source. See patches/esp-idf-mpi-kconfig-threshold.patch.
 #
 # The THIRD patch wipes those stack copies before returning. The heap MPIs the
 # second patch replaced were zeroized by mbedtls_mpi_free(), and P-256 field
@@ -139,7 +141,8 @@ sb_apply_series(${SB_MBEDTLS_REPO}
 # to -5.77%. Without this patch the threshold patch is a net loss for RSA.
 # See docs/research/espressif-mpi-threshold-open-question.md.
 sb_apply_series($ENV{IDF_PATH}
-  --include=components/mbedtls/port/bignum/esp_bignum.c -p1
+  -p1
   ${SB_PATCHES}/esp-idf-mpi-min-bitlen.patch
   ${SB_PATCHES}/esp-idf-mpi-stack-copy.patch
-  ${SB_PATCHES}/esp-idf-mpi-zeroize-copy.patch)
+  ${SB_PATCHES}/esp-idf-mpi-zeroize-copy.patch
+  ${SB_PATCHES}/esp-idf-mpi-kconfig-threshold.patch)

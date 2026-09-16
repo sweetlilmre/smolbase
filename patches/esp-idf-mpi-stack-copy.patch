@@ -1,16 +1,17 @@
-Stack-copy change requested in the espressif/esp-idf#19027 review.
+Copy the aliased MPI operand on the stack, not the heap.
 
-Provenance: attached by @Ashish285 on 2026-09-04 in
+Change requested in the espressif/esp-idf#19027 review: attached by @Ashish285
+on 2026-09-04 in
 https://github.com/espressif/esp-idf/pull/19027#issuecomment-5534987755
-downloaded from https://github.com/user-attachments/files/31817102/pr19027_stack_copy.patch
-Unmodified below this header; `git apply` ignores text before the first "diff --git".
+Regenerated from commit c0bb1df5 on the PR branch, which is that patch as it was
+actually committed; `git apply` ignores text before the first "diff --git".
 
 Applies ON TOP OF esp-idf-mpi-min-bitlen.patch, not instead of it. Verified to
-apply cleanly against esp-idf v6.0.2 with that patch in. See the "#19027 review
-run" section of ../README.md for what it changes, why, and what measures it.
+apply cleanly to esp-idf v6.0.2 with that patch in. See the "#19027 review run"
+section of ../README.md for what it changes, why, and what measures it.
 
 diff --git a/components/mbedtls/port/bignum/esp_bignum.c b/components/mbedtls/port/bignum/esp_bignum.c
-index 8242ca5cf51..12725057443 100644
+index 8242ca5c..12725057 100644
 --- a/components/mbedtls/port/bignum/esp_bignum.c
 +++ b/components/mbedtls/port/bignum/esp_bignum.c
 @@ -622,6 +622,10 @@ cleanup:

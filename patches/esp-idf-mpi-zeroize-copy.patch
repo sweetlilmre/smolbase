@@ -1,3 +1,15 @@
+Wipe the small-operand stack copies before returning.
+
+Reported by Cursor Bugbot on espressif/esp-idf#19027, 2026-09-08: the heap MPIs
+that esp-idf-mpi-stack-copy.patch replaced were zeroized by mbedtls_mpi_free(),
+and P-256 field multiplies reach this path, so those limbs are secret-dependent.
+Regenerated from commit 05b269ea on the PR branch; `git apply` ignores text
+before the first "diff --git".
+
+Applies ON TOP OF esp-idf-mpi-stack-copy.patch. Verified to apply cleanly to
+esp-idf v6.0.2 with the two patches before it in. Measured cost is at most ~1%;
+see cmake/upstream_patches.cmake for the figures and how they were taken.
+
 diff --git a/components/mbedtls/port/bignum/esp_bignum.c b/components/mbedtls/port/bignum/esp_bignum.c
 index 12725057..bad29f7a 100644
 --- a/components/mbedtls/port/bignum/esp_bignum.c
