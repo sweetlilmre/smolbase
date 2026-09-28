@@ -1,10 +1,9 @@
 Give the threshold a per-target value and a Kconfig override, and rename it.
 
-NOT YET MERGED. Generated from commit 456a2913 on the espressif/esp-idf#19027
-branch, which carries the changes an independent review asked for on
-2026-09-15. The three patches before it are the PR as it stood before that.
+NOT YET MERGED. Generated from commit 59357e17 on the espressif/esp-idf#19027
+branch. The three patches before it are the rest of that PR.
 
-Four changes, which belong together because the rename touches every use:
+Five changes, which belong together because the rename touches every use:
 
   - SOC_MPI_HW_MIN_BIT_LEN becomes ESP_MPI_HW_MIN_BIT_LEN. A SOC_ symbol
     describes the silicon and lives in soc_caps.h; this depends on the silicon
@@ -13,8 +12,13 @@ Four changes, which belong together because the rename touches every use:
     targets with published or locally measured crossovers. Unlisted targets keep
     512.
   - CONFIG_MBEDTLS_MPI_HW_MIN_BIT_LEN, a new Kconfig int defaulting to 0, wins
-    over the table when set above zero. Bounded by SOC_RSA_MAX_BIT_LEN, because
-    the constant also sizes two stack buffers in the software multiply.
+    over the table when set above zero.
+  - That value is capped at 1024, with a build assert enforcing the same bound
+    per target. Above roughly a third of SOC_RSA_MAX_BIT_LEN the software path
+    becomes reachable from mpi_mult_mpi_overlong(), which passes a slice that
+    borrows the limb array of an operand the result may alias; the aliasing
+    guard compares mbedtls_mpi pointers and cannot see that overlap. Raised by
+    @Ashish285 on the PR, 2026-09-23.
   - x_words, y_words, z_words and hw_words move below the routing test. They are
     only used on the hardware path, so the HAL call and three divisions were
     being thrown away on every small multiply.
@@ -24,17 +28,17 @@ components/mbedtls/Kconfig as well as the port source. Verified to apply cleanly
 to esp-idf v6.0.2 with the three patches before it in.
 
 diff --git a/components/mbedtls/Kconfig b/components/mbedtls/Kconfig
-index bb132145..ba130c02 100644
+index bb132145..c632a364 100644
 --- a/components/mbedtls/Kconfig
 +++ b/components/mbedtls/Kconfig
-@@ -1392,6 +1392,34 @@ menu "mbedTLS"
+@@ -1392,6 +1392,40 @@ menu "mbedTLS"
  
                  These operations are used by RSA.
  
 +        config MBEDTLS_MPI_HW_MIN_BIT_LEN
 +            int "Smallest operand the MPI accelerator is used for (bits)"
 +            depends on MBEDTLS_HARDWARE_MPI
-+            range 0 SOC_RSA_MAX_BIT_LEN
++            range 0 1024
 +            default 0
 +            help
 +                A multiplication whose larger operand is smaller than this is
@@ -59,11 +63,17 @@ index bb132145..ba130c02 100644
 +                one word per 32 bits, so a large value costs stack on every
 +                call.
 +
++                The upper bound is not about stack. Above roughly a third of
++                SOC_RSA_MAX_BIT_LEN the software path becomes reachable from
++                mpi_mult_mpi_overlong(), which passes a slice that borrows the
++                limb array of an operand the result may alias. A build assert in
++                esp_bignum.c enforces the same bound per target.
++
          config MBEDTLS_LARGE_KEY_SOFTWARE_MPI
              bool "Fallback to software implementation for larger MPI values"
              depends on MBEDTLS_HARDWARE_MPI
 diff --git a/components/mbedtls/port/bignum/esp_bignum.c b/components/mbedtls/port/bignum/esp_bignum.c
-index bad29f7a..4519199e 100644
+index bad29f7a..f097485c 100644
 --- a/components/mbedtls/port/bignum/esp_bignum.c
 +++ b/components/mbedtls/port/bignum/esp_bignum.c
 @@ -532,20 +532,113 @@ static int mpi_mult_mpi_soft(mbedtls_mpi *Z, const mbedtls_mpi *X, const mbedtls
@@ -135,15 +145,15 @@ index bad29f7a..4519199e 100644
 +#define ESP_MPI_HW_MIN_BIT_LEN 256
 +#else
 +#define ESP_MPI_HW_MIN_BIT_LEN 384
-+#endif
-+
+ #endif
+ 
 +#elif defined(CONFIG_IDF_TARGET_ESP32C5)        /* RISC-V */
 +#if CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ <= 160
 +#define ESP_MPI_HW_MIN_BIT_LEN 384
 +#else
 +#define ESP_MPI_HW_MIN_BIT_LEN 512
- #endif
- 
++#endif
++
 +#elif defined(CONFIG_IDF_TARGET_ESP32C6)        /* RISC-V */
 +#if CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ <= 120
 +#define ESP_MPI_HW_MIN_BIT_LEN 384
@@ -206,23 +216,42 @@ index bad29f7a..4519199e 100644
      /* Grow Z to result size early, avoid interim allocations */
      MBEDTLS_MPI_CHK( mbedtls_mpi_grow(Z, z_words) );
  
-@@ -625,10 +726,12 @@ cleanup:
+@@ -625,10 +726,30 @@ cleanup:
  }
  
  /* Largest operand this path can see. The caller only routes here below
 -   SOC_MPI_HW_MIN_BIT_LEN bits, which bounds the stack copies below. */
 -#define MPI_SOFT_MAX_WORDS  ((SOC_MPI_HW_MIN_BIT_LEN + 31) / 32)
+-
+-/* Software multiply, for operands below SOC_MPI_HW_MIN_BIT_LEN.
 +   ESP_MPI_HW_MIN_BIT_LEN bits, which bounds the stack copies below.
 +   BITS_TO_LIMBS() comes from bignum_core.h, included above, and is the
 +   library's own rounding-up in units of mbedtls_mpi_uint. */
 +#define MPI_SOFT_MAX_WORDS  BITS_TO_LIMBS(ESP_MPI_HW_MIN_BIT_LEN)
- 
--/* Software multiply, for operands below SOC_MPI_HW_MIN_BIT_LEN.
++
++/* mpi_mult_mpi_overlong() slices its longer operand in place: Yp and Ypp are
++   mbedtls_mpi values whose p borrows Y's limb array, and it then calls back in
++   with the caller's Z, which may alias Y. This function's aliasing guard
++   compares mbedtls_mpi POINTERS, so it cannot see that overlap -- a slice is a
++   different object sharing the same limbs -- and mbedtls_mpi_lset(Z, 0) below
++   would destroy the operand before it is read. The hardware path is immune,
++   because it loads both operands into the peripheral first.
++
++   The threshold keeps that unreachable: overlong is only entered when the two
++   operands together exceed SOC_RSA_MAX_BIT_LEN, and it halves the longer one,
++   so the recursive call stays on the hardware path as long as the threshold is
++   below about a third of SOC_RSA_MAX_BIT_LEN. Kconfig caps the value at 1024,
++   which satisfies this on every target; the assert catches a header or a table
++   entry that sets it some other way. */
++_Static_assert(3 * MPI_SOFT_MAX_WORDS <= SOC_RSA_MAX_BIT_LEN / 32,
++               "ESP_MPI_HW_MIN_BIT_LEN too large: the software multiply becomes "
++               "reachable from mpi_mult_mpi_overlong() with Z aliasing Y");
++
 +/* Software multiply, for operands below ESP_MPI_HW_MIN_BIT_LEN.
  
     MBEDTLS_MPI_MUL_MPI_ALT compiles the library's own mbedtls_mpi_mul_mpi()
     out entirely, and unlike exp_mod -- which has MBEDTLS_MPI_EXP_MOD_ALT_FALLBACK
-@@ -680,6 +783,11 @@ static int mpi_mult_mpi_soft(mbedtls_mpi *Z, const mbedtls_mpi *X, const mbedtls
+@@ -680,6 +801,11 @@ static int mpi_mult_mpi_soft(mbedtls_mpi *Z, const mbedtls_mpi *X, const mbedtls
          ret = mbedtls_mpi_lset(Z, 0);
      }
  
@@ -234,7 +263,7 @@ index bad29f7a..4519199e 100644
      if (ret == 0 && i > 0 && j > 0) {
          mbedtls_mpi_core_mul(Z->MBEDTLS_PRIVATE(p), xp, i, yp, j);
      }
-@@ -701,8 +809,8 @@ static int mpi_mult_mpi_soft(mbedtls_mpi *Z, const mbedtls_mpi *X, const mbedtls
+@@ -701,8 +827,8 @@ static int mpi_mult_mpi_soft(mbedtls_mpi *Z, const mbedtls_mpi *X, const mbedtls
          return ret;
      }
  

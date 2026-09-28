@@ -55,7 +55,8 @@ Tee build output to `build\smolbase.log` whichever App you are building — a hu
 
 - **The dev device is back**: `10.0.0.32`, COM5 re-enumerated (the 2026-08-28 outage was transient). It runs the shipped-config firmware.
 - **COM5 is shared between the firmware and the perf spike, and the spike wins by default.** Flashing a spike cell or the mbedTLS unit-test app erases the firmware, its partition table and its NVS. Restoring it is a full serial flash of `build/smolbase`; on 2026-09-16 the NVS survived and no re-provision was needed, but that is luck, not design. **Check what the board is actually running before trusting a measurement from it.**
-- **A second board is on COM9**: a user-supplied ESP32-S3 (LX7, MAC `28:84:85:8d:31:b4`), used for the S3 crossover measurement and left running the perf harness. This is NOT the Waveshare "xiaozhi" board (MAC `e0:72:a1:f8:99:00`), which is not ours — identify by MAC read-only (`python -m esptool --port COMx --no-stub chip-id`) before flashing anything on an unfamiliar port.
+- **There are two ESP32-S3 boards on the bench, and BOTH are now ours (changed 2026-09-28).** MAC `28:84:85:8d:31:b4` is the one used for the S3 crossover measurements; the Waveshare "xiaozhi" board, MAC `e0:72:a1:f8:99:00`, used to be someone else's and is now in use here too. Earlier revisions of this note said the xiaozhi was off limits — that is no longer true, and the warning misfired once on 2026-09-28.
+- **COM numbers move between sessions.** COM9 and COM5 have both vanished and re-appeared as other numbers. Identify by MAC read-only (`python -m esptool --port COMx --before default-reset --after no-reset read-mac`) rather than trusting a remembered port; it is cheap, and a wrong port is a flash onto unknown hardware.
 
 ## CI — it runs now, and what it taught
 
@@ -153,6 +154,7 @@ This is the biggest change to how the project can be worked on. Previously the b
 - **Decode a backtrace:** `xtensa-esp32-elf-addr2line -pfiaC -e build/smolbase/smolbase.elf <addrs>`. This located the TLS cost.
 - **Poor man's profiler:** lower `CONFIG_ESP_TASK_WDT_TIMEOUT_S` to 1 temporarily and the watchdog samples the stack repeatedly through a slow operation.
 - **Force a code path without disturbing state:** a temporary `if (true)` in `Net::begin()` gave AP mode without clearing the user's credentials.
+- **On an ESP32-S3 reached through its native USB-Serial/JTAG port, output works but INPUT does not.** The console is UART0 primary with USB-Serial/JTAG secondary, so `printf` reaches the port while UART0 RX has nothing attached. Anything that reads stdin — notably `unity_run_menu()` in the IDF test apps — will sit there forever and look like a dead board. Either install the `usb_serial_jtag` driver for RX, or side-step it: replacing `unity_run_menu()` with `unity_run_tests_by_tag("[bignum]", false)` makes the tests run at boot and print with no input at all. **Reach for `idf.py monitor` after the second failed capture, not the fifth** — a hand-rolled `SerialPort` loop that works on the CP2102N is not evidence about this port.
 
 **But read the serial correctly.** A default `System.IO.Ports.SerialPort` drops bytes during the boot burst and produces plausible-but-wrong text — including a mangled IP address, which reads exactly like a firmware bug:
 
