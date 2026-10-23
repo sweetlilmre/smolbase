@@ -34,3 +34,10 @@ components/lovyangfx/upstream/
 
 # Assembled from html/ by scripts/pack_fs.py, one per App.
 data-*/
+
+# Perf-spike measurement output: captured serial transcripts and the CSV
+# collated from them. Regenerable by re-running spike/mbedtls-perf/run.ps1,
+# and the conclusions drawn from them live in docs/research/. Kept on disk,
+# deliberately out of the branch -- it was ~755 KB, about 70% of everything
+# this branch added.
+spike/mbedtls-perf/results/

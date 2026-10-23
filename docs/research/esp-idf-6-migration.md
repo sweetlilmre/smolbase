@@ -23,7 +23,7 @@ Not a preference — a constraint. arduino-esp32 3.x is built on ESP-IDF 5.x, an
 | Gain | Detail |
 |---|---|
 | **ADR 0005 dies** | `custom_sdkconfig` hybrid compile → plain `sdkconfig.defaults`. No ~15 min IDF-lib rebuild on every build-config change, no `idf-hybrid-v1` CI cache key to bust, no "must run `pio` from PowerShell because `idf_tools.py` refuses git-bash" footgun. |
-| **Heap headroom** | **Measured, and weaker than this row originally claimed.** The spike's like-for-like gain over the Arduino `smolbase` env is roughly **10 KB** (see `spike/idf6/README.md` for the arithmetic — the raw +36.5 KB delta is mostly a static-buffer difference, not a framework saving). Dropping the Arduino core does remove `String`/`Print`/`Stream`, the Arduino event-loop plumbing, `HardwareSerial` and the `WiFi`/`Network` object graph, but on this evidence the recovery is single-digit-KB, not transformative. Treat heap as a minor argument, not a headline. (The "96 KB free / 37 KB TLS floor" figure quoted earlier is the *weatherclock* env; the device measured here runs `smolbase` at 133 560 bytes free.) |
+| **Heap headroom** | **Measured, and weaker than this row originally claimed.** The spike's like-for-like gain over the Arduino `smolbase` env is roughly **10 KB** (see `spike/idf6/README.md` in history for the arithmetic; that spike was absorbed and deleted on 2026-08-30 — the raw +36.5 KB delta is mostly a static-buffer difference, not a framework saving). Dropping the Arduino core does remove `String`/`Print`/`Stream`, the Arduino event-loop plumbing, `HardwareSerial` and the `WiFi`/`Network` object graph, but on this evidence the recovery is single-digit-KB, not transformative. Treat heap as a minor argument, not a headline. (The "96 KB free / 37 KB TLS floor" figure quoted earlier is the *weatherclock* env; the device measured here runs `smolbase` at 133 560 bytes free.) |
 | **Full Kconfig reach** | mbedTLS ciphersuite/curve trimming, lwIP socket and buffer tuning, `CONFIG_COMPILER_OPTIMIZATION_SIZE`, per-component log levels, task stack sizing. Today most of these are either baked into the precompiled libs or reachable only through the hybrid rebuild. |
 | **No single-maintainer fork in the critical path** | The platform pin is a community fork's release ZIP. Native IDF is upstream Espressif. |
 | **Better tooling** | IDF emits `compile_commands.json` natively for the real build, which should end the "IDE diagnostics are noise, `pio run` is the arbiter" situation. `idf.py size-components` / `size-files` give real per-component footprint numbers we currently cannot get. |
@@ -202,7 +202,7 @@ Done 2026-08-22 against primary sources: the ESP-IDF v6.0.2 programming guide an
 
 ### Hardware results (run 1, 2026-08-22)
 
-The spike built clean on IDF 6.0.2 and was flashed OTA to the live device. Full table and caveats in [`spike/idf6/README.md`](../../spike/idf6/README.md). **11 of 12 checks passed, but one of those passes was false and it is the one that matters most.**
+The spike built clean on IDF 6.0.2 and was flashed OTA to the live device. Full table and caveats were in `spike/idf6/README.md`, which was absorbed and deleted on 2026-08-30 -- recover it from history if the detail is needed. **11 of 12 checks passed, but one of those passes was false and it is the one that matters most.**
 
 Confirmed on hardware:
 

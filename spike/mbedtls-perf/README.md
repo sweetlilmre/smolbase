@@ -80,13 +80,13 @@ Nothing in this directory records which variant a build used, because the patche
 ./sdk_variant.ps1 -Verify                 # what is in the tree right now
 ./sdk_variant.ps1 -Set fix                # threshold patch only, heap copy
 ./sdk_variant.ps1 -Set fix-stackcopy      # + the reviewer's patch
-./sdk_variant.ps1 -Set fix-stackcopy-wipe # + the zeroize fix (what the firmware ships)
+./sdk_variant.ps1 -Set fix-stackcopy-wipe # + the zeroize fix (3 of the firmware's 4)
 ./sdk_variant.ps1 -Set stock              # pristine v6.0.2
 ```
 
-`run.ps1` calls it from the tag immediately before the flash — which is the moment that matters, because flashing rebuilds — and then reads the tree back and asserts. It also reads the chip id read-only and refuses to flash a board whose MAC is not the one the tag expects, because the ESP32-S3 shares its bench with a Waveshare board that is not ours.
+`run.ps1` calls it from the tag immediately before the flash — which is the moment that matters, because flashing rebuilds — and then reads the tree back and asserts. It also reads the chip id read-only and refuses to flash a board whose MAC is not the one the tag expects. Both ESP32-S3 boards on the bench are ours as of 2026-09-28, but the MAC check earns its keep anyway: COM numbers move between sessions, so a remembered port is not an identification.
 
-**Leaving the tree in anything but `fix-stackcopy-wipe` will make the next smolbase build fail loudly**, because `cmake/upstream_patches.cmake` FATALs when its series neither applies nor reverse-applies. That is the design working. `sdk_variant.ps1 -Set fix-stackcopy-wipe` puts it back — the firmware ships all three patches.
+**Leave the tree in `stock` when you are done** — `./sdk_variant.ps1 -Set stock`. The firmware ships FOUR patches and this script applies only the first three, so every variant it can produce, `fix-stackcopy-wipe` included, leaves the series partially applied: the first patch no longer applies and the last does not reverse-apply, which is exactly the state `cmake/upstream_patches.cmake` FATALs on. That is the design working, but it means there is no variant you can leave behind. From `stock` the first patch applies cleanly and cmake lays down all four.
 
 ### Two things to read the patch for, before the numbers
 
@@ -175,8 +175,8 @@ idf{5,6}-mpi-{on,off}-nowrap.args the four uninstrumented controls
 run.ps1                   flash, capture, collate
 
 sdk_variant.ps1           put $IDF_PATH's esp_bignum.c into one known state
-upstream/esp-idf-mpi-min-bitlen.patch     the #19027 patch itself
-upstream/esp-idf-mpi-stack-copy.patch   the stack copy asked for in its review
+../../patches/esp-idf-mpi-min-bitlen.patch   the #19027 patch itself
+../../patches/esp-idf-mpi-stack-copy.patch   the stack copy asked for in its review
 idf6[-s3]-mpi-on-fix[-stackcopy].args   the four stack-copy cells
 sdkconfig.cpu{80,160}     CPU frequency, for the crossover-vs-frequency sweep
 idf6[-s3]-xover-{80,160,240}.args       the six crossover cells

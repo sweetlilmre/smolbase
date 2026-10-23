@@ -18,15 +18,15 @@
 #
 # Variants:
 #   stock          v6.0.2 as shipped: every multiply goes to the RSA peripheral.
-#   fix            + upstream/esp-idf-mpi-min-bitlen.patch (espressif/esp-idf#19027):
+#   fix            + patches/esp-idf-mpi-min-bitlen.patch (espressif/esp-idf#19027):
 #                  sub-threshold multiplies route to software, which copies an
 #                  aliased operand into a HEAP mbedtls_mpi.
-#   fix-stackcopy  + upstream/esp-idf-mpi-stack-copy.patch, the change asked for in
+#   fix-stackcopy  + patches/esp-idf-mpi-stack-copy.patch, the change asked for in
 #                  the #19027 review on 2026-09-04: the same copy onto the STACK,
 #                  bounded by the routing threshold.
 #
 #   fix-stackcopy-wipe
-#                  + upstream/esp-idf-mpi-zeroize-copy.patch, which wipes those
+#                  + patches/esp-idf-mpi-zeroize-copy.patch, which wipes those
 #                  stack copies. Pushed 2026-09-08, reverted 2026-09-09 on a
 #                  cross-build measurement that was wrong, reapplied 2026-09-10
 #                  after measuring it within one binary at 0.22-1.05%. This is
@@ -68,9 +68,16 @@ $rel = 'components/mbedtls/port/bignum/esp_bignum.c'
 $abs = Join-Path $idf $rel
 if (-not (Test-Path $abs)) { throw "no $rel under IDF_PATH ($idf)" }
 
-$thresholdPatch = Join-Path $PSScriptRoot 'upstream/esp-idf-mpi-min-bitlen.patch'
-$stackCopyPatch = Join-Path $PSScriptRoot 'upstream/esp-idf-mpi-stack-copy.patch'
-$zeroizePatch   = Join-Path $PSScriptRoot 'upstream/esp-idf-mpi-zeroize-copy.patch'
+# The #19027 patches live in the repo's own patches/ directory, for the same
+# reason the #873 series below does: the firmware build applies them from there
+# via cmake/upstream_patches.cmake, and a second copy under upstream/ had to be
+# hand-synced every time they were regenerated. One source of truth.
+# NOTE the spike applies only the first three. patches/esp-idf-mpi-kconfig-threshold.patch
+# renames the constant, and the variant detector and SPIKE_MPI_THRESHOLD here
+# are written against the pre-rename name.
+$thresholdPatch = Join-Path $PSScriptRoot '../../patches/esp-idf-mpi-min-bitlen.patch'
+$stackCopyPatch = Join-Path $PSScriptRoot '../../patches/esp-idf-mpi-stack-copy.patch'
+$zeroizePatch   = Join-Path $PSScriptRoot '../../patches/esp-idf-mpi-zeroize-copy.patch'
 # Self-contained (min-bitlen + stack copy + an entry counter), applied to a
 # pristine file rather than stacked, because it is a diagnostic and not a
 # candidate for upstream.
