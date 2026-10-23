@@ -1,0 +1,8 @@
+# Line endings. core.autocrlf is false on this bench, so without this file
+# whatever endings a tool happens to write are what land in history -- which is
+# how the repo drifted to ~120 CRLF files alongside the rest in LF, and why an
+# editor that rewrites a whole file produces a diff with no content change in it.
+#
+# text=auto lets git detect text and store it with LF; eol=lf also checks it out
+# with LF, so the working tree and the index agree and the drift cannot restart.
+* text=auto eol=lf
