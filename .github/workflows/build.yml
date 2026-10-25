@@ -6,6 +6,19 @@ on:
     tags: ["v*"]
   pull_request:
 
+# Cancel a PR build that a newer push has already obsoleted. Keyed on the ref,
+# not the SHA: a tag push and the branch push that carried the same commit are
+# two runs of the same tree, and keying on SHA would make them cancel each
+# other -- with the loser chosen by a race, which on a release means no release.
+# cancel-in-progress is therefore PR-only; main and tag runs always finish.
+#
+# The tag/branch duplication is left alone deliberately. It costs ~3 minutes a
+# release, and it buys the guarantee that release artifacts are built from the
+# tagged ref rather than inherited from a run that merely shares a SHA.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # One matrix leg per App, because there is no multi-target build any more: the
 # App is a configure-time choice (see CMakeLists.txt). Every App still builds on
 # every push, which is the guarantee `pio run` used to give.
