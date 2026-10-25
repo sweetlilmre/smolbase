@@ -1,7 +1,9 @@
 // See Secrets.h for the contract. Raw IDF nvs API (not Preferences) because
 // the existence map needs namespace enumeration, which Preferences hides.
 #include "Secrets.h"
+#include <cstring>
 #include <nvs.h>
+#include <string>
 #include <vector>
 
 namespace {
@@ -21,22 +23,22 @@ std::vector<Descriptor> descriptors;
 
 namespace Secrets {
 
-String get(const char* key) {
+std::string get(const char* key) {
   nvs_handle_t h;
-  if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return String(""); // namespace not created yet
+  if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return {}; // namespace not created yet
   size_t len = 0;
   if (nvs_get_str(h, key, nullptr, &len) != ESP_OK || len == 0) {
     nvs_close(h);
-    return String("");
+    return {};
   }
   // Short-lived heap buffer (len includes the NUL, capped by NVS at ~4000 B):
   // too big for a task stack, and a static buffer would race between tasks.
   char* buf = (char*)malloc(len);
   if (!buf) {
     nvs_close(h);
-    return String("");
+    return {};
   }
-  String out;
+  std::string out;
   if (nvs_get_str(h, key, buf, &len) == ESP_OK) out = buf;
   nvs_close(h);
   memset(buf, 0, len); // don't leave secret bytes lying around
@@ -44,7 +46,7 @@ String get(const char* key) {
   return out;
 }
 
-bool set(const char* key, const String& v) {
+bool set(const char* key, const std::string& v) {
   nvs_handle_t h;
   if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return false;
   bool ok = nvs_set_str(h, key, v.c_str()) == ESP_OK && nvs_commit(h) == ESP_OK;

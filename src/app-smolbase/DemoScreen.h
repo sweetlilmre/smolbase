@@ -21,12 +21,15 @@ class DemoScreen : public Screen {
   uint32_t nameShownMs = 0; // the "now showing" banner after a switch
   uint32_t colHour = 0xffffff, colMin = 0xffffff, colColon = 0xffffff,
            colHost = 0xffffff, colIp = 0xffffff;
+  // Last frame's cost, split three ways. Written on the main loop, read by
+  // App::statusJson on the httpd task — see the note at the write site.
+  uint32_t lastEffectUs = 0, lastOverlayUs = 0, lastPresentUs = 0;
 
   void applySettings(lgfx::LGFX_Sprite& f);
   void select(int i, lgfx::LGFX_Sprite& f);
   bool calmDue() const;
   void drawIdentity(lgfx::LGFX_Sprite& f);
-  static void shadowString(lgfx::LGFX_Sprite& f, const String& s, int x, int y,
+  static void shadowString(lgfx::LGFX_Sprite& f, const char* s, int x, int y,
                            uint8_t idx);
 
 public:
@@ -49,6 +52,9 @@ public:
   // panel and the settings pages can never disagree about what is on screen.
   void onTap() override;
   void onLongPress() override;
+
+  // Frame timings for the "app" object of GET /api/status, via StockApp.
+  void statusJson(JsonObject out) const;
 };
 
 #endif // SMOLBASE_FRAMEBUFFER == SMOLBASE_FB_PALETTE_8

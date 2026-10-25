@@ -1,0 +1,6 @@
+-B
+build/gcm
+-D
+SMOLBASE_APP=gcm
+-D
+SDKCONFIG=build/gcm/sdkconfig

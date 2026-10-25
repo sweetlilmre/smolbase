@@ -9,8 +9,9 @@
 #include "WeatherData.h"
 #include "../core/ConfigStore.h"
 #include "../core/Net.h"
+#include "../core/Platform.h"
 #include "../core/Secrets.h"
-#include "WeatherDebug.h"
+#include "WeatherStatus.h"
 #include "WeatherKeys.h"
 #include "WxHttp.h"
 #include <ArduinoJson.h>
@@ -27,11 +28,11 @@ constexpr const char* K_GEO_LON  = "wx_lon";
 constexpr const char* K_GEO_NAME = "wx_geo_name";
 constexpr const char* K_GEO_CC   = "wx_geo_cc";
 // Registered keys and their defaults come from WeatherKeys.h (#98).
-String geoTriedFor;
+std::string geoTriedFor;
 // The city value as of the last settings pass: onSettingsChanged compares
 // against this — ONLY a city change refetches (#68 Q4); every other save
 // re-renders from cache with no network traffic.
-String lastCity;
+std::string lastCity;
 
 // ---- cross-task handoff -----------------------------------------------------
 // The fetch task writes `pending` under `ctx.mux` and flips pendingReady;
@@ -50,6 +51,12 @@ struct FetchContext {
     char city[64];     // raw setting value (name or numeric OWM id)
     char key[72];      // OWM key, "" = keyless
     char lat[12], lon[12]; // cached coords, "" = unknown
+    // The geocoder's canonical display name and country code, loaded from the
+    // same cache as lat/lon. Without these a warm cache lost them: K_GEO_NAME
+    // and K_GEO_CC were persisted and never read back, so every cycle that did
+    // not re-geocode (i.e. all of them once the cache is warm, including after
+    // every reboot) drew the city with no country beside it.
+    char name[32], cc[4];
     bool geocode;      // this city value still needs a name→lat/lon attempt
   } args;
   struct Geo {
@@ -76,25 +83,14 @@ std::function<void()> onFetchBegin, onFetchEnd;
 // Fetch diagnostics for /api/debug/weather: last cycle's per-stage HTTP
 // codes (0 = not run, -100 = begin/connect fail, -101 = parse fail), plus
 // the TLS layer's own words for the last failed connect.
-volatile int dbgGeoCode = 0, dbgOwmCode = 0, dbgMeteoCode = 0;
-volatile uint32_t dbgAttempts = 0, dbgSuccesses = 0;
-char dbgLastErr[96] = "";
-
-// Heap trajectory (#77): captures free + largest-block at each fetch stage.
-// Labels are string literals; array fills on first ~4 cycles then stops.
-struct HeapSnap { const char* label; uint32_t free; uint32_t largest; };
-static HeapSnap snaps[20];
-static uint8_t snapCount = 0;
-inline void addSnap(const char* label) {
-  if (snapCount < 20)
-    snaps[snapCount++] = {label, esp_get_free_heap_size(),
-                          (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)};
-}
+volatile int statGeoCode = 0, statOwmCode = 0, statMeteoCode = 0;
+volatile uint32_t statAttempts = 0, statSuccesses = 0;
+char statLastErr[96] = "";
 
 // ---- helpers (task side) ----------------------------------------------------
 
-String urlEncode(const char* s) {
-  String out;
+std::string urlEncode(const char* s) {
+  std::string out;
   for (const char* p = s; *p; ++p) {
     if (isalnum((unsigned char)*p)) out += *p;
     else {
@@ -109,14 +105,14 @@ String urlEncode(const char* s) {
 // Transport + diagnostics shim: WxHttp owns the GET (#96); this records the
 // stage code and, on a failed connect, the transport's words — both for
 // /api/debug/weather.
-bool getJson(const String& url, const JsonDocument& filter, JsonDocument& out,
+bool getJson(const std::string& url, const JsonDocument& filter, JsonDocument& out,
              volatile int& code) {
   WxHttp::Result res = WxHttp::getJson(url, filter, out);
   code = res.code;
   if (res.code < 0 && res.err[0]) {
-    // Under mux (#99): the debug route reads dbgLastErr from core 0.
+    // Under mux (#99): the debug route reads statLastErr from core 0.
     taskENTER_CRITICAL(&ctx.mux);
-    strlcpy(dbgLastErr, res.err, sizeof(dbgLastErr));
+    strlcpy(statLastErr, res.err, sizeof(statLastErr));
     taskEXIT_CRITICAL(&ctx.mux);
   }
   return res.ok;
@@ -148,9 +144,9 @@ bool geocode(const FetchContext::Args& args, FetchContext::Geo& g) {
   filter["results"][0]["name"] = true;
   filter["results"][0]["country_code"] = true;
   JsonDocument doc;
-  String url = String(WxHttp::SCHEME) + "geocoding-api.open-meteo.com/v1/search?name=" +
+  std::string url = std::string(WxHttp::SCHEME) + "geocoding-api.open-meteo.com/v1/search?name=" +
                urlEncode(args.city) + "&count=1&language=en&format=json";
-  if (!getJson(url, filter, doc, dbgGeoCode) || doc["results"][0].isNull()) return false;
+  if (!getJson(url, filter, doc, statGeoCode) || doc["results"][0].isNull()) return false;
   snprintf(g.lat, sizeof(g.lat), "%.4f", doc["results"][0]["latitude"].as<double>());
   snprintf(g.lon, sizeof(g.lon), "%.4f", doc["results"][0]["longitude"].as<double>());
   strlcpy(g.name, doc["results"][0]["name"] | "", sizeof(g.name));
@@ -169,10 +165,10 @@ bool fetchOwm(const FetchContext::Args& args, WeatherData::Reading& r, FetchCont
   filter["name"] = true;
   JsonDocument doc;
   bool byId = isdigit((unsigned char)args.city[0]);
-  String url = String(WxHttp::SCHEME) + "api.openweathermap.org/data/2.5/weather?" +
+  std::string url = std::string(WxHttp::SCHEME) + "api.openweathermap.org/data/2.5/weather?" +
                (byId ? "id=" : "q=") + urlEncode(args.city) +
                "&appid=" + args.key + "&units=metric&lang=en";
-  if (!getJson(url, filter, doc, dbgOwmCode) || doc["main"].isNull()) return false;
+  if (!getJson(url, filter, doc, statOwmCode) || doc["main"].isNull()) return false;
   r.tempC = doc["main"]["temp"] | 0.0f;
   r.tempMinC = doc["main"]["temp_min"] | 0.0f;
   r.tempMaxC = doc["main"]["temp_max"] | 0.0f;
@@ -181,7 +177,15 @@ bool fetchOwm(const FetchContext::Args& args, WeatherData::Reading& r, FetchCont
   r.pressureHpa = doc["main"]["pressure"] | 0;
   r.windMs = doc["wind"]["speed"] | 0.0f;
   strlcpy(r.condition, doc["weather"][0]["main"] | "", sizeof(r.condition));
-  r.iconCode = (uint8_t)String(doc["weather"][0]["icon"] | "01").substring(0, 2).toInt();
+  // OWM icon codes are "<NN><d|n>" — "01d", "10n" — and the sprite table keys on
+  // the two leading digits. This is Arduino's String(..).substring(0,2).toInt():
+  // a non-numeric or short value yields 0, exactly as toInt() did.
+  const char* icon = doc["weather"][0]["icon"] | "01";
+  // Short-circuit: icon[1] is only read once icon[0] is known to be a digit, so
+  // a one-character or empty value cannot run past the terminator.
+  const bool twoDigits =
+      icon[0] >= '0' && icon[0] <= '9' && icon[1] >= '0' && icon[1] <= '9';
+  r.iconCode = twoDigits ? (uint8_t)((icon[0] - '0') * 10 + (icon[1] - '0')) : 0;
   strlcpy(r.city, doc["name"] | args.city, sizeof(r.city));
   strlcpy(r.country, doc["sys"]["country"] | "", sizeof(r.country));
   r.keyless = false;
@@ -208,11 +212,11 @@ bool fetchOpenMeteo(const FetchContext::Args& args, const FetchContext::Geo& geo
   filter["daily"]["temperature_2m_max"][0] = true;
   filter["daily"]["temperature_2m_min"][0] = true;
   JsonDocument doc;
-  String url = String(WxHttp::SCHEME) + "api.open-meteo.com/v1/forecast?latitude=" + lat +
+  std::string url = std::string(WxHttp::SCHEME) + "api.open-meteo.com/v1/forecast?latitude=" + lat +
                "&longitude=" + lon +
                "&current_weather=true&daily=temperature_2m_max,temperature_2m_min,weathercode"
                "&forecast_days=1&timezone=auto";
-  if (!getJson(url, filter, doc, dbgMeteoCode) || doc["current_weather"].isNull()) return false;
+  if (!getJson(url, filter, doc, statMeteoCode) || doc["current_weather"].isNull()) return false;
   r.tempC = doc["current_weather"]["temperature"] | 0.0f;
   r.windMs = (doc["current_weather"]["windspeed"] | 0.0f) / 3.6f; // km/h → m/s
   const WmoMap& m = wmo(doc["current_weather"]["weathercode"] | 0);
@@ -223,8 +227,12 @@ bool fetchOpenMeteo(const FetchContext::Args& args, const FetchContext::Geo& geo
   r.feelsC = 0; // free tier has none — the three zeros are the keyless tell
   r.humidity = 0;
   r.pressureHpa = 0;
-  strlcpy(r.city, geo.fresh ? geo.name : args.city, sizeof(r.city));
-  strlcpy(r.country, geo.fresh ? geo.cc : "", sizeof(r.country));
+  // Fresh geocode wins, then the cache, then the raw setting value.
+  const char* dispName = geo.fresh && geo.name[0] ? geo.name
+                       : (args.name[0] ? args.name : args.city);
+  const char* dispCc = geo.fresh && geo.cc[0] ? geo.cc : args.cc;
+  strlcpy(r.city, dispName, sizeof(r.city));
+  strlcpy(r.country, dispCc, sizeof(r.country));
   r.keyless = true;
   r.valid = true;
   return true;
@@ -233,19 +241,17 @@ bool fetchOpenMeteo(const FetchContext::Args& args, const FetchContext::Geo& geo
 void fetchTaskFn(void*) {
   for (;;) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    addSnap("pre");
-    dbgAttempts = dbgAttempts + 1;
-    dbgGeoCode = 0; dbgOwmCode = 0; dbgMeteoCode = 0; // 0 = stage not run this cycle
+    statAttempts = statAttempts + 1;
+    statGeoCode = 0; statOwmCode = 0; statMeteoCode = 0; // 0 = stage not run this cycle
     WeatherData::Reading r;
     FetchContext::Geo g = {};
-    if (ctx.args.geocode) { geocode(ctx.args, g); addSnap("post-geo"); }
+    if (ctx.args.geocode) geocode(ctx.args, g);
     bool ok = (ctx.args.key[0] && fetchOwm(ctx.args, r, g)) || fetchOpenMeteo(ctx.args, g, r);
-    addSnap("post-fetch");
-    if (ok) dbgSuccesses = dbgSuccesses + 1;
+    if (ok) statSuccesses = statSuccesses + 1;
     // A geocode that never completed (network-level failure: begin/connect,
     // not an HTTP verdict) must not burn the one-attempt-per-city latch —
     // the boot race showed a pre-WiFi cycle latching Durban forever.
-    bool geoRetryable = ctx.args.geocode && dbgGeoCode <= 0 && dbgGeoCode != -101;
+    bool geoRetryable = ctx.args.geocode && statGeoCode <= 0 && statGeoCode != -101;
     taskENTER_CRITICAL(&ctx.mux);
     if (ok) pending = r;
     ctx.geo = g;
@@ -268,7 +274,6 @@ void begin(std::function<void()> fetchBegin, std::function<void()> fetchEnd) {
   // never saw more than ~5 KB used, and every KB parked here is heap the
   // ~49 KB TLS peak (measured: heapMinEver 208 B) cannot use.
   xTaskCreate(fetchTaskFn, "wx_fetch", 10240, nullptr, 1, &fetchTask);
-  addSnap("boot"); // baseline after fonts + sprite allocated, before first fetch
 }
 
 void loop() {
@@ -305,15 +310,15 @@ void loop() {
   // Schedule: honored wx_interval (#68 — fixing SmolTV-Pro's ignored w_i).
   uint32_t intervalMs =
       (uint32_t)ConfigStore::getInt(WxKeys::INTERVAL, WxKeys::DEF_INTERVAL_MIN) * 60000UL;
-  if (!fetchDue && millis() - lastFetchMs >= intervalMs) fetchDue = true;
+  if (!fetchDue && Platform::millis() - lastFetchMs >= intervalMs) fetchDue = true;
   // Never arm without a network: the boot cycle otherwise fires pre-WiFi,
   // fails, and (worse) used to burn the geocode latch on a dead link.
   if (!fetchDue || fetchInFlight || !fetchTask || !Net::isUp()) return;
 
   // Arm the task: all policy reads happen here, on core 1.
-  String city = ConfigStore::getString(WxKeys::CITY, WxKeys::DEF_CITY);
+  std::string city = ConfigStore::getString(WxKeys::CITY, WxKeys::DEF_CITY);
   if (!city.length()) return;
-  String cachedFor = ConfigStore::getString(K_GEO_FOR, "");
+  std::string cachedFor = ConfigStore::getString(K_GEO_FOR, "");
   bool haveCoords = cachedFor == city && ConfigStore::getString(K_GEO_LAT, "").length();
   bool isName = !isdigit((unsigned char)city[0]);
   // One geocode attempt per distinct city value (RAM latch; reboot retries).
@@ -325,13 +330,17 @@ void loop() {
           sizeof(ctx.args.lat));
   strlcpy(ctx.args.lon, haveCoords ? ConfigStore::getString(K_GEO_LON, "").c_str() : "",
           sizeof(ctx.args.lon));
+  strlcpy(ctx.args.name, haveCoords ? ConfigStore::getString(K_GEO_NAME, "").c_str() : "",
+          sizeof(ctx.args.name));
+  strlcpy(ctx.args.cc, haveCoords ? ConfigStore::getString(K_GEO_CC, "").c_str() : "",
+          sizeof(ctx.args.cc));
   // Window opens NOW — same pass, before the notify — so the caller can free
   // RAM ahead of the TLS peak. This covers the interval-driven promotion of
   // fetchDue above, which the old caller-side fetchQueued() check missed (#94).
   if (onFetchBegin) onFetchBegin();
   fetchDue = false;
   fetchInFlight = true;
-  lastFetchMs = millis();
+  lastFetchMs = Platform::millis();
   xTaskNotifyGive(fetchTask);
 }
 
@@ -348,7 +357,7 @@ void onSettingsChanged() {
   // saw, not the geocode cache — so switching back to a cached city still
   // refetches, a re-saved failed geocode gets its fresh attempt, and unit/
   // colour saves never touch the network.
-  String city = ConfigStore::getString(WxKeys::CITY, WxKeys::DEF_CITY);
+  std::string city = ConfigStore::getString(WxKeys::CITY, WxKeys::DEF_CITY);
   if (city != lastCity) {
     lastCity = city;
     geoTriedFor = "";
@@ -358,67 +367,69 @@ void onSettingsChanged() {
 
 } // namespace WeatherData
 
-// ---- debug surface (#99) ------------------------------------------------------
-// Declared in WeatherDebug.h; defined here beside the anonymous-namespace
+// ---- status surface (#99) ------------------------------------------------------
+// Declared in WeatherStatus.h; defined here beside the anonymous-namespace
 // state it reads — a separate TU would force that state into a shared header.
 // This is the ONE consumer allowed off the main loop (httpd task, core 0):
 // the fields the fetch task and main loop write are copied under the fetch
-// mux, then serialized outside it. ConfigStore/Secrets are internally
-// mutex-guarded, the heap probes are atomic, and `snaps` is append-only with
-// a count byte — all safe to read without the mux.
-void WeatherDebug::json(JsonDocument& out) {
+// mux, then serialized outside it. ConfigStore and Secrets are internally
+// mutex-guarded, so those reads need nothing further.
+void WeatherStatus::json(JsonObject out) {
   WeatherData::Reading r;
-  char lastErr[sizeof(dbgLastErr)];
+  char lastErr[sizeof(statLastErr)];
   uint32_t attempts, successes;
   int geoCode, owmCode, meteoCode;
   bool inFlight;
   taskENTER_CRITICAL(&ctx.mux);
   r = current;
-  strlcpy(lastErr, dbgLastErr, sizeof(lastErr));
-  attempts = dbgAttempts;
-  successes = dbgSuccesses;
-  geoCode = dbgGeoCode;
-  owmCode = dbgOwmCode;
-  meteoCode = dbgMeteoCode;
+  strlcpy(lastErr, statLastErr, sizeof(lastErr));
+  attempts = statAttempts;
+  successes = statSuccesses;
+  geoCode = statGeoCode;
+  owmCode = statOwmCode;
+  meteoCode = statMeteoCode;
   inFlight = fetchInFlight;
   taskEXIT_CRITICAL(&ctx.mux);
 
-  out["valid"] = r.valid;
-  out["keyless"] = r.keyless;
-  out["city"] = r.city;
-  out["country"] = r.country;
-  out["condition"] = r.condition;
-  out["iconCode"] = r.iconCode;
-  out["tempC"] = r.tempC;
-  out["humidity"] = r.humidity;
-  out["pressureHpa"] = r.pressureHpa;
-  out["attempts"] = attempts;
-  out["successes"] = successes;
-  out["geoCode"] = geoCode; // 0 not run, -100 connect, -101 parse, else HTTP
-  out["owmCode"] = owmCode;
-  out["meteoCode"] = meteoCode;
-  out["inFlight"] = inFlight;
-  out["keyPresent"] = Secrets::has(WxKeys::OWM_KEY); // presence only, never the value
-  out["cityCfg"] = ConfigStore::getString(WxKeys::CITY, WxKeys::DEF_CITY);
-  out["geoFor"] = ConfigStore::getString(K_GEO_FOR, "");
-  out["lat"] = ConfigStore::getString(K_GEO_LAT, "");
-  out["lon"] = ConfigStore::getString(K_GEO_LON, "");
-  out["msSinceFetch"] = millis() - lastFetchMs;
-  out["lastErr"] = (const char*)lastErr;
-  // The heap trio that diagnosed the TLS OOM (#74) — cheap, keep: min-ever
-  // near zero means a handshake is scraping bottom again (docs/app-weather-memory.md).
-  out["heapFree"] = esp_get_free_heap_size();
-  out["heapLargest"] = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-  out["heapMinEver"] = esp_get_minimum_free_heap_size();
-  // Stack watermark for the fetch task (words * 4 = bytes; min seen across all cycles).
-  if (fetchTask)
-    out["fetchStackFreeB"] = uxTaskGetStackHighWaterMark(fetchTask) * 4;
-  // Heap trajectory: one entry per addSnap() call, fills on the first ~4 fetch cycles.
-  JsonArray sa = out["snaps"].to<JsonArray>();
-  for (int i = 0; i < snapCount; ++i) {
-    JsonObject s = sa.add<JsonObject>();
-    s["l"] = snaps[i].label;
-    s["f"] = snaps[i].free;
-    s["b"] = snaps[i].largest;
+  // Grouped the way the core's /api/status is, by the question each answers:
+  // what is on screen, where it came from, and whether fetching is healthy.
+  JsonObject reading = out["reading"].to<JsonObject>();
+  reading["valid"] = r.valid;
+  reading["keyless"] = r.keyless;
+  reading["city"] = r.city;
+  reading["country"] = r.country;
+  reading["condition"] = r.condition;
+  reading["iconCode"] = r.iconCode;
+  reading["tempC"] = r.tempC;
+  // Only OWM supplies these; the keyless open-meteo path leaves them at 0, and
+  // reporting a hard 0 for "not measured" is how a diagnostic misleads.
+  if (!r.keyless) {
+    reading["humidity"] = r.humidity;
+    reading["pressureHpa"] = r.pressureHpa;
   }
+
+  JsonObject source = out["source"].to<JsonObject>();
+  source["cityCfg"] = ConfigStore::getString(WxKeys::CITY, WxKeys::DEF_CITY);
+  source["geoFor"] = ConfigStore::getString(K_GEO_FOR, "");
+  source["lat"] = ConfigStore::getString(K_GEO_LAT, "");
+  source["lon"] = ConfigStore::getString(K_GEO_LON, "");
+  source["keyPresent"] = Secrets::has(WxKeys::OWM_KEY); // presence only, never the value
+
+  JsonObject fetch = out["fetch"].to<JsonObject>();
+  fetch["attempts"] = attempts;
+  fetch["successes"] = successes;
+  fetch["inFlight"] = inFlight;
+  fetch["msSince"] = Platform::millis() - lastFetchMs;
+  fetch["geoCode"] = geoCode; // 0 not run, -100 connect, -101 parse, else HTTP
+  fetch["owmCode"] = owmCode;
+  fetch["meteoCode"] = meteoCode;
+  fetch["lastErr"] = (const char*)lastErr;
+  // The fetch task's low-water stack, in BYTES: ESP-IDF's
+  // uxTaskGetStackHighWaterMark returns bytes, not the words vanilla FreeRTOS
+  // documents (task.h says so explicitly). The `* 4` that used to be here
+  // overstated the free stack fourfold — the wrong direction for a number whose
+  // whole job is to warn before an overflow. This is the one resource figure
+  // the core cannot report for us; the heap belongs to /api/status's own `heap`
+  // group, on Platform::'s rulers.
+  if (fetchTask) fetch["stackFreeB"] = uxTaskGetStackHighWaterMark(fetchTask);
 }

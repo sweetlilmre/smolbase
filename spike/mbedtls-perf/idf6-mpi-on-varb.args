@@ -1,0 +1,8 @@
+-B
+build/idf6-mpi-on-varb
+-D
+SDKCONFIG=build/idf6-mpi-on-varb/sdkconfig
+-D
+SDKCONFIG_DEFAULTS=sdkconfig.defaults
+-D
+SPIKE_NO_WRAP=1

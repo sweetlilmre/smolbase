@@ -1,5 +1,5 @@
 // See Web.h for the structural registration order. Verified against the
-// pinned PsychicHttp 3.1.2 source (.pio/libdeps/*/PsychicHttp/src):
+// pinned PsychicHttp 3.1.2 source (managed_components/psychichttp/src):
 //  - Static serving auto-falls-back to "<name>.gz" with Content-Encoding: gzip
 //    (PsychicStaticFileHander.cpp — upstream filename typo — _fileExists()).
 //  - ON_AP_FILTER / ON_STA_FILTER are free functions keyed off the netif that
@@ -13,18 +13,23 @@
 //    captive probes want 302, hence the explicit setCode.
 #include "Web.h"
 #include "App.h"
+#include "AppHost.h"
 #include "Clock.h"
 #include "ConfigStore.h"
 #include "Events.h"
+#include "Fs.h"
 #include "Net.h"
 #include "GhUpdate.h"
 #include "Ota.h"
+#include "Platform.h"
 #include "Secrets.h"
+#include "Touch.h"
 #include "smolbase_config.h"
 #include <ArduinoJson.h>
-#include <LittleFS.h>
 #include <PsychicHttp.h>
 #include <nvs_flash.h>
+#include <cstdio>
+#include <cstring>
 
 namespace Web {
 
@@ -77,7 +82,7 @@ font:inherit}progress{width:100%;display:none}.msg{color:#666;min-height:1.2em;f
 <script>
 fetch("/api/status").then(function(r){return r.json()}).then(function(j){
 document.getElementById("st").textContent=j.name+" · "+j.ip+" · fw "+j.fwVersion+
-" · heap "+Math.round(j.heapFree/1024)+" kB free"}).catch(function(){})
+" · heap "+Math.round(j.heap.free/1024)+" kB free"}).catch(function(){})
 function up(fid,bid,pid,mid,target){var b=document.getElementById(bid);
 b.onclick=function(){var f=document.getElementById(fid).files[0],
 m=document.getElementById(mid),p=document.getElementById(pid);
@@ -101,17 +106,41 @@ static PsychicHttpServer httpServer;
 
 PsychicHttpServer& server() { return httpServer; }
 
-static esp_err_t sendJson(PsychicResponse* res, int code, const JsonDocument& doc) {
-  String out;
+esp_err_t sendJson(PsychicResponse* res, int code, const JsonDocument& doc) {
+  std::string out;
   serializeJson(doc, out);
   return res->send(code, "application/json", out.c_str());
 }
 
+// Whether the listener is actually up, so loop() knows when to stop trying.
+// PsychicHttp's start() is idempotent but does not distinguish "was already
+// running" from "just started", and the transition is worth logging once.
+static bool s_running = false;
+static uint32_t s_lastTryMs = 0;
+static constexpr uint32_t kStartRetryMs = 250;
+
 void start() {
-  // Idempotent (start() returns ESP_OK when already running). Called from the
-  // NetworkUp/ApModeEntered handlers — the moments a netif provably has an IP.
-  esp_err_t err = httpServer.start();
-  if (err != ESP_OK) Serial.printf("[web] server start failed: %d\n", (int)err);
+  if (s_running) return;
+  if (httpServer.start() == ESP_OK) {
+    s_running = true;
+    printf("[web] listening on port 80\n");
+  }
+  // Deliberately silent on failure: loop() retries every 250 ms until a netif
+  // is up, and at boot "not yet" is the normal answer for a moment. See Web.h.
+}
+
+void loop() {
+  if (s_running) return;
+  const uint32_t now = Platform::millis();
+  if (s_lastTryMs && now - s_lastTryMs < kStartRetryMs) return;
+  s_lastTryMs = now;
+  // Test the precondition rather than calling start() and reading the failure:
+  // PsychicHttp logs at ERROR level when no netif is up, so polling start()
+  // printed eighteen "Server start failed - no network interface available."
+  // lines on a healthy boot, which is exactly the kind of noise that trains
+  // people to ignore ERROR lines.
+  if (!Net::hasUsableNetif()) return;
+  start();
 }
 
 void begin(App& app) {
@@ -123,19 +152,64 @@ void begin(App& app) {
   // NOTE: no start() here — see Web.h. Routes register fine pre-start.
 
   // --- 1. system API routes ---
+  // The one diagnostic endpoint. Identity stays flat — name/ip/fwVersion are
+  // the contract the portal, the settings page and the embedded recovery page
+  // read, and nesting them would buy nothing. Everything else is grouped by the
+  // question it answers, so a new field lands somewhere obvious instead of
+  // widening a flat bag, and an App's own fields cannot collide with a core one.
   httpServer.on("/api/status", HTTP_GET, [](PsychicRequest*, PsychicResponse* res) {
     JsonDocument doc;
     doc["name"] = Net::deviceName();
-    doc["ip"] = Net::ip().toString();
+    doc["ip"] = Net::ip();
     doc["apMode"] = Net::inApMode();
     doc["fwVersion"] = SMOLBASE_FW_VERSION;
-    doc["uptimeS"] = millis() / 1000;
-    doc["heapFree"] = ESP.getFreeHeap();
+    doc["uptimeS"] = Platform::millis() / 1000;
     doc["timeSynced"] = Clock::isSynced(); // observability for SNTP stalls (#38)
+
+    JsonObject heap = doc["heap"].to<JsonObject>();
+    heap["free"] = Platform::freeHeap();
+    // The 8-bit-accessible figure, which `free` does not show: byte-buffer
+    // allocations (TLS included) can only come from this pool, and it runs
+    // ~52 KB below `free` on this chip. #119 was a failure of THIS number.
+    heap["free8Bit"] = Platform::freeHeap8Bit();
+    // What a TLS handshake actually needs, and the lowest either has ever been
+    // since boot — a transient dip that has already recovered is invisible in
+    // `free` and is exactly what #119 looked like.
+    heap["largestBlock"] = Platform::largestFreeBlock();
+    heap["minFree"] = Platform::minFreeHeap();
+
+    // ADR 0001's contract, made observable. stackFree is the low-water mark of
+    // the 8 KB main.cpp gives the core-1 task; the rest is loop timing — see
+    // AppHost.h for why the whole pass and the App's own slice are both here.
+    JsonObject loop = doc["loop"].to<JsonObject>();
+    loop["stackFree"] = Platform::loopStackFree();
+    loop["passMs"] = AppHost::passLastMs();
+    loop["passMaxMs"] = AppHost::passMaxMs();
+    loop["overruns"] = AppHost::passOverruns();
+    loop["appMs"] = AppHost::appLastMs();
+    loop["appMaxMs"] = AppHost::appMaxMs();
+    loop["budgetMs"] = SMOLBASE_LOOP_BUDGET_MS;
+
+    // For tuning SMOLBASE_TOUCH_DELTA_PCT against real readings.
+    // 0/0 means calibration failed and the pad is inert.
+    JsonObject touch = doc["touch"].to<JsonObject>();
+    touch["baseline"] = Touch::padBaseline();
+    touch["threshold"] = Touch::padThreshold();
+    touch["now"] = Touch::padLast();
+
     if (Net::isUp()) {
-      doc["rssi"] = Net::rssi();
-      doc["ssid"] = Net::ssid(); // which network we're on (#39)
+      JsonObject wifi = doc["wifi"].to<JsonObject>();
+      wifi["rssi"] = Net::rssi();
+      wifi["ssid"] = Net::ssid(); // which network we're on (#39)
     }
+
+    // The App's own diagnostics (App::statusJson). Created unconditionally so
+    // the key is always present and a caller never has to branch; an App that
+    // reports nothing leaves it empty. This is why no App needs its own
+    // debug endpoint.
+    JsonObject app = doc["app"].to<JsonObject>();
+    AppHost::app().statusJson(app);
+
     return sendJson(res, 200, doc);
   });
 
@@ -155,15 +229,15 @@ void begin(App& app) {
   httpServer.on("/api/wifi", HTTP_POST, [](PsychicRequest* req, PsychicResponse* res) {
     JsonDocument doc;
     if (deserializeJson(doc, req->body()) != DeserializationError::Ok ||
-        doc["ssid"].as<String>().isEmpty()) {
+        doc["ssid"].as<std::string>().empty()) {
       return res->send(400, "application/json", "{\"error\":\"expected {ssid,pass}\"}");
     }
-    if (!Net::saveCredentials(doc["ssid"].as<String>(), doc["pass"] | String(""))) {
+    if (!Net::saveCredentials(doc["ssid"].as<std::string>(), doc["pass"].as<std::string>())) {
       return res->send(500, "application/json",
                        "{\"error\":\"failed to store credentials (NVS full?)\"}");
     }
     esp_err_t r = res->send(200, "application/json", "{\"ok\":true,\"restarting\":true}");
-    Net::restartToApply(); // flushes the response, then ESP.restart(); no return
+    Net::restartToApply(); // flushes the response, then Platform::restart(); no return
     return r;
   });
 
@@ -219,7 +293,7 @@ void begin(App& app) {
     for (JsonPairConst kv : doc.as<JsonObjectConst>()) {
       bool ok = kv.value().isNull()
                     ? Secrets::clear(kv.key().c_str())
-                    : Secrets::set(kv.key().c_str(), kv.value().as<String>());
+                    : Secrets::set(kv.key().c_str(), kv.value().as<std::string>());
       if (!ok) {
         return res->send(500, "application/json",
                          "{\"error\":\"secret store write failed (NVS full?)\"}");
@@ -235,7 +309,7 @@ void begin(App& app) {
   // boot (one-time beat). WiFi is still running over the erased partition for
   // the ~200 ms until restart; any writes it attempts just fail silently.
   httpServer.on("/api/factory-reset", HTTP_POST, [](PsychicRequest*, PsychicResponse* res) {
-    LittleFS.remove(SMOLBASE_SETTINGS_PATH);
+    Fs::remove(SMOLBASE_SETTINGS_FSPATH);
     esp_err_t r = res->send(200, "application/json", "{\"ok\":true,\"restarting\":true}");
     nvs_flash_deinit(); // best-effort; open handles just leak into the restart
     nvs_flash_erase();
@@ -249,24 +323,25 @@ void begin(App& app) {
   // gzip-only, so the loop is: gzip the edited file, POST, refresh. This does
   // not replace fs-OTA, which stays the way to ship coherent images.
   {
-    static File fsFile;
-    static String fsPath;
+    static Fs::File fsFile;
+    // One spelling: the volume is mounted at the root, so the request's ?path=
+    // IS the POSIX path (see the SMOLBASE_FS_MOUNT note in smolbase_config.h).
+    static std::string fsPath;
     static bool fsFailed;
     auto* fsUp = new PsychicUploadHandler(); // lives for the server's lifetime
-    fsUp->onUpload([](PsychicRequest* req, const String&, uint64_t index, uint8_t* data,
+    fsUp->onUpload([](PsychicRequest* req, const char*, uint64_t index, uint8_t* data,
                       size_t len, bool last) -> esp_err_t {
       if (index == 0) {
         fsFailed = false;
         PsychicWebParameter* p = req->getParam("path");
-        fsPath = p ? p->value() : String("");
-        if (fsPath.length() < 2 || fsPath[0] != '/' || fsPath.indexOf("..") >= 0) {
+        fsPath = p ? p->value() : "";
+        if (fsPath.length() < 2 || fsPath[0] != '/' ||
+            fsPath.find("..") != std::string::npos) {
           fsFailed = true;
           return ESP_OK; // drain; verdict in onRequest
         }
-        for (int i = 1; (i = fsPath.indexOf('/', i)) > 0; ++i) {
-          LittleFS.mkdir(fsPath.substring(0, i)); // no-op when it exists
-        }
-        fsFile = LittleFS.open("/.upload.tmp", "w");
+        Fs::mkdirParents(fsPath.c_str());
+        fsFile = Fs::File(SMOLBASE_FS_MOUNT "/.upload.tmp", "w");
         if (!fsFile) fsFailed = true;
       }
       if (fsFailed) return ESP_OK;
@@ -277,8 +352,7 @@ void begin(App& app) {
       }
       if (last) {
         fsFile.close();
-        LittleFS.remove(fsPath);
-        if (!LittleFS.rename("/.upload.tmp", fsPath)) fsFailed = true;
+        if (!Fs::replace(SMOLBASE_FS_MOUNT "/.upload.tmp", fsPath.c_str())) fsFailed = true;
       }
       return ESP_OK;
     });
@@ -306,7 +380,7 @@ void begin(App& app) {
   app.registerRoutes(httpServer);
 
   // --- 4. static assets (gzip-only files; PsychicHttp auto-serves name.gz) ---
-  httpServer.serveStatic("/", LittleFS, SMOLBASE_WWW_DIR "/")
+  httpServer.serveStatic("/", SMOLBASE_WWW_DIR "/")
       ->setDefaultFile("index.html")
       ->setCacheControl("max-age=300");
   // AP mode: "/" lands on the provisioning portal (asset ships with ticket
@@ -321,18 +395,24 @@ void begin(App& app) {
   // missing (first flash arrives by OTA and the old filesystem has no smolbase
   // assets), serve the embedded fallback so provisioning is never UI-dead.
   httpServer.onNotFound([](PsychicRequest* req, PsychicResponse* res) -> esp_err_t {
+    // strcmp, not ==: in native mode uri() returns a const char* and == would
+    // compare pointers.
+    const char* uri = req->uri();
     if (Net::inApMode()) {
-      String self = Net::ip().toString();
-      const String& host = req->host();
-      bool selfAddressed = host == self || host.startsWith(self + ":");
+      const std::string self = Net::ip();
+      // In native mode host() returns a const char* backed by a member the next
+      // accessor call reuses — copy it before touching the request again. No
+      // starts_with on gnu++17, so rfind(prefix, 0) is the prefix test.
+      const std::string host = req->host();
+      const bool selfAddressed = host == self || host.rfind(self + ":", 0) == 0;
       if (!selfAddressed) {
         res->setCode(302);
-        return res->redirect((String("http://") + self + "/").c_str());
+        return res->redirect(("http://" + self + "/").c_str());
       }
-      if (req->uri() == "/" || req->uri() == "/portal.html") {
+      if (strcmp(uri, "/") == 0 || strcmp(uri, "/portal.html") == 0) {
         return res->send(200, "text/html", FALLBACK_PORTAL);
       }
-    } else if (req->uri() == "/" || req->uri() == "/settings.html") {
+    } else if (strcmp(uri, "/") == 0 || strcmp(uri, "/settings.html") == 0) {
       // STA mode with the asset missing (wiped/failed filesystem): serve the
       // embedded recovery page so the device is never browser-dead — also for
       // bookmarked settings.html. A *present but broken* asset still serves

@@ -1,0 +1,8 @@
+-B
+build/idf6-mpi-on-fix-stackcopy-wipe-kc0
+-D
+SDKCONFIG=build/idf6-mpi-on-fix-stackcopy-wipe-kc0/sdkconfig
+-D
+SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.kc0
+-D
+SPIKE_NO_WRAP=1

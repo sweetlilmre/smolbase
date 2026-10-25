@@ -1,0 +1,6 @@
+# Fixed-point ECP precomputation tables on. Applied on top of
+# sdkconfig.defaults.
+#
+# Worth 28% with the accelerator off but only 5% with it on, end to end. The two
+# levers interact, so the matrix has to cross them rather than test each alone.
+CONFIG_MBEDTLS_ECP_FIXED_POINT_OPTIM=y

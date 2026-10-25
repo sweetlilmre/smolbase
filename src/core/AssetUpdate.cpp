@@ -5,27 +5,25 @@
 // content integrity via GitHub's per-asset sha256 digest streamed during
 // download (tar header checksums cover headers only).
 #include "AssetUpdate.h"
+#include "Fs.h"
+#include "Http.h"
 #include "smolbase_config.h"
-#include <Arduino.h>
 #include <ArduinoJson.h>
-#include <FS.h>
-#include <HTTPClient.h>
-#include <LittleFS.h>
-#include <NetworkClientSecure.h>
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
-#include <mbedtls/sha256.h>
+#include <psa/crypto.h>
+#include <cstdio>
 
 static const char* const GH_REPO = "sweetlilmre/smolbase";
 
-// Release asset carrying this build's web assets: <prefix>-<tag>.tar.
-// Envs override via build_flags, mirroring SMOLBASE_FW_ASSET_PREFIX.
+// Release asset carrying this build's web assets: <prefix>-<tag>.tar. Apps
+// override it from the root CMakeLists.txt, mirroring SMOLBASE_FW_ASSET_PREFIX.
 #ifndef SMOLBASE_ASSETS_PREFIX
 #define SMOLBASE_ASSETS_PREFIX "smolbase-assets"
 #endif
 
-static const char* const kStagingTar = "/assets.tar";
-static const char* const kWebDir     = "/w";
+static const char* const kStagingTar = SMOLBASE_FS_MOUNT "/assets.tar";
+static const char* const kWebDir     = SMOLBASE_FS_MOUNT "/w";
 
 namespace AssetUpdate {
 
@@ -38,36 +36,23 @@ static void setErr(char* buf, size_t len, const char* fmt, ...) {
 }
 
 static void backupName(char* out, size_t len) {
-  snprintf(out, len, "/w.v%s", SMOLBASE_FW_VERSION);
-}
-
-// Remove a flat directory (files only — /w never holds subdirs) then the dir.
-static bool removeDirRecursive(const char* path) {
-  File dir = LittleFS.open(path);
-  if (!dir || !dir.isDirectory()) { if (dir) dir.close(); return false; }
-  // Collect names first: deleting while iterating trips some FS iterators.
-  String names[24];
-  int n = 0;
-  for (File f = dir.openNextFile(); f && n < 24; f = dir.openNextFile()) {
-    names[n++] = String(f.path());
-    f.close();
-  }
-  dir.close();
-  for (int i = 0; i < n; i++) LittleFS.remove(names[i]);
-  return LittleFS.rmdir(path);
+  snprintf(out, len, SMOLBASE_FS_MOUNT "/w.v%s", SMOLBASE_FW_VERSION);
 }
 
 // Find a "/w.<something>" backup dir at the fs root; returns true and fills
 // out (e.g. "/w.v0.3.2") if one exists.
 static bool findBackupDir(char* out, size_t len) {
-  File root = LittleFS.open("/");
+  Fs::Dir root(SMOLBASE_FS_MOUNT "/");
   if (!root) return false;
   bool found = false;
-  for (File f = root.openNextFile(); f; f = root.openNextFile()) {
-    const char* p = f.path(); // e.g. "/w.v0.3.2"
-    bool isDir = f.isDirectory();
-    f.close();
-    if (isDir && strncmp(p, "/w.", 3) == 0) {
+  Fs::Dir::Entry ent;
+  while (root.next(ent)) {
+    // Match on the BASENAME, not the full path. The volume is mounted at the
+    // root today, so the old strncmp(path, "/w.", 3) would work again — but it
+    // only worked by accident, and a backup that cannot be found never gets
+    // restored, which is the whole point of #122.
+    const char* p = ent.path.c_str(); // e.g. "/w.v0.3.2"
+    if (ent.isDir && strncmp(ent.name.c_str(), "w.", 2) == 0) {
       strlcpy(out, p, len);
       found = true;
       break;
@@ -79,43 +64,34 @@ static bool findBackupDir(char* out, size_t len) {
 
 // ---- GitHub digest lookup -------------------------------------------------
 
-class BundleClient : public NetworkClientSecure {
-public:
-  BundleClient() { attach_ssl_certificate_bundle(sslclient.get(), true); _use_ca_bundle = true; }
-};
 
 bool fetchAssetDigest(const char* tag, char* outHex, size_t outHexLen, char* errBuf, size_t errLen) {
   char assetName[80];
   snprintf(assetName, sizeof(assetName), "%s-%s.tar", SMOLBASE_ASSETS_PREFIX, tag);
 
-  BundleClient tls;
-  HTTPClient http;
-  http.setTimeout(15000);
-  http.setConnectTimeout(10000);
-  http.addHeader("Accept", "application/vnd.github+json");
-  if (!http.begin(tls, String("https://api.github.com/repos/") + GH_REPO + "/releases/tags/" + tag)) {
-    setErr(errBuf, errLen, "digest: begin failed");
-    return false;
-  }
-  int code = http.GET();
-  if (code != HTTP_CODE_OK) {
-    http.end();
-    setErr(errBuf, errLen, "digest: HTTP %d", code);
-    return false;
-  }
   JsonDocument filter;
   filter["assets"][0]["name"]   = true;
   filter["assets"][0]["digest"] = true;
   JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, *http.getStreamPtr(),
-                                             DeserializationOption::Filter(filter));
-  http.end();
-  if (err != DeserializationError::Ok) {
-    setErr(errBuf, errLen, "digest: JSON %s", err.c_str());
+  // Stack buffer: this is the first of two TLS sessions in a self-update, and
+  // heap headroom at the handshake is what fails first (#119).
+  char url[128];
+  snprintf(url, sizeof(url), "https://api.github.com/repos/%s/releases/tags/%s", GH_REPO, tag);
+  const Http::Header hdrs[] = {{"Accept", "application/vnd.github+json"}};
+  Http::Request rq;
+  rq.url = url;
+  rq.filter = &filter;
+  rq.headers = hdrs;
+  rq.headerCount = 1;
+  rq.timeoutMs = 15000;
+  // Streamed, not buffered: this response is tens of KB (see Http.h).
+  Http::Result hr = Http::json(rq, doc);
+  if (!hr.ok) {
+    setErr(errBuf, errLen, "digest: HTTP %d %s", hr.status, hr.err);
     return false;
   }
   for (JsonObject a : doc["assets"].as<JsonArray>()) {
-    if (String(a["name"] | "") != assetName) continue;
+    if (strcmp(a["name"] | "", assetName) != 0) continue;
     const char* d = a["digest"] | "";
     if (strncmp(d, "sha256:", 7) != 0 || strlen(d + 7) != 64) {
       setErr(errBuf, errLen, "digest: missing on %s", assetName);
@@ -135,8 +111,8 @@ bool downloadTar(const char* tag, const char* expectedHex, char* errBuf, size_t 
   snprintf(url, sizeof(url), "https://github.com/%s/releases/download/%s/%s-%s.tar",
            GH_REPO, tag, SMOLBASE_ASSETS_PREFIX, tag);
 
-  LittleFS.remove(kStagingTar);
-  File out = LittleFS.open(kStagingTar, FILE_WRITE);
+  Fs::remove(kStagingTar);
+  Fs::File out(kStagingTar, "w");
   if (!out) {
     setErr(errBuf, errLen, "tar: staging open failed");
     return false;
@@ -151,16 +127,26 @@ bool downloadTar(const char* tag, const char* expectedHex, char* errBuf, size_t 
   esp_http_client_handle_t client = esp_http_client_init(&cfg);
   if (!client) {
     out.close();
-    LittleFS.remove(kStagingTar);
+    Fs::remove(kStagingTar);
     setErr(errBuf, errLen, "tar: client init failed");
     return false;
   }
   esp_http_client_set_header(client, "User-Agent", "smolbase-esp32");
 
   bool ok = false;
-  mbedtls_sha256_context sha;
-  mbedtls_sha256_init(&sha);
-  mbedtls_sha256_starts(&sha, 0);
+  // PSA, not mbedtls_sha256_*: IDF 6 ships mbedTLS 4, where the hash primitives
+  // moved to TF-PSA-Crypto and <mbedtls/sha256.h> is private. psa_crypto_init()
+  // is idempotent (esp-tls calls it too) — called here so this path does not
+  // depend on a TLS handshake having happened first.
+  psa_hash_operation_t sha = PSA_HASH_OPERATION_INIT;
+  if (psa_crypto_init() != PSA_SUCCESS ||
+      psa_hash_setup(&sha, PSA_ALG_SHA_256) != PSA_SUCCESS) {
+    out.close();
+    Fs::remove(kStagingTar);
+    esp_http_client_cleanup(client);
+    setErr(errBuf, errLen, "tar: sha256 init failed");
+    return false;
+  }
 
   do {
     // open+fetch follows the 302 to the CDN internally (native redirects).
@@ -191,7 +177,7 @@ bool downloadTar(const char* tag, const char* expectedHex, char* errBuf, size_t 
     while (got < total) {
       int rd = esp_http_client_read(client, (char*)buf, sizeof(buf));
       if (rd <= 0) { ioFail = true; break; }
-      mbedtls_sha256_update(&sha, buf, rd);
+      if (psa_hash_update(&sha, buf, rd) != PSA_SUCCESS) { ioFail = true; break; }
       if (out.write(buf, rd) != (size_t)rd) { ioFail = true; break; }
       got += rd;
     }
@@ -201,7 +187,12 @@ bool downloadTar(const char* tag, const char* expectedHex, char* errBuf, size_t 
     }
 
     unsigned char digest[32];
-    mbedtls_sha256_finish(&sha, digest);
+    size_t digestLen = 0;
+    if (psa_hash_finish(&sha, digest, sizeof(digest), &digestLen) != PSA_SUCCESS ||
+        digestLen != sizeof(digest)) {
+      setErr(errBuf, errLen, "tar: sha256 finish failed");
+      break;
+    }
     char hex[65];
     for (int i = 0; i < 32; i++) sprintf(hex + i * 2, "%02x", digest[i]);
     if (strcasecmp(hex, expectedHex) != 0) {
@@ -211,11 +202,11 @@ bool downloadTar(const char* tag, const char* expectedHex, char* errBuf, size_t 
     ok = true;
   } while (false);
 
-  mbedtls_sha256_free(&sha);
+  psa_hash_abort(&sha);
   esp_http_client_close(client);
   esp_http_client_cleanup(client);
   out.close();
-  if (!ok) LittleFS.remove(kStagingTar);
+  if (!ok) Fs::remove(kStagingTar);
   return ok;
 }
 
@@ -234,10 +225,10 @@ struct TarEntry {
 // Reads the next FILE entry header from `tar`, silently skipping directory
 // entries (tar -C dir . emits the "./" dir itself as typeflag '5').
 // Returns 1 entry, 0 clean end, -1 error.
-static int readHeader(File& tar, TarEntry& e, char* errBuf, size_t errLen) {
+static int readHeader(Fs::File& tar, TarEntry& e, char* errBuf, size_t errLen) {
  nextHeader:
   uint8_t h[512];
-  if (tar.read(h, 512) != 512) {
+  if (tar.readBytes(h, 512) != 512) {
     setErr(errBuf, errLen, "tar: truncated header");
     return -1;
   }
@@ -245,7 +236,7 @@ static int readHeader(File& tar, TarEntry& e, char* errBuf, size_t errLen) {
   for (int i = 0; i < 512 && allZero; i++) allZero = (h[i] == 0);
   if (allZero) {
     uint8_t h2[512];
-    if (tar.read(h2, 512) != 512) {
+    if (tar.readBytes(h2, 512) != 512) {
       setErr(errBuf, errLen, "tar: missing 2nd terminator");
       return -1;
     }
@@ -306,13 +297,13 @@ static int readHeader(File& tar, TarEntry& e, char* errBuf, size_t errLen) {
   return 1;
 }
 
-static bool skipPadding(File& tar, size_t size) {
+static bool skipPadding(Fs::File& tar, size_t size) {
   size_t pad = (512 - (size % 512)) % 512;
   return pad == 0 || tar.seek(tar.position() + pad);
 }
 
 int validateTar(char* errBuf, size_t errLen) {
-  File tar = LittleFS.open(kStagingTar, FILE_READ);
+  Fs::File tar(kStagingTar, "r");
   if (!tar) {
     setErr(errBuf, errLen, "tar: staging missing");
     return -1;
@@ -342,7 +333,7 @@ int validateTar(char* errBuf, size_t errLen) {
 // backup rename — a torn extract is healed by bootHeal's restore).
 static bool extractTo(const char* destDir, bool viaTmp, int totalFiles,
                       FileProgressCb cb, char* errBuf, size_t errLen) {
-  File tar = LittleFS.open(kStagingTar, FILE_READ);
+  Fs::File tar(kStagingTar, "r");
   if (!tar) {
     setErr(errBuf, errLen, "tar: staging missing");
     return false;
@@ -350,11 +341,19 @@ static bool extractTo(const char* destDir, bool viaTmp, int totalFiles,
   TarEntry e;
   int r, done = 0;
   while ((r = readHeader(tar, e, errBuf, errLen)) == 1) {
-    char dst[96], tmp[100];
-    snprintf(dst, sizeof(dst), "%s/%s", destDir, e.name);
+    // destDir is "/w" or a "/w.<version>" backup; e.name is a ustar name, so up
+    // to 100 bytes. Sized so truncation cannot happen, and checked anyway — a
+    // truncated path would write the wrong file rather than fail.
+    char dst[160], tmp[168];
+    const int dstLen = snprintf(dst, sizeof(dst), "%s/%s", destDir, e.name);
+    if (dstLen < 0 || (size_t)dstLen >= sizeof(dst)) {
+      setErr(errBuf, errLen, "extract: path too long: %s", e.name);
+      tar.close();
+      return false;
+    }
     snprintf(tmp, sizeof(tmp), "%s.tmp", dst);
     const char* writePath = viaTmp ? tmp : dst;
-    File out = LittleFS.open(writePath, FILE_WRITE);
+    Fs::File out(writePath, "w");
     if (!out) {
       setErr(errBuf, errLen, "extract: open %s", writePath);
       tar.close();
@@ -364,9 +363,9 @@ static bool extractTo(const char* destDir, bool viaTmp, int totalFiles,
     uint8_t buf[1024];
     while (remaining > 0) {
       size_t chunk = remaining < sizeof(buf) ? remaining : sizeof(buf);
-      if (tar.read(buf, chunk) != (int)chunk || out.write(buf, chunk) != chunk) {
+      if (tar.readBytes(buf, chunk) != chunk || out.write(buf, chunk) != chunk) {
         out.close();
-        LittleFS.remove(writePath);
+        Fs::remove(writePath);
         tar.close();
         setErr(errBuf, errLen, "extract: io %s", e.name);
         return false;
@@ -374,13 +373,10 @@ static bool extractTo(const char* destDir, bool viaTmp, int totalFiles,
       remaining -= chunk;
     }
     out.close();
-    if (viaTmp) {
-      LittleFS.remove(dst); // rename requires the destination absent
-      if (!LittleFS.rename(tmp, dst)) {
-        tar.close();
-        setErr(errBuf, errLen, "extract: rename %s", e.name);
-        return false;
-      }
+    if (viaTmp && !Fs::replace(tmp, dst)) {
+      tar.close();
+      setErr(errBuf, errLen, "extract: rename %s", e.name);
+      return false;
     }
     if (!skipPadding(tar, e.size)) {
       tar.close();
@@ -400,20 +396,20 @@ bool applyTarWithBackup(FileProgressCb cb, char* errBuf, size_t errLen) {
 
   char bak[24];
   backupName(bak, sizeof(bak));
-  removeDirRecursive(bak); // leftover from an interrupted run
-  if (!LittleFS.rename(kWebDir, bak)) {
+  Fs::removeDirFlat(bak); // leftover from an interrupted run
+  if (!Fs::rename(kWebDir, bak)) {
     setErr(errBuf, errLen, "backup rename failed");
     return false;
   }
-  LittleFS.mkdir(kWebDir);
+  Fs::mkdir(kWebDir);
   if (!extractTo(kWebDir, false, files, cb, errBuf, errLen)) {
     // Restore the exact old set: we are still running the old firmware.
-    removeDirRecursive(kWebDir);
-    LittleFS.rename(bak, kWebDir);
-    LittleFS.remove(kStagingTar);
+    Fs::removeDirFlat(kWebDir);
+    Fs::rename(bak, kWebDir);
+    Fs::remove(kStagingTar);
     return false;
   }
-  LittleFS.remove(kStagingTar);
+  Fs::remove(kStagingTar);
   return true;
 }
 
@@ -421,62 +417,61 @@ bool applyTarInPlace(FileProgressCb cb, char* errBuf, size_t errLen) {
   int files = validateTar(errBuf, errLen);
   if (files < 0) return false;
   if (!extractTo(kWebDir, true, files, cb, errBuf, errLen)) {
-    LittleFS.remove(kStagingTar);
+    Fs::remove(kStagingTar);
     return false;
   }
   // Orphan sweep: the tar is authoritative for /w.
-  File tar = LittleFS.open(kStagingTar, FILE_READ);
-  String keep[24];
+  Fs::File tar(kStagingTar, "r");
+  std::string keep[24];
   int nKeep = 0;
   if (tar) {
     TarEntry e;
     while (nKeep < 24 && readHeader(tar, e, nullptr, 0) == 1) {
-      keep[nKeep++] = String(kWebDir) + "/" + e.name;
+      keep[nKeep++] = std::string(kWebDir) + "/" + e.name;
       if (!tar.seek(tar.position() + e.size) || !skipPadding(tar, e.size)) break;
     }
     tar.close();
   }
-  File dir = LittleFS.open(kWebDir);
-  String doomed[24];
+  Fs::Dir dir(kWebDir);
+  std::string doomed[24];
   int nDoom = 0;
   if (dir) {
-    for (File f = dir.openNextFile(); f && nDoom < 24; f = dir.openNextFile()) {
-      String p = String(f.path());
-      f.close();
+    Fs::Dir::Entry de;
+    while (nDoom < 24 && dir.next(de)) {
       bool listed = false;
-      for (int i = 0; i < nKeep && !listed; i++) listed = (p == keep[i]);
-      if (!listed) doomed[nDoom++] = p;
+      for (int i = 0; i < nKeep && !listed; i++) listed = (de.path == keep[i]);
+      if (!listed) doomed[nDoom++] = de.path;
     }
     dir.close();
   }
-  for (int i = 0; i < nDoom; i++) LittleFS.remove(doomed[i]);
-  LittleFS.remove(kStagingTar);
+  for (int i = 0; i < nDoom; i++) Fs::remove(doomed[i].c_str());
+  Fs::remove(kStagingTar);
   return true;
 }
 
 void sweepStaleStaging() {
-  LittleFS.remove(kStagingTar);
+  Fs::remove(kStagingTar);
   char bak[32];
-  if (findBackupDir(bak, sizeof(bak))) removeDirRecursive(bak);
+  if (findBackupDir(bak, sizeof(bak))) Fs::removeDirFlat(bak);
 }
 
 void bootHeal() {
   char bak[32], mine[24];
   if (!findBackupDir(bak, sizeof(bak))) {
-    LittleFS.remove(kStagingTar);
+    Fs::remove(kStagingTar);
     return;
   }
   backupName(mine, sizeof(mine));
   if (strcmp(bak, mine) == 0) {
     // The backup holds *this* version's assets: we were rolled back, or the
     // update tore before finalize. Restore the exact old set.
-    Serial.printf("[assets] boot heal: restoring %s\n", bak);
-    removeDirRecursive(kWebDir);
-    LittleFS.rename(bak, kWebDir);
+    printf("[assets] boot heal: restoring %s\n", bak);
+    Fs::removeDirFlat(kWebDir);
+    Fs::rename(bak, kWebDir);
   }
   // A backup for a different version is deleted at onImageConfirmed(), not
   // here — deleting it before the 30 s guard passes would strand a rollback.
-  LittleFS.remove(kStagingTar);
+  Fs::remove(kStagingTar);
 }
 
 void onImageConfirmed() {
@@ -484,11 +479,11 @@ void onImageConfirmed() {
   if (findBackupDir(bak, sizeof(bak))) {
     backupName(mine, sizeof(mine));
     if (strcmp(bak, mine) != 0) {
-      Serial.printf("[assets] image confirmed - deleting %s\n", bak);
-      removeDirRecursive(bak);
+      printf("[assets] image confirmed - deleting %s\n", bak);
+      Fs::removeDirFlat(bak);
     }
   }
-  LittleFS.remove(kStagingTar);
+  Fs::remove(kStagingTar);
 }
 
 } // namespace AssetUpdate

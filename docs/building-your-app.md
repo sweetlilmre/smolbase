@@ -1,6 +1,7 @@
 # Building your app
 
-`src/app/` is yours. `src/core/` is plumbing — read it, call it, don't edit it.
+`src/app-*/` is yours — one directory per App, and the build compiles exactly
+one of them. `src/core/` is plumbing: read it, call it, don't edit it.
 Everything your code needs is reached through the types in `src/core/App.h`;
 the vocabulary (App, Screen, Extension Surface, …) is defined in
 [../CONTEXT.md](../CONTEXT.md).
@@ -9,11 +10,11 @@ The template ships with a complete worked example that touches every hook: the
 **demo clock**, the device's identity (IP, hostname, NTP time) over a rotation
 of full-screen 256-color demoscene effects, animated through the framebuffer at
 30 FPS and switched by a long press. One file per class so you can gut it
-piecewise: `src/app/DemoScreen.h/.cpp` (the animated screen — overlay,
-timestep, effect roster), `src/app/effects/` (one class per effect behind the
-`Effect` interface), `src/app/StockScreen.h/.cpp` (the direct-draw fallback
-when the framebuffer is compiled out), `src/app/StockApp.cpp` (the App glue and
-the `makeApp()` seam), `src/app/hex_color.h` (the shared `#RRGGBB` parser).
+piecewise: `src/app-smolbase/DemoScreen.h/.cpp` (the animated screen — overlay,
+timestep, effect roster), `src/app-smolbase/effects/` (one class per effect behind the
+`Effect` interface), `src/app-smolbase/StockScreen.h/.cpp` (the direct-draw fallback
+when the framebuffer is compiled out), `src/app-smolbase/StockApp.cpp` (the App glue and
+the `makeApp()` seam), `src/app-smolbase/hex_color.h` (the shared `#RRGGBB` parser).
 This guide walks the code at the end.
 
 ## The threading rule (read this first)
@@ -34,8 +35,8 @@ touch the Display or Screens — post a `SysEvent` (or set an atomic flag your
 
 ## The seam: `makeApp()`
 
-The core finds your app through one link-time factory. Define it in `src/app/`
-— forgetting it is a linker error, by design:
+The core finds your app through one link-time factory. Define it in your App's
+directory — forgetting it is a linker error, by design:
 
 ```cpp
 class App {
@@ -47,7 +48,7 @@ public:
   virtual void onSystemEvent(SysEvent) {}
 };
 
-// The link-time seam: src/app/ must define this. Missing it = linker error, by design.
+// The link-time seam: the selected src/app-*/ must define this. Missing it = linker error.
 App& makeApp();
 ```
 
@@ -66,34 +67,46 @@ App& makeApp() {
 
 ### More than one app in the repo
 
-The repo carries three apps — the demo clock (`src/app/`), the weather clock
-(`src/app-weather/`), and the CGM display (`src/app-gcm/`) — and one
-PlatformIO env per app selects which one links. Each env's
-`build_src_filter` excludes every *other* `src/app*/` directory, so exactly
-one directory provides `makeApp()` per build (two selected = duplicate-symbol
-linker error, zero = missing-symbol; both by design). To add your own app,
-copy the pattern in `platformio.ini`:
+The repo carries three apps — the demo clock (`src/app-smolbase/`), the weather
+clock (`src/app-weather/`), and the CGM display (`src/app-gcm/`) — and the App
+is chosen when you configure the build, not linked out afterwards. Exactly one
+`src/app-*/` directory is compiled, so exactly one provides `makeApp()` (two
+selected = duplicate-symbol linker error, zero = missing-symbol; both by
+design).
 
-```ini
-[env:myapp]
-build_src_filter = +<*> -<app/> -<app-weather/> -<app-gcm/>
-build_flags =
-    ${env.build_flags}
-    ; GitHub self-update pulls this env's own release assets
-    ; (myapp-firmware-<tag>.bin and myapp-assets-<tag>.tar);
-    ; defaults are smolbase-firmware / smolbase-assets.
-    -DSMOLBASE_FW_ASSET_PREFIX=\"myapp-firmware\"
-    -DSMOLBASE_ASSETS_PREFIX=\"myapp-assets\"
+To add your own app, put your code in `src/app-myapp/` and add a branch to the
+App table in the root `CMakeLists.txt`:
+
+```cmake
+elseif(SMOLBASE_APP STREQUAL "myapp")
+  set(SMOLBASE_APP_DIRS ${SB_ROOT}/src/app-myapp)
+  # GitHub self-update pulls this App's own release assets
+  # (myapp-firmware-<tag>.bin and myapp-assets-<tag>.tar);
+  # defaults are smolbase-firmware / smolbase-assets.
+  set(SMOLBASE_APP_DEFS
+      "SMOLBASE_FW_ASSET_PREFIX=\"myapp-firmware\""
+      "SMOLBASE_ASSETS_PREFIX=\"myapp-assets\"")
 ```
 
-put your code in `src/app-myapp/`, and build with `pio run -e myapp`. If you
-release through this repo's CI, add your env to the tar and release steps in
-`.github/workflows/build.yml` so a tag ships `myapp-firmware-<tag>.bin`,
-`myapp-littlefs-<tag>.bin`, and `myapp-assets-<tag>.tar` alongside the
-others. A bare
-`pio run` (and CI) builds **every** env, so no app in the repo can silently
-rot. `src/core/` and `src/main.cpp` always compile; only the app directory
-swaps.
+If your app has subdirectories with sources (like `src/app-smolbase/effects/`),
+list each of them — `SRC_DIRS` does not recurse. Add `"myapp": "src/app-myapp/html"`
+to the `APPS` table in `scripts/pack_fs.py` if your app ships its own
+`index.html` overlay, then build:
+
+```
+idf.py -B build/myapp -D SMOLBASE_APP=myapp build
+```
+
+Add a `myapp.args` argfile with those two flags and it becomes `idf.py
+@myapp.args build`. If you release through this repo's CI, add `myapp` to the
+matrix and to the release loop in `.github/workflows/build.yml` so a tag ships
+`myapp-firmware-<tag>.bin`, `myapp-littlefs-<tag>.bin`, and
+`myapp-assets-<tag>.tar` alongside the others.
+
+There is no build that covers every App at once — the App is a configure-time
+choice — so **build each one you touched**. CI runs a matrix leg per App on
+every push, which is what stops an app in the repo from silently rotting.
+`src/core/` and `src/main.cpp` always compile; only the app directory swaps.
 
 ## App lifecycle
 
@@ -101,11 +114,37 @@ swaps.
   display, touch, clock, network, web) is up. Register settings here, create
   your Screens, and claim the display with `Display::setActive(&myScreen)`.
 - **`loop()`** — called every main-loop pass on core 1. The pass has a **soft
-  latency budget of ~25 ms** (`SMOLBASE_LOOP_BUDGET_MS`): overrun it and touch
-  responsiveness and event latency degrade. Debug builds log overruns to
-  serial, so a slow pass tells on itself. Heavy work (TLS fetches, JSON
+  latency budget** (`SMOLBASE_LOOP_BUDGET_MS`): overrun it and touch
+  responsiveness and event latency degrade. Heavy work (TLS fetches, JSON
   parsing of large payloads) belongs in a FreeRTOS task you spawn — then you
   own the synchronization.
+
+  The budget depends on your framebuffer mode, because the floor does:
+  **25 ms** for direct-draw builds, **40 ms** when a full-frame buffer is
+  compiled in, where `Display::present()` is a blocking 25–29 ms panel push and
+  is the frame's cost by design (ADR 0004). `/api/status` reports the budget in
+  use alongside the measurements, so you never have to remember which applies.
+
+  A slow pass tells on itself in `GET /api/status`, under `loop`: `passMs` and
+  `passMaxMs` for the whole iteration, `appMs`/`appMaxMs` for your `loop()`
+  slice alone, `overruns` since boot, and `stackFree` for the core-1 task's
+  low-water stack. If your App draws from `Screen::tick()` rather than
+  `loop()` — which is the normal shape — your work lands in the pass, not the
+  app slice, so a near-zero `appMs` beside a large `passMs` is expected.
+
+  **For reference, measured on this hardware:** the demo App on a `PALETTE_8`
+  build runs a frame pass of ~33–35 ms, of which ~25–29 ms is the panel push
+  (`app.presentUs` in the same response breaks that down). That sits inside the
+  40 ms framebuffer budget with room to spare, so an overrun there is worth
+  investigating rather than shrugging at.
+
+- **`statusJson(JsonObject)`** — optional. Whatever you write lands in the
+  `app` object of `GET /api/status`, so your App never needs its own debug
+  endpoint. Called on the httpd task (**core 0**), like route handlers: copy
+  anything the main loop writes under whatever guard protects it, keep it
+  short, and never put a secret's value in it (presence is fine — ADR 0003).
+  The weather App is the worked example: it reports the current reading,
+  per-stage fetch codes and key presence.
 
 ## Screens
 
@@ -271,7 +310,7 @@ const present = await fetch("/api/secrets").then(r => r.json());
 badge.textContent = present.api_key ? "configured" : "not set";
 ```
 
-**Client-side validation for secrets.** `settings.html` loads `/validators.js` at startup if it exists — a 404 is silently ignored. A per-env `html-{PIOENV}/validators.js` populates `window.SECRET_VALIDATORS`, a map from secret key to a `(value) => errorString | null` function. The Secrets panel checks this map on every Set click and shows the error inline rather than posting to the device. Example:
+**Client-side validation for secrets.** `settings.html` loads `/validators.js` at startup if it exists — a 404 is silently ignored. A per-App `src/app-<name>/html/validators.js` populates `window.SECRET_VALIDATORS`, a map from secret key to a `(value) => errorString | null` function. The Secrets panel checks this map on every Set click and shows the error inline rather than posting to the device. Example:
 
 ```js
 // html-gcm/validators.js
@@ -281,7 +320,7 @@ window.SECRET_VALIDATORS["llu_email"] = function(v) {
 };
 ```
 
-The validator runs entirely in the browser — no round-trip, no firmware changes. Drop the file in your `html-{PIOENV}/` directory; `pack_fs.py` picks it up automatically.
+The validator runs entirely in the browser — no round-trip, no firmware changes. Drop the file in your App's `html/` directory; `pack_fs.py` picks it up automatically.
 
 **Be honest about the threat model**: this is plain NVS. It protects against
 *accidental exposure* — the settings API, filesystem images, backups of
@@ -297,7 +336,11 @@ calibration data regenerates on the following boot.
 
 ## HTTP routes
 
-Override `registerRoutes(PsychicHttpServer&)` to add endpoints:
+If all you want is to expose state for diagnosis, use `statusJson()` above
+instead — one endpoint for the whole device is one thing to curl, and a
+diagnostic route tends to outlive the problem it was added for.
+
+Override `registerRoutes(PsychicHttpServer&)` to add real endpoints:
 
 ```cpp
 void registerRoutes(PsychicHttpServer& server) override {
@@ -310,9 +353,9 @@ void registerRoutes(PsychicHttpServer& server) override {
 What the template guarantees (see `src/core/Web.h` — the order is structural,
 PsychicHttp matches first-registered-first):
 
-1. System API routes (`/api/status`, `/api/wifi*`, `/api/settings`,
-   `/api/factory-reset`) register first — you cannot shadow them, and you may
-   not claim `/api/*` system paths.
+1. System API routes (`/api/status` — including your `statusJson()` under
+   `app` — plus `/api/wifi*`, `/api/settings`, `/api/factory-reset`) register
+   first: you cannot shadow them, and you may not claim `/api/*` system paths.
 2. OTA (`/api/update`) registers second.
 3. **Your routes register third** — before static assets, so a route named
    like a file wins.
@@ -324,17 +367,21 @@ And the warning worth repeating: **handlers run on the httpd task, core 0**
 anything shared with your core-1 code. `ConfigStore` getters/setters are
 mutex-guarded and safe from handlers.
 
-Static pages need no routes at all: drop files into `html/`, rebuild the
-filesystem image (`pio run -t buildfs`), and they are packed as gzip and
-served from LittleFS.
+Static pages need no routes at all: drop files into `html/`, rebuild (`idf.py
+build` packs the assets and rebuilds the filesystem image as part of the normal
+build), and they are packed as gzip and served from LittleFS.
 
-**Per-env landing pages.** `scripts/pack_fs.py` overlays `html-{PIOENV}/`
-on top of `html/` at build time — any file in the env-specific directory
-wins over the same relative path in `html/`. This is how each app ships its
-own `index.html` without touching the shared assets: `html-weatherclock/`
-overrides for the `weatherclock` env, `html-gcm/` for `gcm`, and the base
-`html/` serves the `smolbase` env unchanged (no overlay directory needed).
-The merge is purely at pack time; LittleFS sees one flat `data/w/` tree per build. Beyond `index.html`, per-env directories also carry app-specific assets like `validators.js` (client-side secret validators — see Secrets below).
+**Per-app landing pages.** `scripts/pack_fs.py` overlays the App's own
+`html/` directory on top of the shared `html/` — any file in the App's
+directory wins over the same relative path in the shared one. This is how each
+app ships its own `index.html` without touching the shared assets:
+`src/app-weather/html/` overrides for `weatherclock`, `src/app-gcm/html/` for
+`gcm`, and `src/app-smolbase/html/` for `smolbase`. The App-to-directory
+mapping is the `APPS` table at the top of `scripts/pack_fs.py`. The merge is
+purely at pack time; LittleFS sees one flat `/w/` tree per build, assembled
+into `data-<app>/w/`. Beyond `index.html`, App html directories also carry
+app-specific assets like `validators.js` (client-side secret validators — see
+Secrets below).
 
 ## Framebuffer modes
 
@@ -448,15 +495,15 @@ What that means for your animated screen:
 
 ## The worked example: the demo clock
 
-`src/app/DemoScreen.cpp` wires all of the above into one screen (with
-`src/app/StockApp.cpp` as the App glue): the identity text drop-shadowed over a
+`src/app-smolbase/DemoScreen.cpp` wires all of the above into one screen (with
+`src/app-smolbase/StockApp.cpp` as the App glue): the identity text drop-shadowed over a
 rotation of full-screen 256-color effects — the Boing ball, plasma, fire, a
 a wormhole, a rotozoomer, and a calm black clock — running at a fixed 30 Hz
 through `frame()`/`present()`. Technique notes and sources for each effect:
 [research/palette-effects.md](research/palette-effects.md). The parts worth
 stealing:
 
-**The screen owns the frame; the effects own the pixels.** `src/app/effects/`
+**The screen owns the frame; the effects own the pixels.** `src/app-smolbase/effects/`
 holds one class per effect behind a two-method interface (`enter()` claims the
 palette bank and builds whatever tables it needs, `step()` paints one frame).
 The screen draws the clock on top afterwards, so no effect knows the time
@@ -565,8 +612,10 @@ Useful core helpers for your screens: `Net::deviceName()`, `Net::ip()`,
 
 ## Identity polish
 
-- Set your firmware version: `build_flags = -D SMOLBASE_FW_VERSION=\"1.0.0\"`
-  in `platformio.ini` — it shows in `GET /api/status` and the settings page.
+- Set your firmware version: either edit `SMOLBASE_FW_VERSION` in
+  `include/smolbase_config.h`, or add
+  `"SMOLBASE_FW_VERSION=\"1.0.0\""` to your App's `SMOLBASE_APP_DEFS` in the
+  root `CMakeLists.txt` — it shows in `GET /api/status` and the settings page.
 - Rename the device family: `SMOLBASE_NAME_PREFIX` in
   `include/smolbase_config.h` changes the default hostname/AP SSID
   (`smolbase-XXXX` → `yourthing-XXXX`).

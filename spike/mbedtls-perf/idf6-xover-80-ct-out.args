@@ -1,0 +1,12 @@
+-B
+build/idf6-xover-80-ct-out
+-D
+SDKCONFIG=build/idf6-xover-80-ct-out/sdkconfig
+-D
+SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.cpu80
+-D
+SPIKE_NO_WRAP=1
+-D
+SPIKE_CROSSOVER=1
+-D
+SPIKE_MPI_THRESHOLD=0

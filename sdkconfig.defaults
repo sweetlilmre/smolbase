@@ -1,0 +1,175 @@
+# smolbase Kconfig — hand-written, and the source of truth for it.
+#
+# This file replaces a 3,775-line sdkconfig.defaults that was an OUTPUT of the
+# pioarduino hybrid compile rather than anything anyone maintained (ADR 0005,
+# now superseded). Every line below is here on purpose. Two kinds of line:
+#
+#   - Values that differ from the IDF 6 default and MUST, because the hardware,
+#     the shipped flash layout, or a field bug requires them.
+#   - Values that happen to match the IDF default but which the arduino-esp32
+#     build also set explicitly, and which the firmware's behaviour depends on.
+#     Stated so a future default change cannot move them silently.
+#
+# Anything NOT here is deliberately the IDF default.
+
+CONFIG_IDF_TARGET="esp32"
+
+# ---- Flash and partitions: must match the shipped firmware exactly ----
+# Fielded devices have this layout; the `spiffs`-subtype partition holds
+# LittleFS and the label stays (see partitions.csv).
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_40M=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# ---- CPU / scheduler ----
+# 240 MHz, not the IDF default 160: the arduino-esp32 build ran at 240 and the
+# display push rates and loop budget (SMOLBASE_LOOP_BUDGET_MS) were measured there.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+# 1000 Hz, not the IDF default 100. REQUIRED: the main loop ends in
+# Platform::delayMs(2) and Touch's debounce/settle constants are in single-digit
+# milliseconds. At 100 Hz a 2 ms delay becomes 10 ms and the loop budget blows.
+CONFIG_FREERTOS_HZ=1000
+
+# ---- Rollback (#76) ----
+# Ota::tickRollbackGuard() calls esp_ota_mark_app_valid_cancel_rollback() only
+# after healthy uptime, so a broken image that cannot reach that point is
+# rolled back by the bootloader on the next power cycle.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# ---- mbedTLS ----
+# TEMPORARY STATE — read this WITH cmake/upstream_patches.cmake and
+# patches/README.md. Two upstream fixes this project authored are applied to
+# the SDK tree at configure time while their PRs are in review:
+#   - TF-PSA-Crypto#873: the mbedTLS 4 constant-time bignum series, ~30% off
+#     every EC primitive (830 ms off a real update check, measured A-B-A).
+#   - esp-idf#19027: a 512-bit lower threshold on the RSA/MPI peripheral, so
+#     small (ECC-sized) multiplies go to software and big (RSA) ones keep the
+#     hardware. THIS is what makes HARDWARE_MPI=y below correct: without that
+#     patch the accelerator is a measured net loss on ECDSA handshakes and
+#     must go back to unset (see the history below and patches/README.md).
+#
+# The historical record, still true for an UNPATCHED tree — the accelerator is
+# the opposite of what you would guess, and it is MEASURED. One TLS handshake
+# to api.github.com:
+#
+#   HARDWARE_MPI=y, FIXED_POINT_OPTIM=n   6.85 s   watchdog trips every request
+#   HARDWARE_MPI=y, FIXED_POINT_OPTIM=y   6.50 s   watchdog trips every request
+#   HARDWARE_MPI=n, FIXED_POINT_OPTIM=n   5.92 s   watchdog trips every request
+#   HARDWARE_MPI=n, FIXED_POINT_OPTIM=y   4.25 s   clean
+#   (arduino-esp32 v0.3.3, same device, same request: 4.12 s, clean)
+#
+# The ESP32 has no ECC accelerator at all - MBEDTLS_HARDWARE_ECC and
+# MBEDTLS_HARDWARE_ECDSA_VERIFY both depend on SOC caps this chip lacks - so an
+# ECDHE-ECDSA handshake is software elliptic-curve maths either way. What the
+# accelerator does is intercept mbedtls_mpi_mul_mpi, and at the 256-bit operands
+# ECDSA works on, the peripheral's per-call setup and locking cost about TWICE a
+# software multiply - 19.5 us against 9.8 us, measured on-device offline. The
+# crossover is between 384 and 512 bits (measured at exactly 512 on an
+# ESP32-S3): from 512 bits up the peripheral wins, and at 2048/4096 bits it is
+# 3.7-4.0x faster, which is why it exists. esp-idf#19027 adds exactly that
+# threshold, and with it applied (see the TEMPORARY STATE note above)
+# HARDWARE_MPI=y gives ECC at software speed AND RSA on the hardware in one
+# build - measured: 256-bit mul 11.78 us (software 11.28), P-256 verify within
+# 2% of software, mpi_exp_mod 2048 19.45 ms against 74.50 in software.
+#
+# This is NOT a mbedTLS 4 behaviour. An earlier version of this comment said v4's
+# ECP calls mul_mpi far more often than 3.x did; that was inference and it is now
+# measured false - both versions make exactly 5817 calls per P-256 verify (3912
+# with the fixed-point tables). mbedTLS 3.6.6 is 17.8% faster with the
+# accelerator off too. The peripheral is simply wrong for ECC-sized operands on
+# this chip, in every version. Evidence and method:
+# docs/research/mbedtls4-perf-spike.md.
+#
+# Turning it off is worth ~0.9 s end to end; the fixed-point tables are worth a
+# further ~1.7 s. Offline the two levers are independent multiplicative wins; the
+# much larger interaction the end-to-end matrix appeared to show is probably an
+# artefact of the watchdog tripping in three of those four cells and not in the
+# fourth.
+#
+# #119 STAYS SAFE with the accelerator back on: LARGE_KEY_SOFTWARE_MPI comes
+# back at its =y default alongside HARDWARE_MPI and is the software fallback
+# for the oversized verify in GitHub's ISRG Root X1 cross-signed chain (PK
+# error 0x4290) - the very fix #119 shipped. If HARDWARE_MPI ever goes back to
+# unset (see the TEMPORARY STATE note), #119 is safe by the simpler route:
+# all-software RSA has no hardware limit to exceed.
+#
+# HARDWARE_SHA and HARDWARE_AES stay at their =y defaults: those accelerators
+# are a real win, and the arduino-esp32 build had them on too.
+CONFIG_MBEDTLS_HARDWARE_MPI=y
+# Fixed-point ECP precomputation tables: ~1.7 s off a handshake for ~23 KB of
+# flash, which is cheap in a partition that is a third empty.
+CONFIG_MBEDTLS_ECP_FIXED_POINT_OPTIM=y
+# Asymmetric TLS buffers: OUT 16 KB -> 4 KB, ~12 KB less heap per connection,
+# zero protocol risk. IN must stay 16384 — Fastly sends full-size records and
+# there is no MFL/record_size_limit path (docs/research/ghupdate-tls-knobs.md).
+CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=y
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384
+# The bundle core/Http attaches via esp_crt_bundle. FULL, not the trimmed
+# default set: the device talks to GitHub, its CDN, and whatever weather or CGM
+# host a consumer configures.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
+
+# ---- esp_http_server: PsychicHttp in native mode ----
+# WS support is required by PsychicHttp's native build.
+CONFIG_HTTPD_WS_SUPPORT=y
+# 1024, not the IDF default 512: what arduino-esp32 shipped, and browsers on the
+# settings page send request headers (UA + cookies) that do not fit in 512.
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+CONFIG_HTTPD_MAX_URI_LEN=512
+
+# ---- WiFi / lwIP ----
+# 16 sockets, not the IDF default 10: what arduino-esp32 shipped, and the httpd
+# plus the DNS responder plus an outbound TLS fetch can be live at once.
+CONFIG_LWIP_MAX_SOCKETS=16
+# Static RX 8 rather than the IDF default 10 — the arduino-esp32 value, kept so
+# the heap figures in the wayfinder tickets stay comparable.
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=32
+CONFIG_ESP_WIFI_TX_BUFFER_TYPE=1
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=32
+
+# ---- LittleFS ----
+# The arduino-esp32 values for the same joltwallet component, so the mounted
+# volume behaves identically and the RAM cost is unchanged. OBJ_NAME_LEN in
+# particular is written into images built by littlefs_create_partition_image.
+CONFIG_LITTLEFS_OBJ_NAME_LEN=64
+CONFIG_LITTLEFS_PAGE_SIZE=256
+CONFIG_LITTLEFS_READ_SIZE=128
+CONFIG_LITTLEFS_WRITE_SIZE=128
+CONFIG_LITTLEFS_CACHE_SIZE=512
+CONFIG_LITTLEFS_LOOKAHEAD_SIZE=128
+CONFIG_LITTLEFS_BLOCK_CYCLES=512
+CONFIG_LITTLEFS_USE_MTIME=y
+CONFIG_LITTLEFS_MTIME_USE_SECONDS=y
+
+# ---- Task watchdog ----
+# CONFIG_ESP_TASK_WDT_PANIC stays at the IDF default (n): a watchdog trip logs
+# and continues. arduino-esp32 shipped it =y, so anyone "restoring parity" with
+# the old build would make a trip REBOOT the device - mid-OTA if a handshake
+# ever outran the timeout again. Since the TLS fix (accelerator off, fixed-point
+# on, buffered reader) the watchdog no longer trips at all, but the asymmetry is
+# deliberate, not an oversight.
+
+# ---- Console and logging ----
+# There is no serial flasher or UART reader on the dev bench (docs/flashing.md):
+# diagnostics come out over HTTP. The console config is here so a bench that
+# DOES have a UART sees the boot log at the documented baud.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# ---- Main task ----
+# app_main only spawns the smolbase task (pinned to core 1, ADR 0001) and
+# returns, which frees this stack — so the default size is fine. The consumer
+# loop's stack is sized in main.cpp, where it can be seen.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=4096
+
+# ---- Optimisation ----
+# -Os, as the arduino-esp32 build used. The static-RAM and firmware-size
+# comparisons in docs/research/idf6-migration-continuation.md assume it.
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y

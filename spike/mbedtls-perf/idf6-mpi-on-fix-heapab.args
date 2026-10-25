@@ -1,0 +1,12 @@
+-B
+build/idf6-mpi-on-fix-heapab
+-D
+SDKCONFIG=build/idf6-mpi-on-fix-heapab/sdkconfig
+-D
+SDKCONFIG_DEFAULTS=sdkconfig.defaults
+-D
+SPIKE_NO_WRAP=1
+-D
+SPIKE_SOFTCOUNT=1
+-D
+SPIKE_HEAPAB=1

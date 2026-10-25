@@ -1,6 +1,16 @@
 # 0005 — Rebuild the IDF libs locally (hybrid compile) for software-MPI RSA and a 4 KB TLS TX buffer
 
-**Status**: accepted (2026-08-21)
+**Status**: superseded (2026-08-23) by [ADR 0006](0006-native-esp-idf-framework.md)
+
+> The *mechanism* below is gone with arduino-esp32: the build is a native
+> ESP-IDF project and the three mbedTLS settings are ordinary lines in a tracked
+> `sdkconfig.defaults`. The *reasoning* is unchanged and still load-bearing —
+> `CONFIG_MBEDTLS_LARGE_KEY_SOFTWARE_MPI=y` is why the GitHub OTA works at all,
+> and the asymmetric-buffer trade is why a TLS connection fits the heap. Read
+> this ADR for why those three settings exist; read ADR 0006 for how they are
+> applied now. Everything below about hybrid compiles, `custom_sdkconfig`,
+> `.pio` caching and the PowerShell restriction is history.
+
 
 ## Context
 

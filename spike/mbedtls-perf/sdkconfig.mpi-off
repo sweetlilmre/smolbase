@@ -1,0 +1,5 @@
+# Accelerator off. Applied on top of sdkconfig.defaults.
+#
+# MBEDTLS_LARGE_KEY_SOFTWARE_MPI depends on MBEDTLS_HARDWARE_MPI, so it
+# disappears with it -- as it does in the shipped firmware, deliberately.
+CONFIG_MBEDTLS_HARDWARE_MPI=n

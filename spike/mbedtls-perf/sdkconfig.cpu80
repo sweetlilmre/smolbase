@@ -1,0 +1,8 @@
+# CPU at 80 MHz, for the crossover-vs-frequency sweep.
+#
+# A Kconfig choice needs the CURRENT pick explicitly unset before the alternative
+# takes: adding the alternative alone leaves sdkconfig.defaults's =y winning, and
+# silently. run.ps1 asserts the generated value, and bench.c reports both the
+# configured and the running frequency in [id].
+# CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240 is not set
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_80=y

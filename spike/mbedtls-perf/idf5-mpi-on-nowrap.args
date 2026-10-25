@@ -1,0 +1,8 @@
+-B
+build/idf5-mpi-on-nowrap
+-D
+SDKCONFIG=build/idf5-mpi-on-nowrap/sdkconfig
+-D
+SDKCONFIG_DEFAULTS=sdkconfig.defaults
+-D
+SPIKE_NO_WRAP=1

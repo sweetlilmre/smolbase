@@ -21,11 +21,12 @@
 #include "GhUpdate.h"
 #include "AssetUpdate.h"
 #include "Events.h"
+#include "Http.h"
 #include "Net.h"
+#include "Platform.h"
+#include "Web.h"
 #include "smolbase_config.h"
 #include <ArduinoJson.h>
-#include <HTTPClient.h>
-#include <NetworkClientSecure.h>
 #include <PsychicHttp.h>
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
@@ -33,12 +34,13 @@
 #include <esp_ota_ops.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <cstdio>
 
 static const char* const GH_REPO = "sweetlilmre/smolbase";
 
-// Release asset this build self-updates from: <prefix>-<tag>.bin. Each env
-// overrides via build_flags so a weatherclock device never flashes the
-// smolbase image (CI ships one firmware/littlefs pair per env).
+// Release asset this build self-updates from: <prefix>-<tag>.bin. Each App
+// overrides this from the root CMakeLists.txt so a weatherclock device never
+// flashes the smolbase image (CI ships one firmware/littlefs pair per App).
 #ifndef SMOLBASE_FW_ASSET_PREFIX
 #define SMOLBASE_FW_ASSET_PREFIX "smolbase-firmware"
 #endif
@@ -46,10 +48,6 @@ static const char* const GH_FW_PREFIX = SMOLBASE_FW_ASSET_PREFIX;
 
 namespace GhUpdate {
 
-class BundleClient : public NetworkClientSecure {
-public:
-  BundleClient() { attach_ssl_certificate_bundle(sslclient.get(), true); _use_ca_bundle = true; }
-};
 
 struct Progress {
   enum State : uint8_t { Idle, Downloading, Done, Error };
@@ -65,28 +63,58 @@ static Progress s_progress;
 static volatile bool s_inFlight = false;
 static char s_tag[32] = {}; // written by the POST handler before the task spawns
 
-static String detectLatestTag() {
-  BundleClient tls;
-  HTTPClient http;
-  http.setTimeout(10000);
-  http.setConnectTimeout(10000);
-  http.addHeader("Accept", "application/vnd.github+json");
-  if (!http.begin(tls, String("https://api.github.com/repos/") + GH_REPO + "/releases/latest"))
-    return "";
-  int code = http.GET();
-  if (code != HTTP_CODE_OK) { http.end(); return ""; }
+static std::string detectLatestTag() {
+  // snprintf, not concatenation: this runs immediately before a TLS handshake,
+  // and on this chip the handshake's own allocations are what run out (#119).
+  // Every URL built on that path is a stack buffer for the same reason.
+  char url[96];
+  snprintf(url, sizeof(url), "https://api.github.com/repos/%s/releases/latest", GH_REPO);
   JsonDocument filter;
   filter["tag_name"] = true;
   JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, *http.getStreamPtr(),
-                                             DeserializationOption::Filter(filter));
-  http.end();
-  if (err != DeserializationError::Ok) return "";
-  return doc["tag_name"] | String("");
+  const Http::Header hdrs[] = {{"Accept", "application/vnd.github+json"}};
+  Http::Request rq;
+  rq.url = url;
+  rq.filter = &filter;
+  rq.headers = hdrs;
+  rq.headerCount = 1;
+  // Streamed, not buffered: this response is tens of KB (see Http.h).
+  if (!Http::json(rq, doc).ok) return {};
+  return doc["tag_name"].as<std::string>();
+}
+
+// ---- version comparison -----------------------------------------------------
+// Tags are "vX.Y.Z" with an optional "-suffix" for unreleased builds. A plain
+// string compare cannot answer "is there anything newer", which is the only
+// question /api/update/check is actually asking.
+struct Ver {
+  int major = -1, minor = 0, patch = 0;
+  bool pre = false; // has a "-suffix"
+  bool valid() const { return major >= 0; }
+};
+
+static Ver parseVer(const std::string& s) {
+  Ver v;
+  const char* p = s.c_str();
+  if (*p == 'v' || *p == 'V') ++p;
+  int n = 0;
+  if (sscanf(p, "%d.%d.%d%n", &v.major, &v.minor, &v.patch, &n) != 3) return Ver{};
+  v.pre = p[n] == '-';
+  return v;
+}
+
+// -1 / 0 / +1. Semver precedence: a pre-release sorts BEFORE the same X.Y.Z, so
+// 0.4.0-dev < 0.4.0 while still being greater than 0.3.3.
+static int cmpVer(const Ver& a, const Ver& b) {
+  if (a.major != b.major) return a.major < b.major ? -1 : 1;
+  if (a.minor != b.minor) return a.minor < b.minor ? -1 : 1;
+  if (a.patch != b.patch) return a.patch < b.patch ? -1 : 1;
+  if (a.pre != b.pre) return a.pre ? -1 : 1;
+  return 0;
 }
 
 static bool failOta(const char* msg) {
-  Serial.printf("[ghupdate] failed: %s\n", msg);
+  printf("[ghupdate] failed: %s\n", msg);
   strlcpy(s_progress.errorMsg, msg, sizeof(s_progress.errorMsg));
   s_progress.state = Progress::Error;
   s_inFlight = false;
@@ -101,13 +129,13 @@ static esp_err_t httpClientInitCb(esp_http_client_handle_t h) {
 // Wait for the OtaStarting suspension to free the app's memory before TLS:
 // heap must be stable for 500 ms (or 3 s cap). Worth ~15 KB at the handshake.
 static void waitForHeapPlateau() {
-  uint32_t t0 = millis(), stableSince = millis();
-  uint32_t last = ESP.getFreeHeap();
-  while (millis() - t0 < 3000) {
+  uint32_t t0 = Platform::millis(), stableSince = Platform::millis();
+  uint32_t last = Platform::freeHeap();
+  while (Platform::millis() - t0 < 3000) {
     vTaskDelay(pdMS_TO_TICKS(100));
-    uint32_t now = ESP.getFreeHeap();
-    if (now > last + 1024) { last = now; stableSince = millis(); }
-    else if (millis() - stableSince >= 500) break;
+    uint32_t now = Platform::freeHeap();
+    if (now > last + 1024) { last = now; stableSince = Platform::millis(); }
+    else if (Platform::millis() - stableSince >= 500) break;
   }
 }
 
@@ -153,7 +181,7 @@ static bool downloadImpl(const char* tag) {
     char url[160];
     snprintf(url, sizeof(url), "https://github.com/%s/releases/download/%s/%s-%s.bin",
              GH_REPO, tag, GH_FW_PREFIX, tag);
-    Serial.printf("[ghupdate] pulling %s (heap=%u)\n", url, ESP.getFreeHeap());
+    printf("[ghupdate] pulling %s (heap=%lu)\n", url, (unsigned long)Platform::freeHeap());
 
     esp_http_client_config_t http = {};
     http.url               = url;
@@ -179,8 +207,9 @@ static bool downloadImpl(const char* tag) {
 
     esp_err_t err = esp_https_ota_begin(&ota, &handle);
     if (err != ESP_OK) {
-      snprintf(m, sizeof(m), "begin: %s (heap=%u max=%u)",
-               esp_err_to_name(err), ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+      snprintf(m, sizeof(m), "begin: %s (heap=%lu max=%lu)", esp_err_to_name(err),
+               (unsigned long)Platform::freeHeap(),
+               (unsigned long)Platform::largestFreeBlock());
       AssetUpdate::sweepStaleStaging();
       return failOta(m);
     }
@@ -216,7 +245,7 @@ static bool downloadImpl(const char* tag) {
   if (sameVer) {
     if (!AssetUpdate::applyTarInPlace(assetProgress, m, sizeof(m)))
       return failOta(m);
-    Serial.println("[ghupdate] assets reinstalled");
+    printf("[ghupdate] assets reinstalled\n");
     return true; // no reboot: firmware unchanged
   }
 
@@ -233,7 +262,7 @@ static bool downloadImpl(const char* tag) {
     return failOta(m);
   }
 
-  Serial.printf("[ghupdate] flashed %u bytes + %d asset files\n",
+  printf("[ghupdate] flashed %u bytes + %d asset files\n",
                 (unsigned)s_progress.bytesWritten, s_progress.filesDone);
   return true;
 }
@@ -243,7 +272,7 @@ static void downloadTask(void* arg) {
     s_progress.state = Progress::Done;
     s_inFlight = false;
     if (s_rebootAfter) {
-      Serial.println("[ghupdate] done - restarting");
+      printf("[ghupdate] done - restarting\n");
       vTaskDelay(pdMS_TO_TICKS(3000)); // let the settings page poll the final "done"
       Net::restartToApply();
     }
@@ -256,30 +285,42 @@ void registerRoutes(PsychicHttpServer& server) {
   server.on("/api/update/check", HTTP_GET, [](PsychicRequest*, PsychicResponse* res) {
     if (s_inFlight)
       return res->send(409, "application/json", "{\"error\":\"update in progress\"}");
-    String latest = detectLatestTag();
-    if (latest.isEmpty())
+    const std::string latest = detectLatestTag();
+    if (latest.empty())
       return res->send(503, "application/json", "{\"error\":\"could not reach GitHub releases\"}");
-    String current = "v" + String(SMOLBASE_FW_VERSION);
-    bool upToDate  = (latest == current);
-    String out = "{\"current\":\"" + current + "\",\"latest\":\"" + latest +
-                 "\",\"upToDate\":" + (upToDate ? "true" : "false") + "}";
-    return res->send(200, "application/json", out.c_str());
+    const std::string current = "v" SMOLBASE_FW_VERSION;
+    // upToDate means "no NEWER release exists" — NOT "the strings match".
+    // Equality was the old test, and it reported a device running something
+    // newer than the latest release as out of date, which made the UI offer a
+    // DOWNGRADE (and GhUpdate would happily flash it, assets included).
+    const Ver cur = parseVer(current);
+    const Ver lat = parseVer(latest);
+    const bool comparable = cur.valid() && lat.valid();
+    const bool ahead = comparable && cmpVer(cur, lat) > 0;
+    // Unparseable tags fall back to equality: conservative, and preserves the
+    // old behaviour for anything that is not vX.Y.Z.
+    const bool upToDate = comparable ? cmpVer(lat, cur) <= 0 : (latest == current);
+    JsonDocument out;
+    out["current"] = current;
+    out["latest"] = latest; // a GitHub tag: not ours, so let ArduinoJson escape it
+    out["upToDate"] = upToDate;
+    out["ahead"] = ahead;
+    return Web::sendJson(res, 200, out);
   });
 
   server.on("/api/update/ghprogress", HTTP_GET, [](PsychicRequest*, PsychicResponse* res) {
     static const char* const STATES[] = { "idle", "downloading", "done", "error" };
-    char buf[280];
-    snprintf(buf, sizeof(buf),
-             "{\"state\":\"%s\",\"phase\":\"%s\",\"bytesWritten\":%u,\"totalBytes\":%u,"
-             "\"filesDone\":%d,\"filesTotal\":%d,\"error\":\"%s\"}",
-             STATES[(int)s_progress.state],
-             s_progress.phase,
-             (unsigned)s_progress.bytesWritten,
-             (unsigned)s_progress.totalBytes,
-             s_progress.filesDone,
-             s_progress.filesTotal,
-             s_progress.errorMsg);
-    return res->send(200, "application/json", buf);
+    JsonDocument out;
+    out["state"] = STATES[(int)s_progress.state];
+    out["phase"] = (const char*)s_progress.phase;
+    out["bytesWritten"] = (uint32_t)s_progress.bytesWritten;
+    out["totalBytes"] = (uint32_t)s_progress.totalBytes;
+    out["filesDone"] = s_progress.filesDone;
+    out["filesTotal"] = s_progress.filesTotal;
+    // errorMsg carries esp_err_to_name output and our own formatted text; it is
+    // the field most likely to grow a quote, and the one the UI displays.
+    out["error"] = (const char*)s_progress.errorMsg;
+    return Web::sendJson(res, 200, out);
   });
 
   // Spawns the Core 0 download task directly — the httpd task is already on
@@ -290,8 +331,8 @@ void registerRoutes(PsychicHttpServer& server) {
     JsonDocument doc;
     if (deserializeJson(doc, req->body()) != DeserializationError::Ok)
       return res->send(400, "application/json", "{\"error\":\"invalid JSON\"}");
-    String tag = doc["tag"] | String("");
-    if (tag.isEmpty() || !tag.startsWith("v"))
+    const std::string tag = doc["tag"].as<std::string>();
+    if (tag.empty() || tag[0] != 'v')
       return res->send(400, "application/json", "{\"error\":\"missing or invalid tag\"}");
 
     s_inFlight = true;
@@ -307,8 +348,10 @@ void registerRoutes(PsychicHttpServer& server) {
       strlcpy(s_progress.errorMsg, "task create failed", sizeof(s_progress.errorMsg));
       return res->send(500, "application/json", "{\"error\":\"task create failed\"}");
     }
-    return res->send(200, "application/json",
-                     ("{\"ok\":true,\"tag\":\"" + tag + "\"}").c_str());
+    JsonDocument out;
+    out["ok"] = true;
+    out["tag"] = tag; // straight off the request body — escape it
+    return Web::sendJson(res, 200, out);
   });
 }
 

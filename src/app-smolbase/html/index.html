@@ -43,7 +43,7 @@
 <script>
 fetch("/api/status").then(r => r.json()).then(s => {
   document.getElementById("status").textContent =
-    `${s.name}.local · ${s.ip} · ${Math.round(s.heapFree / 1024)} kB heap free`;
+    `${s.name}.local · ${s.ip} · ${Math.round(s.heap.free / 1024)} kB heap free`;
 }).catch(() => document.getElementById("status").textContent = "api unreachable");
 
 // Render a picker for every app-section color setting, and a Behaviour row for

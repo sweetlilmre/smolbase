@@ -1,8 +1,12 @@
 #include "ConfigStore.h"
 #include "Events.h"
+#include "Fs.h"
 #include "smolbase_config.h"
 #include <ArduinoJson.h>
-#include <LittleFS.h>
+#include <esp_littlefs.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <cstdio>
 
 namespace ConfigStore {
 
@@ -44,7 +48,7 @@ static SettingDef* addEntry(SettingSection s, SettingType t, const char* key, co
 
 // A Choice setting's label persists under this derived key (ADR 0002) —
 // "tz" stores the POSIX value, "tz_name" the IANA label the user picked.
-static String labelKey(const char* key) { return String(key) + "_name"; }
+static std::string labelKey(const char* key) { return std::string(key) + "_name"; }
 
 // "#RRGGBB", case-insensitive — the exact format <input type="color"> emits.
 static bool isHexColor(const char* s) {
@@ -245,7 +249,7 @@ bool applyJson(JsonObjectConst src) {
           if (lv.is<const char*>()) nl = lv.as<const char*>();
         }
         if (!nl) break; // not in the catalog / label missing: ignored
-        String lk = labelKey(d.key);
+        std::string lk = labelKey(d.key);
         const char* curV = doc[d.key] | d.defStr;
         const char* curL = doc[lk] | d.defLabel;
         if (strcmp(curV, nv) != 0 || strcmp(curL, nl) != 0) {
@@ -282,20 +286,43 @@ bool begin() {
   registerSystemSettings();
   // Partition label is "spiffs" (historical, from the stock flash layout) but the
   // filesystem is LittleFS.
-  if (!LittleFS.begin(true, "/littlefs", 10, "spiffs")) return false;
-  File f = LittleFS.open(SMOLBASE_SETTINGS_PATH, "r");
-  if (f) {
-    deserializeJson(doc, f); // parse failure leaves doc empty — defaults apply
-    f.close();
+  //
+  // Mounted at the ROOT (base_path ""), so "/w/index.html.gz" is both the URL
+  // suffix and the POSIX path and there is only one spelling of every path in
+  // the firmware — see the SMOLBASE_FS_MOUNT note in smolbase_config.h. The
+  // phase 0 spike (check 12) proved an empty base_path resolves unprefixed
+  // paths against this volume.
+  //
+  // format_if_mount_failed matches what Arduino's LittleFS.begin(true, ...) did:
+  // a virgin or corrupted data partition becomes an empty filesystem rather than
+  // a device that cannot store settings at all.
+  esp_vfs_littlefs_conf_t fsConf = {};
+  fsConf.base_path = SMOLBASE_FS_MOUNT;
+  fsConf.partition_label = "spiffs";
+  fsConf.format_if_mount_failed = true;
+  fsConf.dont_mount = false;
+  esp_err_t fsErr = esp_vfs_littlefs_register(&fsConf);
+  if (fsErr != ESP_OK) {
+    printf("[cfg] littlefs mount failed: %s\n", esp_err_to_name(fsErr));
+    return false;
   }
+  Fs::File f(SMOLBASE_SETTINGS_FSPATH, "r");
+  // Missing file is the normal first-boot state; a parse failure leaves doc
+  // empty and the in-code defaults apply. Closes by scope.
+  if (f) deserializeJson(doc, f);
   return true;
 }
 
 // ---- Typed access ----
 
-String getString(const char* key, const char* def) {
+std::string getString(const char* key, const char* def) {
   Guard g;
-  return String(doc[key] | def); // copy: safe after the lock is released
+  // Arduino String tolerated a null char*; std::string(nullptr) is UB. defStr
+  // is never null in practice (addEntry seeds it to "" and registerString
+  // guards), but this is the kind of latent difference that only bites in the
+  // field, so make it explicit.
+  const char* v = doc[key] | def;
+  return v ? std::string(v) : std::string(); // copy: safe after the lock is released
 }
 int32_t getInt(const char* key, int32_t def) {
   Guard g;
@@ -306,9 +333,9 @@ bool getBool(const char* key, bool def) {
   return doc[key] | def;
 }
 
-String getString(const char* key) {
+std::string getString(const char* key) {
   const SettingDef* d = findSetting(key);
-  return getString(key, d ? d->defStr : "");
+  return getString(key, (d && d->defStr) ? d->defStr : "");
 }
 int32_t getInt(const char* key) {
   const SettingDef* d = findSetting(key);
@@ -326,7 +353,7 @@ bool getBool(const char* key) {
   return getBool(key, d ? d->defBool : false);
 }
 
-void setString(const char* key, const String& v) { Guard g; doc[key] = v; }
+void setString(const char* key, const std::string& v) { Guard g; doc[key] = v; }
 void setInt(const char* key, int32_t v) { Guard g; doc[key] = v; }
 void setBool(const char* key, bool v) { Guard g; doc[key] = v; }
 
@@ -335,21 +362,18 @@ void setBool(const char* key, bool v) { Guard g; doc[key] = v; }
 bool save() {
   {
     Guard g;
-    LittleFS.mkdir("/config");
-    File f = LittleFS.open(SMOLBASE_SETTINGS_PATH ".tmp", "w");
-    if (!f) return false;
-    size_t written = serializeJson(doc, f);
-    f.close();
+    Fs::mkdir(SMOLBASE_FS_MOUNT "/config");
+    size_t written = 0;
+    {
+      Fs::File f(SMOLBASE_SETTINGS_FSPATH ".tmp", "w");
+      if (!f) return false;
+      written = serializeJson(doc, f);
+    } // closed here, by scope, BEFORE the rename below
     if (written == 0) { // out of space / write error: leave the old file intact
-      LittleFS.remove(SMOLBASE_SETTINGS_PATH ".tmp");
+      Fs::remove(SMOLBASE_SETTINGS_FSPATH ".tmp");
       return false;
     }
-    // littlefs rename atomically replaces an existing destination, so the settings
-    // file is never absent. Fall back to remove+rename in case the VFS refuses.
-    if (!LittleFS.rename(SMOLBASE_SETTINGS_PATH ".tmp", SMOLBASE_SETTINGS_PATH)) {
-      LittleFS.remove(SMOLBASE_SETTINGS_PATH);
-      if (!LittleFS.rename(SMOLBASE_SETTINGS_PATH ".tmp", SMOLBASE_SETTINGS_PATH)) return false;
-    }
+    if (!Fs::replace(SMOLBASE_SETTINGS_FSPATH ".tmp", SMOLBASE_SETTINGS_FSPATH)) return false;
   }
   Events::post(SysEvent::SettingsChanged);
   return true;

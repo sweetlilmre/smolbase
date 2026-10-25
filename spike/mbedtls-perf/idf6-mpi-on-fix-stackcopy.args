@@ -1,0 +1,8 @@
+-B
+build/idf6-mpi-on-fix-stackcopy
+-D
+SDKCONFIG=build/idf6-mpi-on-fix-stackcopy/sdkconfig
+-D
+SDKCONFIG_DEFAULTS=sdkconfig.defaults
+-D
+SPIKE_NO_WRAP=1

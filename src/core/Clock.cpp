@@ -2,10 +2,35 @@
 #include "ConfigStore.h"
 #include "Events.h"
 #include "Net.h"
+#include "Platform.h"
 #include "smolbase_config.h"
-#include <Arduino.h>
+#include <lwip/apps/sntp.h>
+#include <lwip/priv/tcpip_priv.h>
 #include <atomic>
-#include <esp_sntp.h>
+#include <cstdio>
+#include <sys/time.h>
+
+// The RAW lwIP SNTP API, under the lwIP core lock — deliberately, and
+// deliberately WITHOUT <esp_sntp.h>.
+//
+// IDF's esp_sntp_init() and esp_sntp_stop() are both a bare
+// tcpip_callback(...): a fire-and-forget post to the tcpip thread. Ticket #52
+// was exactly that — a queued stop landing AFTER a fresh init killed the
+// session (no pcb, no retry timer, clock stuck on "--:--"). Arduino's
+// configTzTime, which kick() below replaces, avoided it by holding the lwIP
+// core lock and calling the raw lwIP functions, which then run synchronously
+// and in order. This is a faithful port of that, not a rewrite.
+//
+// <esp_sntp.h> is not included because it defines deprecated `static inline`
+// shims that SHADOW the raw names — sntp_init, sntp_setservername,
+// sntp_setoperatingmode — and forward them to the async esp_sntp_* variants.
+// Including it would silently reintroduce #52 while every call site in kick()
+// still read as the raw API. The one declaration genuinely needed from it is
+// reproduced here instead.
+extern "C" {
+typedef void (*sntp_sync_time_cb_t)(struct timeval* tv);
+void sntp_set_time_sync_notification_cb(sntp_sync_time_cb_t callback);
+}
 
 namespace Clock {
 
@@ -20,14 +45,14 @@ static std::atomic<bool> synced{false}; // written on the SNTP task, read on cor
 // be reallocated (a static String's reassignment frees the old buffer while
 // the SNTP task may still dereference it — a real use-after-free window).
 // Ping-pong pairs: new values are written into the INACTIVE pair before being
-// handed to configTzTime, so the running SNTP session only ever reads buffers
-// nobody is writing. This replaces an explicit pre-copy esp_sntp_stop() — that
-// call is a fire-and-forget tcpip_callback(do_stop) (verified by disassembly
-// of the prebuilt wrapper), and when the tcpip thread was busy at boot the
-// queued stop landed AFTER configTzTime's fresh sntp_init and silently killed
-// the session: no pcb, no retry timer, clock stuck until the #38 belt. That
-// async stop was the root cause of ticket #52 — never call esp_sntp_stop()
-// (or the sntp_stop() shim, which is the same call) from here.
+// handed to kick(), so the running SNTP session only ever reads buffers nobody
+// is writing. That removed a pre-copy esp_sntp_stop() from this function, and
+// removing it is what fixed ticket #52: esp_sntp_stop() is a fire-and-forget
+// tcpip_callback(do_stop) (verified by disassembly of the prebuilt wrapper),
+// and when the tcpip thread was busy at boot the queued stop landed AFTER the
+// fresh sntp_init and silently killed the session — no pcb, no retry timer,
+// clock stuck until the #38 belt. The ping-pong stands on its own merits; the
+// synchronous stop inside kick() is the other half of the same lesson.
 static char ntpBufs[2][64];
 static char tzBufs[2][64];
 static uint8_t bufSel = 0;     // pair currently handed to SNTP
@@ -42,12 +67,27 @@ static void onSntpSync(struct timeval*) {
   Events::post(SysEvent::TimeSynced);
 }
 
-// (Re)start SNTP against the active buffers. configTzTime stops any running
-// session itself — synchronously, under the lwIP core lock — before touching
-// the server list; no explicit stop belongs here (see the #52 note above).
+// (Re)start SNTP against the active buffers. The stop happens synchronously,
+// under the lwIP core lock, before the server list is touched — see the note at
+// the top of this file, and the #52 note above.
 static void kick() {
   sntp_set_time_sync_notification_cb(onSntpSync);
-  configTzTime(tzBufs[bufSel], ntpBufs[bufSel], kNtpFallback1, kNtpFallback2);
+#if defined(CONFIG_LWIP_TCPIP_CORE_LOCKING)
+  // Re-entrancy: this can be reached from a context that already holds the lock.
+  const bool takeLock = !sys_thread_tcpip(LWIP_CORE_LOCK_QUERY_HOLDER);
+  if (takeLock) LOCK_TCPIP_CORE();
+#endif
+  if (sntp_enabled()) sntp_stop();
+  sntp_setoperatingmode(SNTP_OPMODE_POLL);
+  sntp_setservername(0, ntpBufs[bufSel]);
+  sntp_setservername(1, kNtpFallback1);
+  sntp_setservername(2, kNtpFallback2);
+  sntp_init();
+#if defined(CONFIG_LWIP_TCPIP_CORE_LOCKING)
+  if (takeLock) UNLOCK_TCPIP_CORE();
+#endif
+  setenv("TZ", tzBufs[bufSel], 1);
+  tzset();
 }
 
 void begin() {
@@ -58,15 +98,15 @@ void begin() {
 
 void sync() {
   // Safe to call repeatedly (NetworkUp after a drop, or a settings change while
-  // online): configTzTime stops any running SNTP session, re-applies TZ via
+  // online): kick() stops any running SNTP session, re-applies TZ via
   // setenv/tzset, sets the servers, and restarts SNTP. Default sync interval
   // (1h) is kept.
-  String ntp = ConfigStore::getString("ntp"); // defaults live in the settings schema
-  String tz = ConfigStore::getString("tz");
+  std::string ntp = ConfigStore::getString("ntp"); // defaults live in the settings schema
+  std::string tz = ConfigStore::getString("tz");
 
   // Skip the stop/restart churn (and the NTP-pool hammering) when nothing
   // that SNTP consumes actually changed — every settings save lands here.
-  if (kicked && ntp.equals(ntpBufs[bufSel]) && tz.equals(tzBufs[bufSel])) return;
+  if (kicked && ntp == ntpBufs[bufSel] && tz == tzBufs[bufSel]) return;
   kicked = true;
 
   // Write into the inactive pair, then flip: the live session never sees a
@@ -88,19 +128,19 @@ void loop() {
     waitMs = 0;
     return;
   }
-  uint32_t now = millis();
+  uint32_t now = Platform::millis();
   if (waitMs == 0) {
     waitMs = now;
     return;
   }
   if (now - waitMs < SMOLBASE_SNTP_REKICK_MS) return;
   waitMs = now;
-  Serial.println("[clock] no NTP sync within the re-kick window; restarting SNTP");
+  printf("[clock] no NTP sync within the re-kick window; restarting SNTP\n");
   kick();
 }
 
 void applyTimezone() {
-  String tz = ConfigStore::getString("tz");
+  std::string tz = ConfigStore::getString("tz");
   setenv("TZ", tz.c_str(), 1);
   tzset();
 }

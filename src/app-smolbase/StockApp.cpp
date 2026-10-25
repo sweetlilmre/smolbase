@@ -48,6 +48,13 @@ public:
     Display::setActive(&screen);
   }
 
+  // Lands in the "app" object of GET /api/status. Only the framebuffer build
+  // has frame timings to report; the direct-draw StockScreen has none, and an
+  // empty "app" object is a perfectly good answer.
+#if SMOLBASE_FRAMEBUFFER == SMOLBASE_FB_PALETTE_8
+  void statusJson(JsonObject out) override { screen.statusJson(out); }
+#endif
+
   void onSystemEvent(SysEvent e) override {
 #if SMOLBASE_FRAMEBUFFER == SMOLBASE_FB_PALETTE_8
     // Park on OtaStarting — the contract every app signs, and here it is not

@@ -1,4 +1,8 @@
 CompileFlags:
+  # idf.py writes one compile_commands.json per App build dir. Point clangd at
+  # the smolbase build: it covers src/core and src/app-smolbase. Switch this
+  # line when working on another App, or clangd will not know its sources.
+  CompilationDatabase: build/smolbase
   BuiltinHeaders: QueryDriver
   Add:
     - "-Wall"
@@ -31,12 +35,3 @@ Diagnostics:
 Index:
   Background: Skip
   StandardLibrary: true
----
-If:
-  PathMatch: .*\.ino
-CompileFlags:
-  Add:
-    - "-x"
-    - "c++"
-    - "-include"
-    - "Arduino.h"
