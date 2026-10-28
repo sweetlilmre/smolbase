@@ -36,7 +36,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v10
+      # Pinned to an exact version, not a floating major: setup-uv stopped
+      # publishing major aliases after v7, so `@v10` does not resolve at all
+      # and `@v7` would pin three majors back. The first dispatch of this
+      # workflow failed on exactly that.
+      - uses: astral-sh/setup-uv@v10.3.3
 
       # --remote only: there is no SDK on this runner and installing one to
       # read two files would turn a 10-second job into a 10-minute one. The
