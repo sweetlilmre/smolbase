@@ -484,7 +484,7 @@ Leave the flag out of timing runs: it moves the binary layout and shifted a P-25
 
 **1. Core 0 or core 1 for the handshake.** The only item with a shipping consequence: 3.8 s against 2.1 s. Options and trade-off in [§2.3](#23--elliptic-curve-maths-costs-175-on-core-0). Measure whichever is chosen against the App loop's frame budget, not just against the handshake.
 
-**2. The upstream PR — [Mbed-TLS/TF-PSA-Crypto#873](https://github.com/Mbed-TLS/TF-PSA-Crypto/pull/873), draft. Body updated 2026-08-26** with the findings from §2.5 to §2.7. What went in:
+**2. The upstream PR — [Mbed-TLS/TF-PSA-Crypto#873](https://github.com/Mbed-TLS/TF-PSA-Crypto/pull/873), MERGED 2026-10-28 as `9088518a`. Body updated 2026-08-26** with the findings from §2.5 to §2.7. What went in:
 
 - **P-384**, placed after the O(n)-per-limb paragraph it confirms: 365.26 → 475.03 ms, +30.1%, beside P-256's +33.5% in the same cell. The series had been justified on P-256 alone, and the obvious reviewer question was whether bigger curves fare worse. They do not — the cost is per-limb.
 - **Call counts confirmed in firmware**, not just in the harness, via `--wrap` against a precompiled 3.6.6: 5817 and 8569.

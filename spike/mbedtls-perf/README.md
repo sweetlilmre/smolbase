@@ -95,7 +95,7 @@ Nothing in this directory records which variant a build used, because the patche
 
 ## The crossover cells — captured 2026-09-07
 
-**Result: the disagreement was ours.** We had been measuring an mbedTLS carrying the TF-PSA-Crypto #873 series, which makes the software multiply 6–12% faster and lifts the crossover ~5%. On a clean tree the ESP32 gives ~383 bits against the reviewer's 374 — agreement. The consequence is that **#873 flips 384-bit operands from the hardware side to the software side**, so a constant chosen against today's mbedTLS is wrong once it merges. 384 routes to software in all six shipped-tree cells.
+**Result: the disagreement was ours.** We had been measuring an mbedTLS carrying the TF-PSA-Crypto #873 series, which makes the software multiply 6–12% faster and lifts the crossover ~5%. On a clean tree the ESP32 gives ~383 bits against the reviewer's 374 — agreement. The consequence is that **#873 flips 384-bit operands from the hardware side to the software side**, so a constant chosen against today's mbedTLS is wrong once it reaches the SDK — #873 merged upstream on 2026-10-28, and these cells are what the re-measure in [#134](https://github.com/sweetlilmre/smolbase/issues/134) will re-run. 384 routes to software in all six shipped-tree cells.
 
 The other half of the same review. Their table puts the ESP32 crossover at 364–374 bits and the ESP32-S3 at 348 (80 MHz) → 508 (240 MHz), against the flat 512 in the patch. The S3-at-240 figure agrees with this project's own measurement; the rest does not, and the constant clearly is not one number.
 
