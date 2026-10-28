@@ -1,0 +1,49 @@
+name: upstream-watch
+
+# Tripwire for the two upstream PRs patched into the SDK at configure time.
+# See scripts/check_upstream_merges.py and smolbase#134.
+#
+# This is the only job here that is SUPPOSED to fail. A green run means
+# nothing has changed and the patches in patches/ are still required; a red
+# run means an upstream PR has reached the SDK and the threshold table needs
+# re-measuring. GitHub mails the repo owner when a scheduled workflow fails,
+# and that mail is the whole notification mechanism — nothing else watches
+# espressif/mbedtls, and the build's own FATAL only fires once someone has
+# already moved the IDF pin.
+#
+# Weekly, not daily: the thing being watched is a fork picking up an upstream
+# merge, which is a months-scale event. Monday 07:00 UTC.
+#
+# CAVEAT, and it is the failure mode that matters for a multi-year tripwire:
+# GitHub disables scheduled workflows in a repository with no commits for 60
+# days, and sends one notice when it does. If this repo goes quiet, re-enable
+# it in the Actions tab — or just run the script by hand, which needs nothing
+# but gh auth.
+on:
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10
+
+      # --remote only: there is no SDK on this runner and installing one to
+      # read two files would turn a 10-second job into a 10-minute one. The
+      # remote check reads espressif/mbedtls and espressif/esp-idf through
+      # the API, which is strictly earlier warning than the local check
+      # anyway — it sees the fork publish the code before we ever move the pin.
+      - name: Check whether the upstream PRs have reached the SDK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: uv run scripts/check_upstream_merges.py --remote

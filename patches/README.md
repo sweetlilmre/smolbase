@@ -15,7 +15,17 @@ All four are generated from the `#19027` PR branch (the fourth from its uncommit
 
 ## The revert protocol
 
-**Check the two PRs above whenever the SDK is upgraded, and periodically.** When a PR merges and the SDK in use contains it:
+**The test is not "has the PR merged" — it is "is the code in the SDK".** #873 merged into TF-PSA-Crypto `development` on 2026-10-28 (`9088518a`) and is still nowhere near us: ESP-IDF consumes `espressif/mbedtls`, a fork that vendors TF-PSA-Crypto, so the merge has to travel through a release, a fork branch, a submodule bump and an IDF release before it reaches a pinned v6.0.2.
+
+`scripts/check_upstream_merges.py` answers the real question for both PRs, by content rather than by commit SHA (the fork rebases and re-tags). `.github/workflows/upstream-watch.yml` runs it weekly and fails when something lands, which is the only notification anyone gets.
+
+```
+uv run scripts/check_upstream_merges.py --both
+```
+
+**When #873 arrives, reverting its three patches is the smaller half of the job.** It speeds the software multiply 6–12%, which moves the crossover and flips 384-bit operands to the software side — so the #19027 threshold table has to be re-measured, not merely carried over. [#134](https://github.com/sweetlilmre/smolbase/issues/134) has the measurements and the reasoning.
+
+When a PR merges and the SDK in use contains it:
 
 1. Delete that patch file here (and its entry in `cmake/upstream_patches.cmake` if it is the last of its group).
 2. Restore the SDK tree: `git -C $IDF_PATH checkout -- components/mbedtls/port/bignum/esp_bignum.c` and/or `git -C $IDF_PATH/components/mbedtls/mbedtls checkout -- .` as appropriate.
