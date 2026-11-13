@@ -286,6 +286,15 @@ Two fixes, only one of which worked:
   | Fire | 114.9 KB | 7.4 KB (two 60x61 buffers) |
   | Boing ball | 107.6 KB | 14.8 KB (pre-rendered ball) |
   | Rotozoomer | 105.0 KB | 17.4 KB (128x128 texture) |
+  | Picture roto | see note | 17.4 KB (128x128 texture) |
+
+  The Picture roto row has no figure on this scale on purpose. Its pool is the
+  Rotozoomer's, byte for byte -- both are `fx::TEX_W * fx::TEX_W` -- but the
+  free-heap column above was measured against an older heap baseline, and a
+  v0.4.0 device reports ~153 KB free with this effect running. Dropping that
+  number into the table would read as a 48 KB improvement over the calm clock
+  rather than as a different measurement epoch. Re-measure the whole column on
+  one firmware before trusting any cross-row comparison.
 
   The worst case leaves ~105 KB free, well clear of the ~77 KB at which an upload was
   observed to succeed.

@@ -498,7 +498,8 @@ What that means for your animated screen:
 `src/app-smolbase/DemoScreen.cpp` wires all of the above into one screen (with
 `src/app-smolbase/StockApp.cpp` as the App glue): the identity text drop-shadowed over a
 rotation of full-screen 256-color effects — the Boing ball, plasma, fire, a
-a wormhole, a rotozoomer, and a calm black clock — running at a fixed 30 Hz
+wormhole, a rotozoomer, a picture rotozoomer, and a calm black clock — running
+at a fixed 30 Hz
 through `frame()`/`present()`. Technique notes and sources for each effect:
 [research/palette-effects.md](research/palette-effects.md). The parts worth
 stealing:
@@ -507,9 +508,10 @@ stealing:
 holds one class per effect behind a two-method interface (`enter()` claims the
 palette bank and builds whatever tables it needs, `step()` paints one frame).
 The screen draws the clock on top afterwards, so no effect knows the time
-exists. Adding a sixth is one file and one line in the roster table.
+exists. Adding another is one file, one include, and one line in the roster
+table.
 
-**One buffer, six effects.** They share a single byte pool (`fx::scratch()`),
+**One buffer, one effect at a time.** They share a single byte pool (`fx::scratch()`),
 sized to whichever effect is running through `Effect::scratchBytes()` and freed
 when nothing needs it — the pre-rendered ball, the fire's heat map and the
 rotozoomer's texture are never alive at once, and two of the effects declare

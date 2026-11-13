@@ -9,6 +9,7 @@
 #include "effects/BoingEffect.h"
 #include "effects/Effect.h"
 #include "effects/FireEffect.h"
+#include "effects/PictureRotoEffect.h"
 #include "effects/PlasmaEffect.h"
 #include "effects/RotozoomEffect.h"
 #include "effects/TunnelEffect.h"
@@ -28,6 +29,7 @@ PlasmaEffect plasma;
 FireEffect fire;
 TunnelEffect tunnel;
 RotozoomEffect rotozoom;
+PictureRotoEffect picroto;
 
 struct RosterEntry {
   const char* label; // what the user sees, on the panel and in the settings UI
@@ -38,7 +40,8 @@ struct RosterEntry {
 const RosterEntry ROSTER[] = {
     {"Boing ball", "boing", &boing},   {"Plasma", "plasma", &plasma},
     {"Fire", "fire", &fire},           {"Wormhole", "tunnel", &tunnel},
-    {"Rotozoomer", "roto", &rotozoom}, {"Calm clock", "calm", nullptr},
+    {"Rotozoomer", "roto", &rotozoom}, {"Picture roto", "rotopic", &picroto},
+    {"Calm clock", "calm", nullptr},
 };
 constexpr int ROSTER_N = (int)(sizeof(ROSTER) / sizeof(ROSTER[0]));
 constexpr int CALM_IDX = ROSTER_N - 1; // the fx == nullptr entry, last by convention

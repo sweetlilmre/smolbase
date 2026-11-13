@@ -101,6 +101,10 @@ fixed point against our palette bank. Nothing was copied.
   from [mrkite/demofx](https://github.com/mrkite/demofx). Its textures are
   generated in `RotozoomEffect::buildTexture`; the reference's own source image
   is not used.
+- `PictureRotoEffect` is the same technique applied to a fixed-palette picture,
+  as the era's demos used it. Nothing was taken from any of them: the transform
+  is the one already in `RotozoomEffect`, the moving pivot and the zoom range
+  are this project's, and its tile is generated in `buildStandIn()`.
 - The plasma's circular flavours use a table indexed by r² holding the sine of
   the root (no `sqrt` per pixel), and multiplicative rather than additive
   combination, both described at
