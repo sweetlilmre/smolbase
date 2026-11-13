@@ -6,9 +6,9 @@
 // Reported by GET /api/status; consumers set their own with a -D in CMake.
 #ifndef SMOLBASE_FW_VERSION
 // Released. GhUpdate compares this against the latest release's tag_name with
-// the leading "v" stripped, so this must track the tag: v0.4.0 <-> "0.4.0".
+// the leading "v" stripped, so this must track the tag: v0.5.0 <-> "0.5.0".
 // Bump it here as part of cutting a release, before tagging.
-#define SMOLBASE_FW_VERSION "0.4.0"
+#define SMOLBASE_FW_VERSION "0.5.0"
 #endif
 
 // ---- Hardware: GeekMagic Small TV Pro (ESP32-D0WD, 8MB flash, no PSRAM) ----
