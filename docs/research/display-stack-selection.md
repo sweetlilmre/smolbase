@@ -116,6 +116,14 @@ void setup() {
 ### Notes and caveats
 
 - **SPI clock reality check.** The classic ESP32 SPI peripheral derives its clock from 80 MHz with integer-ish dividers; exactly 60 MHz is not achievable and the request will resolve to a neighboring achievable rate (80 or 40 MHz region). The panel's rating of "works at 60 MHz" in practice means it tolerates overclocked writes; validate on hardware and drop `freq_write` to `40000000` if you ever see pixel corruption. ST7789's datasheet write-cycle spec is 66 ns (~15 MHz) — everything above that is overclocking that this panel family is widely known to tolerate.
+
+  **80 MHz was tried on this panel and does not work** (bench result reported
+  2026-11-13; the exact date and firmware of the original attempt were not
+  recorded, so treat it as "did not work when last tried" rather than as a
+  dated measurement). Since the divider chain offers nothing between 40 and
+  80, **40 MHz is the ceiling** and the SPI clock is not a lever for anything —
+  including the ~23 ms full-frame push that causes the tearing ADR 0004
+  describes. Do not re-propose raising it without new bench evidence.
 - **Frame buffer budget (no PSRAM).** A full 16-bpp frame is 240x240x2 = 115,200 bytes — allocatable in internal DRAM but it consumes most of the free heap once WiFi is up. For the template, prefer either (a) a full-frame **8-bpp palette sprite** (57,600 bytes) pushed with `pushSprite`, or (b) a half/strip 16-bpp sprite composited in bands. Use `sprite.setPsram(false)` (or simply have no PSRAM) and, for deterministic memory, `sprite.setBuffer(staticBuf, w, h, bpp)` with a statically allocated array.
 - **Tearing/throughput.** `pushSprite` uses the DMA queue; at 40 MHz a full 240x240x16 frame streams in ~23 ms (~40 fps ceiling), during which the CPU is free thanks to DMA.
 - **Backlight under arduino-esp32 3.x.** Do not drive GPIO25 with raw `ledcAttachPin` (the 2.x API is gone in core 3.x); `Light_PWM` with `invert = true` is the supported path and was explicitly fixed for IDF5/core-3.x in LovyanGFX v1.1.16.
